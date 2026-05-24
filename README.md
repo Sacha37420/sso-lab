@@ -1,12 +1,192 @@
-# Dev — Infrastructure partagée
+# SSO Lab — Plateforme d'authentification SSO
 
-Ce dossier regroupe toutes les applications de développement.  
-Deux infrastructures communes tournent **en permanence** et sont partagées par toutes les apps :
+Lab d'apprentissage SSO/LDAP autour de **Keycloak**, **OpenLDAP**, **PostgreSQL** et **pgAdmin**, avec deux applications clientes (Spring Boot + Angular) authentifiées via OIDC.
 
-| Dossier | Rôle | Réseau Docker |
-|---|---|---|
-| `infra/` | PostgreSQL + pgAdmin | `dev-net` |
-| `sso-lab/` | Keycloak + OpenLDAP | `sso-lab_sso-net` |
+---
+
+## Architecture
+
+```
+dev/
+├── sso-lab/            ← Keycloak 22 + OpenLDAP + phpLDAPadmin
+├── infra/              ← PostgreSQL 16 + pgAdmin 8 (OAuth2 Keycloak)
+├── front-cadriciel/    ← Angular 17 SPA  [submodule git]
+├── spring-app/         ← Spring Boot 3   [submodule git]
+├── bbox.env            ← source de vérité réseau (LAN/WAN, Bbox)
+├── setup.sh            ← initialisation complète depuis zéro
+├── clean.sh            ← remise à zéro (volumes compris)
+├── reset_url.sh        ← propage les IPs vers tous les .env
+├── init-secrets.sh     ← génère des mots de passe forts
+├── recompose_docker.sh ← gère le cycle de vie des stacks Docker
+├── create-app-client.sh← crée/met à jour les clients Keycloak
+├── new-app.sh          ← scaffolde une nouvelle application
+├── get-ports-list.sh   ← génère ports.env depuis tous les .env
+└── open-bbox-ports.sh  ← ouvre les ports NAT sur la Bbox Bouygues
+```
+
+---
+
+## Services et ports
+
+| Service        | Stack      | Port | Accès                              |
+|----------------|------------|------|------------------------------------|
+| Keycloak       | sso-lab    | 8080 | `http://LAN_IP:8080`               |
+| phpLDAPadmin   | sso-lab    | 8081 | `http://LAN_IP:8081`               |
+| pgAdmin        | infra      | 5050 | `http://LAN_IP:5050`               |
+| PostgreSQL     | infra      | —    | interne uniquement (`dev-net`)     |
+| Spring Boot    | spring-app | 8082 | `http://LAN_IP:8082`               |
+| Angular        | front-cadriciel | 4200 | `http://LAN_IP:4200`          |
+
+---
+
+## Réseaux Docker
+
+| Réseau            | Utilisé par                                      |
+|-------------------|--------------------------------------------------|
+| `sso-lab_sso-net` | Keycloak, OpenLDAP, phpLDAPadmin, infra, apps    |
+| `dev-net`         | PostgreSQL, pgAdmin, Spring Boot, Angular        |
+
+---
+
+## Utilisateurs LDAP
+
+| Utilisateur | Groupes                          | Accès pgAdmin |
+|-------------|----------------------------------|---------------|
+| sacha       | developers, admins, famille, amis | ✓            |
+| hassan      | developers, amis                 | ✓             |
+| lea         | famille, amis                    | ✗             |
+| elodie      | famille                          | ✗             |
+
+> pgAdmin est restreint au groupe **developers** via `OAUTH2_ADDITIONAL_CLAIMS`.
+
+---
+
+## Premier démarrage
+
+### Prérequis
+
+- Docker + Docker Compose
+- `curl`, `jq`
+- Cloner avec les submodules :
+
+```bash
+git clone --recurse-submodules https://github.com/Sacha37420/sso-lab.git dev
+cd dev
+```
+
+### Configuration initiale
+
+Éditer **`bbox.env`** (source de vérité pour toutes les IPs) :
+
+```env
+SERVER_URL_LAN=http://192.168.1.X   # IP LAN de la machine hôte
+SERVER_URL_WAN=http://X.X.X.X       # IP publique WAN
+BBOX_ADMIN_PASSWORD=...             # mot de passe admin de la Bbox (si Bbox Bouygues)
+```
+
+### Lancement
+
+```bash
+bash setup.sh        # interactif (demande confirmation)
+bash setup.sh --yes  # silencieux (CI)
+```
+
+Ce script enchaîne 9 étapes :
+
+| # | Étape                  | Script                   |
+|---|------------------------|--------------------------|
+| 1 | Nettoyage complet      | `clean.sh`               |
+| 2 | Propagation des IPs    | `reset_url.sh`           |
+| 3 | Génération des secrets | `init-secrets.sh`        |
+| 4 | Démarrage sso-lab      | `recompose_docker.sh`    |
+| 5 | Attente Keycloak       | *(sonde + sleep 20s)*    |
+| 6 | Config Keycloak        | `create-app-client.sh`   |
+| 7 | Démarrage de tout      | `recompose_docker.sh`    |
+| 8 | Génération ports.env   | `get-ports-list.sh`      |
+| 9 | Ouverture ports Bbox   | `open-bbox-ports.sh`     |
+
+---
+
+## Opérations courantes
+
+### Redémarrer une stack
+
+```bash
+bash recompose_docker.sh --app sso-lab --force
+bash recompose_docker.sh --app infra --force
+bash recompose_docker.sh --force          # toutes les stacks
+```
+
+### Regénérer les clients Keycloak
+
+```bash
+bash create-app-client.sh                 # toutes les apps
+bash create-app-client.sh spring-app      # une seule app
+bash create-app-client.sh infra --client-id pgadmin --port 5050
+bash create-app-client.sh front-cadriciel --public --port 4200
+```
+
+Options disponibles : `--client-id`, `--public`, `--port`, `--redirect-path`, `--no-rotate`, `--no-wan`
+
+### Changer l'IP du serveur
+
+```bash
+# 1. Éditer bbox.env → SERVER_URL_LAN / SERVER_URL_WAN
+vim bbox.env
+# 2. Propager vers tous les .env
+bash reset_url.sh
+# 3. Redémarrer les stacks
+bash recompose_docker.sh --force
+```
+
+### Ajouter une nouvelle application
+
+```bash
+bash new-app.sh
+# → assistant interactif : Spring Boot / Django / Angular (seul ou combiné)
+# → crée le dossier, docker-compose.yml, .env.example, .keycloak-client-opts
+```
+
+### Remettre à zéro
+
+```bash
+bash clean.sh    # arrête tout, supprime volumes + images locales + caches
+```
+
+---
+
+## Secrets et fichiers `.env`
+
+Tous les `.env` sont ignorés par git. Chaque dossier contient un `.env.example` à copier :
+
+```bash
+cp sso-lab/.env.example    sso-lab/.env
+cp infra/.env.example      infra/.env
+cp front-cadriciel/.env.example front-cadriciel/.env
+cp spring-app/.env.example spring-app/.env
+cp bbox.env.example        bbox.env
+```
+
+Les mots de passe (`CHANGE_ME`) sont ensuite générés automatiquement par `init-secrets.sh`.
+
+---
+
+## Dépôts Git
+
+| Repo                                                      | Contenu                  |
+|-----------------------------------------------------------|--------------------------|
+| [sso-lab](https://github.com/Sacha37420/sso-lab)         | Infra + scripts (ce repo)|
+| [front-cadriciel](https://github.com/Sacha37420/front-cadriciel) | Angular SPA       |
+| [spring-app](https://github.com/Sacha37420/spring-app)   | Spring Boot app          |
+
+`front-cadriciel` et `spring-app` sont des **git submodules** du repo principal.
+
+Mettre à jour les submodules :
+
+```bash
+git submodule update --remote --merge
+```
+
 
 ---
 
