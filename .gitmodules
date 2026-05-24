@@ -4,3 +4,6 @@
 [submodule "spring-app"]
 	path = spring-app
 	url = https://github.com/Sacha37420/spring-app.git
+[submodule "table-manager"]
+	path = table-manager
+	url = https://github.com/Sacha37420/table-manager.git
