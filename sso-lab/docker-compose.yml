@@ -1,0 +1,118 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────
+# Réseau interne partagé par tous les services.
+# Les services se joignent par leur nom :
+#   ex. openldap:389  keycloak:8080
+# ─────────────────────────────────────────────
+networks:
+  sso-net:
+    driver: bridge
+
+# ─────────────────────────────────────────────
+# Volumes nommés : les données survivent à
+#   docker compose down  (mais pas à --volumes)
+# ─────────────────────────────────────────────
+volumes:
+  ldap-data:
+  ldap-config:
+  keycloak-data:
+
+services:
+
+  # ──────────────────────────────────────────
+  # OpenLDAP
+  # Image : bitnami/openldap (maintenue activement, remplace osixia)
+  # Rôle  : annuaire d'identités (users/groups)
+  # ──────────────────────────────────────────
+  openldap:
+    image: osixia/openldap:1.5.0
+    container_name: openldap
+    restart: always
+    environment:
+      LDAP_ORGANISATION: "SSO Lab"
+      LDAP_DOMAIN: "${LDAP_DOMAIN}"
+      LDAP_ADMIN_PASSWORD: "${LDAP_ADMIN_PASSWORD}"
+      LDAP_CONFIG_PASSWORD: "${LDAP_CONFIG_PASSWORD}"
+      LDAP_ADDITIONAL_MODULES: "memberof"
+      LDAP_SEED_INTERNAL_LDIF_PATH: "/container/service/slapd/assets/config/bootstrap/ldif/custom"
+    volumes:
+      - ldap-data:/var/lib/ldap
+      - ldap-config:/etc/ldap/slapd.d
+      - ./ldap/init.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/init.ldif:ro
+    ports:
+      - "${PORT_LDAP}:${PORT_LDAP}"
+    networks:
+      - sso-net
+    command: ["--copy-service", "--loglevel", "debug"]
+
+  # ──────────────────────────────────────────
+  # phpLDAPadmin
+  # Interface web pour explorer / éditer l'annuaire
+  # ──────────────────────────────────────────
+  phpldapadmin:
+    image: osixia/phpldapadmin:0.9.0
+    container_name: phpldapadmin
+    restart: always
+    environment:
+      # Adresse du serveur LDAP (nom du service Docker)
+      PHPLDAPADMIN_LDAP_HOSTS: "openldap"
+      # Désactive HTTPS (lab local uniquement)
+      PHPLDAPADMIN_HTTPS: "false"
+    ports:
+      - "${PORT_PHPLDAPADMIN}:80"
+    networks:
+      - sso-net
+    depends_on:
+      - openldap
+
+  # ──────────────────────────────────────────
+  # Keycloak
+  # IdP SSO : gère l'authentification et émet les tokens JWT
+  # Version 22+ utilise Quarkus (remplace WildFly)
+  # ──────────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:22.0
+    container_name: keycloak
+    restart: always
+    env_file: .env
+    environment:
+      # Compte administrateur Keycloak (console web)
+      KEYCLOAK_ADMIN: "${KEYCLOAK_ADMIN}"
+      KEYCLOAK_ADMIN_PASSWORD: "${KEYCLOAK_ADMIN_PASSWORD}"
+      # Mode dev : HTTP autorisé, pas de cache, rechargement à chaud
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      # KC_HOSTNAME_URL : fixe l'issuer JWT à une valeur stable.
+      # Sans cela, l'iss du token = host de la requête entrante (browser),
+      # ce qui cause un mismatch avec la discovery OIDC fetchée en interne par pgAdmin.
+      KC_HOSTNAME_URL: "${SERVER_URL_WAN}:${PORT_KEYCLOAK}"
+    ports:
+      - "${PORT_KEYCLOAK}:8080"
+    networks:
+      - sso-net
+    depends_on:
+      - openldap
+    # "start-dev" lance Keycloak en mode développement (H2 embarqué)
+    command: ["start-dev"]
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+
+  # ──────────────────────────────────────────
+  # Spring Boot App (construite à l'étape 3)
+  # Commentée pour l'instant : on l'activera quand le JAR existe
+  # ──────────────────────────────────────────
+  # spring-app:
+  #   build: ./spring-app
+  #   container_name: spring-app
+  #   restart: unless-stopped
+  #   environment:
+  #     SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_ISSUER_URI: >
+  #       http://keycloak:8080/realms/ssolab
+  #   ports:
+  #     - "8082:8080"
+  #   networks:
+  #     - sso-net
+  #   depends_on:
+  #     - keycloak

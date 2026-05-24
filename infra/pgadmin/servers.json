@@ -1,0 +1,15 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "dev-postgres",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "devdb",
+      "Username": "devuser",
+      "SSLMode": "prefer",
+      "Shared": true,
+      "PassFile": "/var/lib/pgadmin/.pgpass"
+    }
+  }
+}

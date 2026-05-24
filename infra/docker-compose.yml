@@ -1,0 +1,99 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────
+# Réseau partagé par toutes les apps du dossier dev/.
+# Nom fixe (name: dev-net) pour éviter le préfixe automatique.
+# Les apps le déclarent comme externe :
+#   networks:
+#     dev-net:
+#       external: true
+#       name: dev-net
+# ─────────────────────────────────────────────
+networks:
+  dev-net:
+    driver: bridge
+    name: dev-net
+  # Réseau de sso-lab : permet à pgAdmin d'atteindre Keycloak
+  # en résolution Docker interne (keycloak:8080).
+  sso-net:
+    external: true
+    name: sso-lab_sso-net
+
+# ─────────────────────────────────────────────
+# Volumes nommés : les données survivent à
+#   docker compose down  (mais pas à --volumes)
+# ─────────────────────────────────────────────
+volumes:
+  postgres-data:
+  pgadmin-data:
+
+services:
+
+  # ──────────────────────────────────────────
+  # PostgreSQL — base de données partagée
+  #
+  # ISOLATION RÉSEAU :
+  #   Aucune directive 'ports' → le port 5432 n'est pas
+  #   exposé sur l'hôte ni sur Internet.
+  #   Seuls les containers rattachés à dev-net peuvent
+  #   joindre ce service via postgres:5432.
+  #
+  # UN SCHÉMA PAR APPLICATION :
+  #   Toutes les apps partagent la base 'devdb'.
+  #   Chaque app écrit dans son propre schéma
+  #   (ex. spring_app, future_app…) déclaré dans
+  #   init/00_schemas.sql.
+  # ──────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: dev-postgres
+    restart: always
+    env_file: .env
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Scripts exécutés au 1er démarrage (ordre alphanumérique)
+      - ./init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - dev-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────
+  # pgAdmin 4 — interface web PostgreSQL
+  #
+  # AUTHENTIFICATION :
+  #   Login interne désactivé → seul Keycloak (OAuth2) est accepté.
+  #   Accès réservé aux membres du groupe LDAP 'developers'.
+  #
+  # PRÉREQUIS :
+  #   1. sso-lab en cours d'exécution
+  #   2. bash infra/setup-keycloak-pgadmin.sh  (une seule fois)
+  #   3. Copier PGADMIN_OAUTH2_CLIENT_SECRET dans infra/.env
+  #
+  # URL : http://localhost:5050
+  # ──────────────────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: dev-pgadmin
+    restart: always
+    env_file: .env
+    environment:
+      PGADMIN_SERVER_JSON_FILE: /var/lib/pgadmin/servers.json
+      # URL Keycloak accessible depuis le navigateur (dérivée de SERVER_URL_LAN dans infra/.env)
+      KEYCLOAK_PUBLIC_URL: "${SERVER_URL_WAN}:${PORT_KEYCLOAK}"
+    entrypoint: ["/bin/sh", "/pgadmin4/docker-entrypoint.sh"]
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+      - ./pgadmin/config_local.py:/pgadmin4/config_local.py:ro
+      - ./pgadmin/docker-entrypoint.sh:/pgadmin4/docker-entrypoint.sh:ro
+    ports:
+      - "${PORT_PGADMIN}:80"
+    networks:
+      - dev-net   # pour atteindre postgres:5432
+      - sso-net   # pour atteindre keycloak:8080 (token endpoint)
+    depends_on:
+      postgres:
+        condition: service_healthy

@@ -1,0 +1,6 @@
+[submodule "front-cadriciel"]
+	path = front-cadriciel
+	url = https://github.com/Sacha37420/front-cadriciel.git
+[submodule "spring-app"]
+	path = spring-app
+	url = https://github.com/Sacha37420/spring-app.git

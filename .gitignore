@@ -1,0 +1,9 @@
+# Fichiers d'environnement — contiennent des secrets, jamais commités
+**/.env
+*.env
+
+# Exceptions : les templates sont versionnés
+!**/.env.example
+
+# Généré automatiquement par get-ports-list.sh
+ports.env
