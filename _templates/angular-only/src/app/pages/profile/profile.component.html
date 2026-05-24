@@ -1,0 +1,19 @@
+<app-navbar />
+
+<main class="page-profile">
+  <section class="card">
+    <h3>Mon profil</h3>
+    <dl class="dl-grid">
+      <dt>Utilisateur</dt> <dd>{{ username }}</dd>
+      <dt>E-mail</dt>      <dd>{{ email }}</dd>
+    </dl>
+
+    @if (groups.length > 0) {
+      <div class="groups">
+        @for (g of groups; track g) {
+          <span class="badge">{{ g }}</span>
+        }
+      </div>
+    }
+  </section>
+</main>

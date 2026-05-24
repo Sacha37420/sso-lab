@@ -16,7 +16,7 @@ COMPOSE_DIRS=()
 while IFS= read -r compose; do
   dir="$(dirname "$compose")"
   COMPOSE_DIRS+=("$dir")
-done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" | sort -r)
+done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort -r)
 
 for dir in "${COMPOSE_DIRS[@]}"; do
   compose="$dir/docker-compose.yml"

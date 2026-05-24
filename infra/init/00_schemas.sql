@@ -14,3 +14,5 @@
 CREATE SCHEMA IF NOT EXISTS spring_app;
 
 -- CREATE SCHEMA IF NOT EXISTS future_app;
+
+CREATE SCHEMA IF NOT EXISTS table_manager;

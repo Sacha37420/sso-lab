@@ -38,7 +38,7 @@ while IFS= read -r compose; do
   dir="$(dirname "$compose")"
   [[ "$dir" == "$SCRIPT_DIR/sso-lab" || "$dir" == "$SCRIPT_DIR/infra" ]] && continue
   ORDERED_DIRS+=("$dir")
-done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" | sort)
+done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort)
 
 # ── Fonctions utilitaires ──────────────────────────────────────────────────────
 

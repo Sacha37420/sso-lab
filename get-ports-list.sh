@@ -37,7 +37,7 @@ OUTPUT="$SCRIPT_DIR/ports.env"
     printf '\n# ── %s\n' "$service_name"
     printf '%s\n' "$ports"
 
-  done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name ".env" -print0 \
+  done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name ".env" ! -path "*/_templates/*" -print0 \
              | sort -z)
 
 } > "$OUTPUT"

@@ -89,7 +89,7 @@ if [[ $# -lt 1 ]] || [[ "${1:-}" == "*" ]]; then
       done < "$_opts_file"
     fi
     "$0" "$_name" "${_app_opts[@]+"${_app_opts[@]}"}" "$@" || true   # continue même si une app échoue
-  done < <(find "$_sd" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" | sort)
+  done < <(find "$_sd" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort)
   [[ $_found -eq 0 ]] && echo "Aucun dossier d'application trouvé dans $_sd"
   exit 0
 fi
