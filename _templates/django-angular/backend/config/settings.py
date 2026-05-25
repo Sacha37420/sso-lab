@@ -9,12 +9,16 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-__APP_SLUG__-change-i
 DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*').split(',')
 
+import os
 # ── Applications ──────────────────────────────────────────────────────────────
+# ── Répertoires de templates ──────────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALLED_APPS = [
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'rest_framework',
     'corsheaders',
+    'drf_spectacular_sidecar',
     'drf_spectacular',
     'api',
 ]
@@ -61,6 +65,25 @@ REST_FRAMEWORK = {
     ],
 }
 
+# ── Keycloak ───────────────────────────────────────────────────────────────────
+KEYCLOAK_ISSUER_URI = config(
+    'KEYCLOAK_ISSUER_URI',
+    default='http://keycloak:8080/realms/ssolab',
+)
+KEYCLOAK_CLIENT_ID = config('KEYCLOAK_CLIENT_ID', default='swagger-ui')
+# Prefer building the public issuer from KEYCLOAK_PUBLIC_URL + KEYCLOAK_REALM
+# (so we don't introduce a separate KEYCLOAK_PUBLIC_ISSUER_URI variable).
+KEYCLOAK_PUBLIC_URL = config('KEYCLOAK_PUBLIC_URL', default=None)
+KEYCLOAK_REALM = config('KEYCLOAK_REALM', default=None)
+
+# Construct the issuer URL for the Swagger UI. If both public URL and realm are
+# provided, use them to form the WAN-facing issuer (e.g. https://host:port/realms/realm).
+# Otherwise fall back to the internal KEYCLOAK_ISSUER_URI value.
+if KEYCLOAK_PUBLIC_URL and KEYCLOAK_REALM:
+    _KEYCLOAK_ISSUER_FOR_UI = f"{KEYCLOAK_PUBLIC_URL.rstrip('/')}/realms/{KEYCLOAK_REALM}"
+else:
+    _KEYCLOAK_ISSUER_FOR_UI = KEYCLOAK_ISSUER_URI
+
 SPECTACULAR_SETTINGS = {
     'TITLE': '__APP_TITLE__ API',
     'DESCRIPTION': 'Documentation interactive OpenAPI/Swagger',
@@ -70,11 +93,35 @@ SPECTACULAR_SETTINGS = {
     'COMPONENTS': {
         'securitySchemes': {
             'BearerAuth': {
-                'type': 'openIdConnect',
-                'openIdConnectUrl': f'{KEYCLOAK_ISSUER_URI}/.well-known/openid-configuration',
+                'type': 'oauth2',
+                'flows': {
+                    'authorizationCode': {
+                        'authorizationUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/auth',
+                        'tokenUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/token',
+                        'scopes': {
+                            'openid': 'OpenID Connect scope',
+                            'profile': 'Profile scope',
+                            'email': 'Email scope',
+                        },
+                    }
+                }
             }
         }
     },
+    # Use CDN-hosted Swagger UI by default for templates — avoids missing sidecar
+    'SWAGGER_UI_DIST': 'https://cdn.jsdelivr.net/npm/swagger-ui-dist@latest',
+    'SWAGGER_UI_FAVICON_HREF': 'https://cdn.jsdelivr.net/npm/swagger-ui-dist@latest/favicon-32x32.png',
+    'SWAGGER_UI_OAUTH2_CONFIG': {
+        'clientId': KEYCLOAK_CLIENT_ID,
+        'usePkceWithAuthorizationCodeGrant': True,
+        'scope': 'openid profile email',
+        'authorizationUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/auth',
+        'tokenUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/token',
+        'oauth2RedirectUrl': '/api/docs/oauth2-redirect.html',
+    },
+    'POSTPROCESSING_HOOKS': [
+        'config.spectacular_hooks.add_bearer_security',
+    ],
 }
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
@@ -83,8 +130,18 @@ SPECTACULAR_SETTINGS = {
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='').split(',') if not DEBUG else []
 
-# ── Keycloak ───────────────────────────────────────────────────────────────────
-KEYCLOAK_ISSUER_URI = config(
-    'KEYCLOAK_ISSUER_URI',
-    default='http://keycloak:8080/realms/ssolab',
-)
+TEMPLATES = [
+    {
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [os.path.join(BASE_DIR, 'templates')],
+        'APP_DIRS': True,
+        'OPTIONS': {
+            'context_processors': [
+                'django.template.context_processors.debug',
+                'django.template.context_processors.request',
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
+            ],
+        },
+    },
+]

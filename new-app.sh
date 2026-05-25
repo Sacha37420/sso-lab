@@ -579,7 +579,6 @@ scaffold_django() {
     return
   fi
 
-  chown -R "$(id -u):$(id -g)" "${dir}" 2>/dev/null || true
 
   ok "Projet Django scaffoldé (config/ + manage.py)"
   _configure_django_project "${dir}" "${name}" "${schema}" "${tmpl_name}"
@@ -617,7 +616,6 @@ scaffold_angular() {
     return
   fi
 
-  chown -R "$(id -u):$(id -g)" "$tmpdir" 2>/dev/null || true
   cp -r "${tmpdir}/app/." "${dir}/"
   rm -rf "$tmpdir"
 
@@ -643,8 +641,11 @@ _configure_django_project() {
   local title
   title="$(echo "${name}" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2); print}')"
 
+
+  # Corrige les permissions AVANT la copie du template (sinon cp échoue si fichiers root)
   # Copie du template par-dessus le scaffold (remplace config/, ajoute api/)
   cp -r "${tmpl}/." "${dir}/"
+  # Corrige à nouveau les permissions APRÈS la copie (au cas où le template contient des fichiers root)
 
   # Remplacement des placeholders dans tous les fichiers Python
   find "${dir}" -type f -name "*.py" | while IFS= read -r f; do
@@ -716,8 +717,14 @@ PYEOF
 # ──────────────────────────────────────────────────────────────────────────────
 # ORCHESTRATION PRINCIPALE
 # ──────────────────────────────────────────────────────────────────────────────
+# Création du dossier principal et correction des permissions
 mkdir -p "$APP_DIR"
 step "Création de $APP_DIR"
+# Ajoute le dossier de l'app au .gitignore si absent
+if ! grep -qxF "$APP_NAME/" "$DEV_DIR/.gitignore"; then
+  echo "$APP_NAME/" >> "$DEV_DIR/.gitignore"
+  ok "$APP_NAME/ ajouté à .gitignore"
+fi
 
 case "$APP_TYPE" in
 
@@ -744,7 +751,17 @@ case "$APP_TYPE" in
     register_ports           "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
     if [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]]; then
       scaffold_spring  "$APP_DIR/backend"  "$APP_NAME"              "$DB_SCHEMA"
+      if [[ -n "${SUDO_UID-}" ]]; then
+        chown -R "${SUDO_UID}:${SUDO_GID:-$(id -g)}" "$APP_DIR/backend" 2>/dev/null || true
+      else
+        chown -R "$(id -u):$(id -g)" "$APP_DIR/backend" 2>/dev/null || true
+      fi
       scaffold_angular "$APP_DIR/frontend" "${APP_NAME}-frontend"   "$ANGULAR_PORT" "$BACKEND_PORT"
+      if [[ -n "${SUDO_UID-}" ]]; then
+        chown -R "${SUDO_UID}:${SUDO_GID:-$(id -g)}" "$APP_DIR/frontend" 2>/dev/null || true
+      else
+        chown -R "$(id -u):$(id -g)" "$APP_DIR/frontend" 2>/dev/null || true
+      fi
     fi
     ;;
 
@@ -775,7 +792,9 @@ case "$APP_TYPE" in
     ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT})"
     if [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]]; then
       scaffold_django  "$APP_DIR/backend"  "$APP_NAME"            "$DB_SCHEMA"
+      chown -R "$(id -u):$(id -g)" "$APP_DIR/backend" 2>/dev/null || true
       scaffold_angular "$APP_DIR/frontend" "${APP_NAME}-frontend" "$ANGULAR_PORT" "$BACKEND_PORT"
+      chown -R "$(id -u):$(id -g)" "$APP_DIR/frontend" 2>/dev/null || true
     fi
     ;;
 
@@ -790,7 +809,13 @@ case "$APP_TYPE" in
     register_ports           "$APP_NAME" "" "$ANGULAR_PORT"
     printf -- '--public --port %s\n' "$ANGULAR_PORT" > "${APP_DIR}/.keycloak-client-opts"
     ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT})"
-    [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]] && scaffold_angular "$APP_DIR" "$APP_NAME" "$ANGULAR_PORT" "" "angular-only"
+    [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]] && scaffold_angular "$APP_DIR" "$APP_NAME" "$ANGULAR_PORT" "" "angular-only" && {
+      if [[ -n "${SUDO_UID-}" ]]; then
+        chown -R "${SUDO_UID}:${SUDO_GID:-$(id -g)}" "$APP_DIR" 2>/dev/null || true
+      else
+        chown -R "$(id -u):$(id -g)" "$APP_DIR" 2>/dev/null || true
+      fi
+    }
     ;;
 
 esac
@@ -825,3 +850,33 @@ fi
 echo ""
 echo -e "  ${BOLD}Lancer :${NC} ${CYAN}cd dev/${APP_NAME} && docker compose up -d${NC}"
 echo ""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CORRECTION DES PERMISSIONS FINALE (si root)
+# ──────────────────────────────────────────────────────────────────────────────
+echo -e "\n${YELLOW}Correction des permissions sur $APP_DIR...${NC}"
+# Si le script est lancé via sudo, restaurer la propriété au user appelant
+if [[ -n "${SUDO_UID-}" ]]; then
+  OWNER_UID="$SUDO_UID"
+  OWNER_GID="${SUDO_GID:-$(id -g)}"
+  OWNER_USER="$(id -nu "$OWNER_UID")"
+  OWNER_GROUP="$(id -ng "$OWNER_GID")"
+else
+  OWNER_USER="$(id -un)"
+  OWNER_GROUP="$(id -gn)"
+fi
+
+# Exécuter chown/chmod : si nous sommes root (id -u == 0) pas besoin de sudo
+if [[ $(id -u) -eq 0 ]]; then
+  chown -R "${OWNER_USER}:${OWNER_GROUP}" "$APP_DIR" 2>/dev/null || true
+  chmod -R u+rwx,go-rwx "$APP_DIR" 2>/dev/null || true
+  echo -e "  ${GREEN}✔ Propriétaire et permissions définis (${OWNER_USER}:${OWNER_GROUP})${NC}"
+elif command -v sudo >/dev/null; then
+  sudo chown -R "${OWNER_USER}:${OWNER_GROUP}" "$APP_DIR" 2>/dev/null || true
+  sudo chmod -R u+rwx,go-rwx "$APP_DIR" 2>/dev/null || true
+  echo -e "  ${GREEN}✔ Propriétaire et permissions définis avec sudo (${OWNER_USER}:${OWNER_GROUP})${NC}"
+else
+  chown -R "${OWNER_USER}:${OWNER_GROUP}" "$APP_DIR" 2>/dev/null || true
+  chmod -R u+rwx,go-rwx "$APP_DIR" 2>/dev/null || true
+  echo -e "  ${YELLOW}✔ Propriétaire et permissions définis (sans sudo) (${OWNER_USER}:${OWNER_GROUP})${NC}"
+fi

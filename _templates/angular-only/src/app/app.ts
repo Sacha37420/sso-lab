@@ -8,3 +8,6 @@ import { RouterOutlet } from '@angular/router';
   template: '<router-outlet />',
 })
 export class AppComponent {}
+
+// Export pour Angular standalone
+export { AppComponent as App };

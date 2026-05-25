@@ -61,7 +61,10 @@ is_active() {
 compose_up() {
   local dir="$1"
   local build_flag=""
-  [[ -f "$dir/angular.json" ]] && build_flag="--build"
+  # Ajoute --build si Angular (angular.json) ou Django (manage.py ou requirements.txt)
+  if [[ -f "$dir/angular.json" || -f "$dir/manage.py" || -f "$dir/requirements.txt" ]]; then
+    build_flag="--build"
+  fi
   docker compose -f "$dir/docker-compose.yml" up -d $build_flag 2>&1 | sed 's/^/  /'
 }
 

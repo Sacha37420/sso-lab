@@ -1,4 +1,5 @@
 from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
 from rest_framework import generics
 from rest_framework.response import Response
 from .models import Department, UserRecord
@@ -7,6 +8,7 @@ from .serializers import DepartmentSerializer, UserRecordSerializer
 
 class MeView(APIView):
     """
+    permission_classes = [IsAuthenticated]
     GET /api/me/
     Retourne l'identité de l'utilisateur authentifié (depuis le JWT + DB).
     Crée un UserRecord à la première visite.

@@ -7,3 +7,4 @@
 
 # Généré automatiquement par get-ports-list.sh
 ports.env
+test-*/

@@ -1,19 +1,22 @@
 """
-Settings pour __APP_TITLE__.
+Settings pour Test Django.
 Les variables sensibles sont lues depuis le fichier .env via python-decouple.
 """
 from decouple import config
 
 # ── Sécurité ──────────────────────────────────────────────────────────────────
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-__APP_SLUG__-change-in-production')
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-test_django-change-in-production')
 DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*').split(',')
 
-# ── Applications ──────────────────────────────────────────────────────────────
+# ── Répertoires de templates ──────────────────────────────────────────────────
+import os
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALLED_APPS = [
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'rest_framework',
+    'drf_spectacular_sidecar',
     'drf_spectacular',
     'api',
 ]
@@ -27,7 +30,7 @@ ROOT_URLCONF = 'config.urls'
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # ── Base de données ────────────────────────────────────────────────────────────
-_DB_SCHEMA = config('DB_SCHEMA', default='__APP_SLUG__')
+_DB_SCHEMA = config('DB_SCHEMA', default='test_django')
 
 DATABASES = {
     'default': {
@@ -48,6 +51,25 @@ DB_SCHEMA = _DB_SCHEMA
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 USE_TZ = True
 
+# ── Keycloak ───────────────────────────────────────────────────────────────────
+KEYCLOAK_ISSUER_URI = config(
+    'KEYCLOAK_ISSUER_URI',
+    default='http://keycloak:8080/realms/ssolab',
+)
+KEYCLOAK_CLIENT_ID = config('KEYCLOAK_CLIENT_ID', default='swagger-ui')
+# Prefer building the public issuer from KEYCLOAK_PUBLIC_URL + KEYCLOAK_REALM
+# (so we don't introduce a separate KEYCLOAK_PUBLIC_ISSUER_URI variable).
+KEYCLOAK_PUBLIC_URL = config('KEYCLOAK_PUBLIC_URL', default=None)
+KEYCLOAK_REALM = config('KEYCLOAK_REALM', default=None)
+
+# Construct the issuer URL for the Swagger UI. If both public URL and realm are
+# provided, use them to form the WAN-facing issuer (e.g. https://host:port/realms/realm).
+# Otherwise fall back to the internal KEYCLOAK_ISSUER_URI value.
+if KEYCLOAK_PUBLIC_URL and KEYCLOAK_REALM:
+    _KEYCLOAK_ISSUER_FOR_UI = f"{KEYCLOAK_PUBLIC_URL.rstrip('/')}/realms/{KEYCLOAK_REALM}"
+else:
+    _KEYCLOAK_ISSUER_FOR_UI = KEYCLOAK_ISSUER_URI
+
 # ── Django REST Framework ──────────────────────────────────────────────────────
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -60,7 +82,7 @@ REST_FRAMEWORK = {
 }
 
 SPECTACULAR_SETTINGS = {
-    'TITLE': '__APP_TITLE__ API',
+    'TITLE': 'Test Django API',
     'DESCRIPTION': 'Documentation interactive OpenAPI/Swagger',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
@@ -68,15 +90,52 @@ SPECTACULAR_SETTINGS = {
     'COMPONENTS': {
         'securitySchemes': {
             'BearerAuth': {
-                'type': 'openIdConnect',
-                'openIdConnectUrl': f'{KEYCLOAK_ISSUER_URI}/.well-known/openid-configuration',
+                'type': 'oauth2',
+                'flows': {
+                    'authorizationCode': {
+                        'authorizationUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/auth',
+                            'tokenUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/token',
+                        'scopes': {
+                            'openid': 'OpenID Connect scope',
+                            'profile': 'Profile scope',
+                            'email': 'Email scope',
+                        },
+                    }
+                }
             }
         }
     },
+    # Use CDN-hosted Swagger UI to avoid missing local sidecar assets in this env
+    'SWAGGER_UI_DIST': 'https://cdn.jsdelivr.net/npm/swagger-ui-dist@latest',
+    'SWAGGER_UI_FAVICON_HREF': 'https://cdn.jsdelivr.net/npm/swagger-ui-dist@latest/favicon-32x32.png',
+    # Configure Swagger UI OAuth2 (initOAuth) to work with Keycloak
+    'SWAGGER_UI_OAUTH2_CONFIG': {
+        'clientId': KEYCLOAK_CLIENT_ID,
+        'usePkceWithAuthorizationCodeGrant': True,
+        'scope': 'openid profile email',
+        'authorizationUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/auth',
+        'tokenUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/token',
+        'oauth2RedirectUrl': '/api/docs/oauth2-redirect.html',
+    },
+    # Ensure components.securitySchemes exists even if drf-spectacular cannot
+    # infer it from custom authentication backends.
+    'POSTPROCESSING_HOOKS': [
+        'config.spectacular_hooks.add_bearer_security',
+    ],
 }
 
-# ── Keycloak ───────────────────────────────────────────────────────────────────
-KEYCLOAK_ISSUER_URI = config(
-    'KEYCLOAK_ISSUER_URI',
-    default='http://keycloak:8080/realms/ssolab',
-)
+TEMPLATES = [
+    {
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [os.path.join(BASE_DIR, 'templates')],
+        'APP_DIRS': True,
+        'OPTIONS': {
+            'context_processors': [
+                'django.template.context_processors.debug',
+                'django.template.context_processors.request',
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
+            ],
+        },
+    },
+]

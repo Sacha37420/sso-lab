@@ -1,5 +1,6 @@
 __keycloak__:8080:
 __phpldapadmin__:8081:
-spring-app:8082:
 __pgadmin__:5050:
-table-manager:8083:4201
+front-cadriciel:4200
+test-angular::4202
+
