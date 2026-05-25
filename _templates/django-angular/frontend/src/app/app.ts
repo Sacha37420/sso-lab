@@ -8,3 +8,6 @@ import { RouterOutlet } from '@angular/router';
   template: '<router-outlet />',
 })
 export class AppComponent {}
+
+// Export alias for compatibility with main.ts import { App }
+export { AppComponent as App };

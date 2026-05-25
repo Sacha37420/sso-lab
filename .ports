@@ -4,3 +4,5 @@ __pgadmin__:5050:
 front-cadriciel:4200
 test-angular::4202
 
+test-django:8083:
+test-angular-django:8084:4201

@@ -8,3 +8,5 @@
 # Généré automatiquement par get-ports-list.sh
 ports.env
 test-*/
+test-django/
+test-angular-django/
