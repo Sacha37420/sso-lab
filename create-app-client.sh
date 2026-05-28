@@ -234,7 +234,8 @@ fi
 
 # ── Port applicatif (lecture depuis <app>/.env si --port non fourni) ──────────
 if [[ -z "$APP_PORT" && -f "$APP_ENV" ]]; then
-  for _var in PORT_APP BACKEND_PORT PORT_FRONT FRONTEND_PORT PORT_BACK; do
+  # Support multiple naming conventions across templates: try common variants
+  for _var in PORT_APP BACKEND_PORT PORT_FRONT FRONTEND_PORT PORT_BACK PORT_FRONTEND PORT_BACKEND; do
     _p=$(_env_val "$APP_ENV" "$_var" "")
     if [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]]; then
       APP_PORT="$_p"

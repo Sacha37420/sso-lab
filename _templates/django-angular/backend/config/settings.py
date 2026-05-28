@@ -128,7 +128,8 @@ SPECTACULAR_SETTINGS = {
 # En développement, toutes les origines sont autorisées.
 # En production, restreindre à l'URL du frontend.
 CORS_ALLOW_ALL_ORIGINS = DEBUG
-CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='').split(',') if not DEBUG else []
+CORS_ALLOWED_ORIGINS_RAW = config('CORS_ALLOWED_ORIGINS', default='')
+CORS_ALLOWED_ORIGINS = [s for s in CORS_ALLOWED_ORIGINS_RAW.split(',') if s] if not DEBUG else []
 
 TEMPLATES = [
     {

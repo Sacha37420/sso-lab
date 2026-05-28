@@ -51,7 +51,7 @@ cn: Hassan
 sn: Hassan
 givenName: Hassan
 mail: hassan@ssolab.local
-userPassword: ZffsD3uPS9vlrfLJCsV3amqxkptNX5P2Bdo7Om7OarwPoIaFcd
+userPassword: REDACTED-LDAP-PASSWORD-ROTATED
 
 # ── Utilisateur : lea ─────────────────────────────────────────────
 dn: uid=lea,ou=people,dc=ssolab,dc=local

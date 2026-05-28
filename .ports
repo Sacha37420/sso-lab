@@ -6,3 +6,4 @@ test-angular::4202
 
 test-django:8083:
 test-angular-django:8084:4201
+test-bots:8085:4203
