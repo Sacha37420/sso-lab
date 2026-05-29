@@ -7,11 +7,11 @@ mkdir -p "$ASSETS"
 
 cat > "$ASSETS/env.js" << JSEOF
 window.__env = {
-  keycloakUrl:      "${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}",
-  keycloakRealm:    "${KEYCLOAK_REALM:-ssolab}",
-  keycloakClientId: "${KEYCLOAK_CLIENT_ID:-__APP_NAME__}",
-  apiUrl:           "${SERVER_URL_WAN:-http://localhost}:${PORT_BACKEND:-8000}",
-  appUrl:           "${SERVER_URL_WAN:-http://localhost}:${PORT_FRONTEND:-4200}",
+  keycloakUrl:      window.location.protocol + '//' + window.location.hostname + ':${PORT_KEYCLOAK:-8080}',
+  keycloakRealm:    '${KEYCLOAK_REALM:-ssolab}',
+  keycloakClientId: '${KEYCLOAK_CLIENT_ID:-__APP_NAME__}',
+  apiUrl:           window.location.protocol + '//' + window.location.hostname + ':${PORT_BACKEND:-8000}',
+  appUrl:           window.location.protocol + '//' + window.location.hostname + ':${PORT_FRONTEND:-4200}',
 };
 JSEOF
 
