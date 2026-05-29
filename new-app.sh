@@ -312,15 +312,15 @@ nginx_entrypoint_angular() {
     printf 'ASSETS=/usr/share/nginx/html/assets\n'
     printf 'mkdir -p "$ASSETS"\n\n'
     printf 'cat > "$ASSETS/env.js" << JSEOF\n'
-    printf "window.__env = {\n"
-    printf "  keycloakUrl:      window.location.protocol + '//' + window.location.hostname + ':\${PORT_KEYCLOAK:-8080}',\n"
-    printf "  keycloakRealm:    '\${KEYCLOAK_REALM:-ssolab}',\n"
-    printf "  keycloakClientId: '\${KEYCLOAK_CLIENT_ID}',\n"
+    printf 'window.__env = {\n'
+    printf '  keycloakUrl:      "${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}",\n'
+    printf '  keycloakRealm:    "${KEYCLOAK_REALM:-ssolab}",\n'
+    printf '  keycloakClientId: "${KEYCLOAK_CLIENT_ID}",\n'
     if [[ "$has_backend" == "true" ]]; then
       printf "  apiUrl:           window.location.protocol + '//' + window.location.hostname + ':\${PORT_BACKEND:-8000}',\n"
     fi
     printf "  appUrl:           window.location.protocol + '//' + window.location.hostname + ':\${PORT_FRONTEND:-4200}'\n"
-    printf "};\n"
+    printf '};\n'
     printf 'JSEOF\n\n'
     printf 'chmod 644 "$ASSETS/env.js"\n'
     printf 'echo "[nginx] env.js généré."\n'
