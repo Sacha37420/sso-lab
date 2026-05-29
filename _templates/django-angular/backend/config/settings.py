@@ -125,11 +125,27 @@ SPECTACULAR_SETTINGS = {
 }
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
-# En développement, toutes les origines sont autorisées.
-# En production, restreindre à l'URL du frontend.
+# En développement (DEBUG=True), toutes les origines sont autorisées.
+# En production, les origines sont dérivées automatiquement depuis SERVER_URL_WAN/LAN + PORT_FRONTEND,
+# ou surchargées via CORS_ALLOWED_ORIGINS (comma-separated).
 CORS_ALLOW_ALL_ORIGINS = DEBUG
-CORS_ALLOWED_ORIGINS_RAW = config('CORS_ALLOWED_ORIGINS', default='')
-CORS_ALLOWED_ORIGINS = [s for s in CORS_ALLOWED_ORIGINS_RAW.split(',') if s] if not DEBUG else []
+
+if not DEBUG:
+    _cors_explicit = config('CORS_ALLOWED_ORIGINS', default='')
+    _cors_list = [s for s in _cors_explicit.split(',') if s]
+    if not _cors_list:
+        _fport = config('PORT_FRONTEND', default='')
+        _wan = config('SERVER_URL_WAN', default='')
+        _lan = config('SERVER_URL_LAN', default='')
+        _local = config('FRONTEND_URL', default='')
+        for _o in [_local,
+                   f"{_wan}:{_fport}" if _wan and _fport else '',
+                   f"{_lan}:{_fport}" if _lan and _fport else '']:
+            if _o and _o not in _cors_list:
+                _cors_list.append(_o)
+    CORS_ALLOWED_ORIGINS = _cors_list
+else:
+    CORS_ALLOWED_ORIGINS = []
 
 TEMPLATES = [
     {
