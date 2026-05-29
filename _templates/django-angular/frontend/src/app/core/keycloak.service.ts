@@ -56,6 +56,11 @@ export class KeycloakService {
     return this.kc?.token;
   }
 
+  /** Vérifie si le token expire dans moins de minValidity secondes (synchrone). */
+  isTokenExpired(minValidity = 0): boolean {
+    return this.kc?.isTokenExpired(minValidity) ?? true;
+  }
+
   /**
    * Renouvelle le token si sa validité restante est inférieure à minValidity secondes.
    * Retourne true si le token a été renouvelé, false sinon.
