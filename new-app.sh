@@ -322,6 +322,7 @@ nginx_entrypoint_angular() {
     printf '  appUrl:           "${SERVER_URL_WAN:-http://localhost}:${PORT_FRONTEND:-4200}"\n'
     printf '};\n'
     printf 'JSEOF\n\n'
+    printf 'chmod 644 "$ASSETS/env.js"\n'
     printf 'echo "[nginx] env.js généré."\n'
   } > "${dir}/nginx-entrypoint.sh"
   chmod +x "${dir}/nginx-entrypoint.sh"
@@ -610,14 +611,17 @@ scaffold_angular() {
                   --defaults 2>/dev/null \
              && cd /workspace/app \
              && npm install keycloak-js@22.0.5 --save --silent 2>/dev/null"; then
-    rm -rf "$tmpdir"
+    docker run --rm -v "${tmpdir}:/target" alpine sh -c "rm -rf /target" 2>/dev/null || true
+    rm -rf "$tmpdir" 2>/dev/null || true
     warn "Échec du scaffold Angular."
     info  "Créer manuellement : ng new ${name}"
     return
   fi
 
   cp -r "${tmpdir}/app/." "${dir}/"
-  rm -rf "$tmpdir"
+  # Suppression via Docker (fichiers créés root par node:20-alpine)
+  docker run --rm -v "${tmpdir}:/target" alpine sh -c "chmod -R 777 /target && rm -rf /target/app" 2>/dev/null || true
+  rm -rf "$tmpdir" 2>/dev/null || true
 
   ok "Projet Angular scaffoldé (ng new + keycloak-js@22.0.5)"
   _apply_angular_template "${dir}" "${name}" "${bport}" "${port}" "${tmpl_name}"
@@ -643,6 +647,7 @@ _configure_django_project() {
 
 
   # Corrige les permissions AVANT la copie du template (sinon cp échoue si fichiers root)
+  docker run --rm -v "${dir}:/target" alpine sh -c "chmod -R 777 /target" 2>/dev/null || true
   # Copie du template par-dessus le scaffold (remplace config/, ajoute api/)
   cp -r "${tmpl}/." "${dir}/"
   # Corrige à nouveau les permissions APRÈS la copie (au cas où le template contient des fichiers root)

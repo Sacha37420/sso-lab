@@ -14,4 +14,5 @@ window.__env = {
 };
 JSEOF
 
+chmod 644 "$ASSETS/env.js"
 echo "[nginx] env.js généré."

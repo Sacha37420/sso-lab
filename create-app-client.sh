@@ -97,6 +97,22 @@ fi
 [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && usage
 
 APP_NAME="$1"; shift
+
+# Lire les options depuis .keycloak-client-opts si présent et si aucune option extra n'est passée
+_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+_OPTS_FILE="${_SCRIPT_DIR}/${APP_NAME}/.keycloak-client-opts"
+if [[ -f "$_OPTS_FILE" && $# -eq 0 ]]; then
+  _extra_opts=()
+  while IFS= read -r _opt_line || [[ -n "$_opt_line" ]]; do
+    [[ -z "$_opt_line" || "$_opt_line" == \#* ]] && continue
+    # shellcheck disable=SC2206
+    _extra_opts+=( $_opt_line )
+  done < "$_OPTS_FILE"
+  if [[ ${#_extra_opts[@]} -gt 0 ]]; then
+    set -- "${_extra_opts[@]}"
+  fi
+fi
+
 CLIENT_TYPE="confidential"
 CLIENT_ID=""
 APP_PORT=""
