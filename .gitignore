@@ -7,6 +7,9 @@
 
 # Généré automatiquement par get-ports-list.sh
 ports.env
+
+# Registre des ports — géré localement par new-app.sh
+.ports
 test-angular/
 test-django/
 test-angular-django/
