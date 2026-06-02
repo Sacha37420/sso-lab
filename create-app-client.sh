@@ -52,6 +52,7 @@ usage() {
   echo "  --wan-ip <IP>          IP WAN (skip auto-détection)"
   echo "  --no-wan               Ne pas ajouter d'URIs WAN"
   echo "  --no-rotate            Conserver le secret existant"
+  echo "  --require-group <g>    Crée un rôle realm <g>-member et l'assigne au groupe <g>"
   echo ""
   echo "Exemples :"
   echo "  $0 mon-api --port 8083"
@@ -121,6 +122,7 @@ OVERRIDE_LAN_IP=""
 OVERRIDE_WAN_IP=""
 NO_WAN=false
 ROTATE=true
+REQUIRE_GROUP=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -132,6 +134,7 @@ while [[ $# -gt 0 ]]; do
     --wan-ip)         [[ $# -gt 1 ]] || die "--wan-ip requiert une valeur"; OVERRIDE_WAN_IP="$2"; shift ;;
     --no-wan)         NO_WAN=true ;;
     --no-rotate)      ROTATE=false ;;
+    --require-group)  [[ $# -gt 1 ]] || die "--require-group requiert une valeur"; REQUIRE_GROUP="$2"; shift ;;
     --help|-h)        usage ;;
     *)                die "Argument inconnu : '$1'" ;;
   esac
@@ -315,6 +318,7 @@ else
     realm:                   $r,
     displayName:             "SSO Lab",
     enabled:                 true,
+    sslRequired:             "none",
     registrationAllowed:     false,
     loginWithEmailAllowed:   true,
     duplicateEmailsAllowed:  false,
@@ -708,6 +712,71 @@ upsert_env "$APP_ENV" "KEYCLOAK_CLIENT_ID"  "$CLIENT_ID"
 upsert_env "$APP_ENV" "KEYCLOAK_ISSUER_URI" "$KEYCLOAK_URL/realms/$REALM"
 upsert_env "$APP_ENV" "PORT_KEYCLOAK"       "$KC_PORT"
 success "$APP_ENV mis à jour."
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 6/5 — Restriction d'accès à un groupe Keycloak (optionnel)
+#        Crée un rôle realm <groupe>-member et l'assigne au groupe LDAP.
+#        L'application (backend) vérifie ce groupe via le claim JWT 'groups'.
+# ══════════════════════════════════════════════════════════════════════════════
+if [[ -n "$REQUIRE_GROUP" ]]; then
+  info "6/5 — Restriction d'accès au groupe '$REQUIRE_GROUP'..."
+
+  ROLE_NAME="${REQUIRE_GROUP}-member"
+
+  # ── Créer le realm role si absent ───────────────────────────────────────────
+  ROLE_EXISTS=$(curl -sf \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$KEYCLOAK_URL/admin/realms/$REALM/roles/$ROLE_NAME" 2>/dev/null \
+    | jq -r '.name // empty')
+
+  if [[ -z "$ROLE_EXISTS" ]]; then
+    ROLE_HTTP=$(curl -s -o /tmp/_kc_role.json -w "%{http_code}" \
+      -X POST \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"name\": \"$ROLE_NAME\", \"description\": \"Membres du groupe $REQUIRE_GROUP — accès $CLIENT_ID\"}" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/roles")
+    case "$ROLE_HTTP" in
+      201) success "  Rôle realm '$ROLE_NAME' créé." ;;
+      409) success "  Rôle realm '$ROLE_NAME' existant." ;;
+      *)   warn    "  Création du rôle : HTTP $ROLE_HTTP — $(cat /tmp/_kc_role.json)" ;;
+    esac
+  else
+    success "  Rôle realm '$ROLE_NAME' existant."
+  fi
+
+  # ── Récupérer l'ID du rôle ──────────────────────────────────────────────────
+  ROLE_ID=$(curl -sf \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$KEYCLOAK_URL/admin/realms/$REALM/roles/$ROLE_NAME" \
+    | jq -r '.id // empty')
+
+  if [[ -z "$ROLE_ID" ]]; then
+    warn "  Impossible de récupérer l'ID du rôle '$ROLE_NAME' — assignation ignorée."
+  else
+    # ── Trouver le groupe dans Keycloak (synchronisé depuis LDAP) ─────────────
+    GROUP_KC_ID=$(curl -sf \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/groups?search=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$REQUIRE_GROUP'))" 2>/dev/null || echo "$REQUIRE_GROUP")" \
+      | jq -r --arg g "$REQUIRE_GROUP" '[.[] | select(.name == $g)] | .[0].id // empty')
+
+    if [[ -z "$GROUP_KC_ID" ]]; then
+      warn "  Groupe '$REQUIRE_GROUP' introuvable dans Keycloak."
+      warn "  Synchronisez les groupes LDAP puis relancez ce script."
+    else
+      # ── Assigner le rôle au groupe ────────────────────────────────────────────
+      ASSIGN_HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST \
+        -H "Authorization: Bearer $ACCESS_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "[{\"id\": \"$ROLE_ID\", \"name\": \"$ROLE_NAME\"}]" \
+        "$KEYCLOAK_URL/admin/realms/$REALM/groups/$GROUP_KC_ID/role-mappings/realm")
+      [[ "$ASSIGN_HTTP" =~ ^2 ]] \
+        && success "  Rôle '$ROLE_NAME' assigné au groupe '$REQUIRE_GROUP'." \
+        || warn    "  Assignation rôle→groupe : HTTP $ASSIGN_HTTP"
+    fi
+  fi
+fi
 
 # ── Résumé ────────────────────────────────────────────────────────────────────
 echo ""

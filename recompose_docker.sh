@@ -57,14 +57,20 @@ is_active() {
   docker compose -f "$dir/docker-compose.yml" ps -q 2>/dev/null | grep -q .
 }
 
-# Lance la stack (ajoute --build pour les projets Angular)
+# Retourne un label si la stack contient du code à construire (cherche dans les sous-dossiers)
+build_label() {
+  local dir="$1"
+  local parts=()
+  find "$dir" -maxdepth 2 -name "angular.json"                                       -print -quit 2>/dev/null | grep -q . && parts+=("Angular")
+  find "$dir" -maxdepth 2 \( -name "manage.py" -o -name "requirements.txt" \)        -print -quit 2>/dev/null | grep -q . && parts+=("Django")
+  [[ ${#parts[@]} -gt 0 ]] && printf " (%s → --build)" "$(IFS=+; echo "${parts[*]}")"
+}
+
+# Lance la stack (ajoute --build si Angular ou Django détecté dans les sous-dossiers)
 compose_up() {
   local dir="$1"
   local build_flag=""
-  # Ajoute --build si Angular (angular.json) ou Django (manage.py ou requirements.txt)
-  if [[ -f "$dir/angular.json" || -f "$dir/manage.py" || -f "$dir/requirements.txt" ]]; then
-    build_flag="--build"
-  fi
+  [[ -n "$(build_label "$dir")" ]] && build_flag="--build"
   docker compose -f "$dir/docker-compose.yml" up -d $build_flag 2>&1 | sed 's/^/  /'
 }
 
@@ -81,8 +87,8 @@ process_stack() {
   name="$(basename "$dir")"
   [[ -f "$dir/docker-compose.yml" ]] || return 0
 
-  local label=""
-  [[ -f "$dir/angular.json" ]] && label=" (Angular → --build)"
+  local label
+  label="$(build_label "$dir")"
 
   if [[ "$FORCE" == true ]]; then
     echo "■ $name — arrêt..."
@@ -130,8 +136,7 @@ else
     echo "=== Démarrage de toutes les stacks ==="
     for dir in "${ORDERED_DIRS[@]}"; do
       [[ -f "$dir/docker-compose.yml" ]] || continue
-      local_label=""
-      [[ -f "$dir/angular.json" ]] && local_label=" (Angular → --build)"
+      local_label="$(build_label "$dir")"
       echo "▶ $(basename "$dir") — démarrage${local_label}..."
       compose_up "$dir"
       echo ""
@@ -147,8 +152,7 @@ else
       if is_active "$dir"; then
         echo "✓ $name — déjà actif"
       else
-        local_label=""
-        [[ -f "$dir/angular.json" ]] && local_label=" (Angular → --build)"
+        local_label="$(build_label "$dir")"
         echo "▶ $name — démarrage${local_label}..."
         compose_up "$dir"
         started=$((started + 1))

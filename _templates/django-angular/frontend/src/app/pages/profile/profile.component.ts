@@ -1,4 +1,4 @@
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, inject, OnInit, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { NavbarComponent } from '../../shared/navbar/navbar.component';
 import { ApiService }      from '../../core/api.service';
@@ -29,28 +29,28 @@ interface MeResponse {
 export class ProfileComponent implements OnInit {
   private api = inject(ApiService);
 
-  me:      MeResponse | null = null;
-  users:   UserRecord[]      = [];
-  loading = true;
-  error:   string | null     = null;
+  me      = signal<MeResponse | null>(null);
+  users   = signal<UserRecord[]>([]);
+  loading = signal(true);
+  error   = signal<string | null>(null);
 
   ngOnInit(): void {
     this.api.getMe().subscribe({
       next: (data) => {
-        this.me      = data as MeResponse;
-        this.loading = false;
+        this.me.set(data as MeResponse);
+        this.loading.set(false);
         this.loadUsers();
       },
       error: (err) => {
-        this.loading = false;
-        this.error   = `Impossible de charger le profil (${err.status ?? 'réseau'})`;
+        this.loading.set(false);
+        this.error.set(`Impossible de charger le profil (${err.status ?? 'réseau'})`);
       },
     });
   }
 
   private loadUsers(): void {
     this.api.getUsers().subscribe({
-      next: (users) => { this.users = users as UserRecord[]; },
+      next: (users) => { this.users.set(users as UserRecord[]); },
     });
   }
 }

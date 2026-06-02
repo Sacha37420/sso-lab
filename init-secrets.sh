@@ -7,12 +7,12 @@
 #   KEYCLOAK_ADMIN_PASSWORD  — console admin Keycloak (port 8080)
 #   LDAP_ADMIN_PASSWORD      — phpLDAPadmin (port 8081)
 #   LDAP_CONFIG_PASSWORD     — phpLDAPadmin (cn=config bind)
-#   SACHA/HASSAN/LEA/ELODIE_PASSWORD — comptes LDAP, login via Keycloak
 #
 # Non modifiés (non exposés WAN ou gérés ailleurs) :
 #   POSTGRES_PASSWORD / DB_PASSWORD  (internes, pas de port exposé)
 #   PGADMIN_DEFAULT_PASSWORD         (pgAdmin en OAuth2 uniquement)
 #   KEYCLOAK_CLIENT_SECRET           (géré par create-app-client.sh)
+#   Mots de passe utilisateurs LDAP  (définis manuellement dans init.ldif)
 #
 # Usage :
 #   ./init-secrets.sh          ← demande confirmation interactive
@@ -28,8 +28,6 @@ SSO_ENV="$SCRIPT_DIR/sso-lab/.env"
 gen_pass() {
   LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 50
 }
-
-LDIF="$SCRIPT_DIR/sso-lab/ldap/init.ldif"
 
 # ── Remplace KEY=valeur dans un .env (nettoie les éventuelles lignes orphelines
 #    issues d'une écriture corrompue antérieure) ou ajoute la clé en fin de fichier.
@@ -48,16 +46,6 @@ upsert_env() {
   fi
 }
 
-# ── Met à jour userPassword d'un uid dans init.ldif ─────────────────────────
-upsert_ldif_password() {
-  local file="$1" uid="$2" password="$3"
-  awk -v uid="$uid" -v pwd="$password" '
-    /^dn: uid=/ { in_user = ($0 ~ ("^dn: uid=" uid ",")) }
-    in_user && /^userPassword:/ { print "userPassword: " pwd; next }
-    { print }
-  ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
-}
-
 # ── Confirmation ──────────────────────────────────────────────────────────────
 FORCE=false
 [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]] && FORCE=true
@@ -65,7 +53,7 @@ FORCE=false
 if ! $FORCE; then
   echo ""
   echo "⚠️  Ce script va REMPLACER les mots de passe des comptes WAN du projet."
-  echo "   (KEYCLOAK_ADMIN, LDAP_ADMIN/CONFIG, utilisateurs LDAP)"
+  echo "   (KEYCLOAK_ADMIN, LDAP_ADMIN/CONFIG)"
   echo "   Les KEYCLOAK_CLIENT_SECRET ne sont pas modifiés."
   echo ""
   echo "   Les nouveaux mots de passe ne s'appliquent qu'après suppression"
@@ -93,23 +81,6 @@ echo "✅  LDAP_CONFIG_PASSWORD               → sso-lab"
 KC_ADMIN_PASS=$(gen_pass)
 upsert_env "$SSO_ENV" "KEYCLOAK_ADMIN_PASSWORD" "$KC_ADMIN_PASS"
 echo "✅  KEYCLOAK_ADMIN_PASSWORD            → sso-lab"
-
-# ── Utilisateurs LDAP de test ─────────────────────────────────────────────────
-SACHA_PASS=$(gen_pass)
-HASSAN_PASS=$(gen_pass)
-LEA_PASS=$(gen_pass)
-ELODIE_PASS=$(gen_pass)
-
-upsert_env "$SSO_ENV" "SACHA_PASSWORD"   "$SACHA_PASS"
-upsert_env "$SSO_ENV" "HASSAN_PASSWORD"  "$HASSAN_PASS"
-upsert_env "$SSO_ENV" "LEA_PASSWORD"     "$LEA_PASS"
-upsert_env "$SSO_ENV" "ELODIE_PASSWORD"  "$ELODIE_PASS"
-
-upsert_ldif_password "$LDIF" "sacha"  "$SACHA_PASS"
-upsert_ldif_password "$LDIF" "hassan" "$HASSAN_PASS"
-upsert_ldif_password "$LDIF" "lea"    "$LEA_PASS"
-upsert_ldif_password "$LDIF" "elodie" "$ELODIE_PASS"
-echo "✅  SACHA/HASSAN/LEA/ELODIE_PASSWORD   → sso-lab/.env + sso-lab/ldap/init.ldif"
 
 echo ""
 echo "✅  Tous les secrets ont été régénérés."

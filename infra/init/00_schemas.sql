@@ -24,3 +24,7 @@ CREATE SCHEMA IF NOT EXISTS test_django;
 CREATE SCHEMA IF NOT EXISTS test_angular_django;
 
 CREATE SCHEMA IF NOT EXISTS test_bots;
+
+CREATE SCHEMA IF NOT EXISTS google_agenda;
+
+CREATE SCHEMA IF NOT EXISTS analyse_lora;
