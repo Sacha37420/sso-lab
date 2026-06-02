@@ -12,3 +12,8 @@ test-django/
 test-angular-django/
 test-bots/
 test-django-angular/
+google-agenda/
+analyse-lora/
+
+# Fichier LDAP — contient des mots de passe hashés, géré localement
+sso-lab/ldap/init.ldif
