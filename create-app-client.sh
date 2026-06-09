@@ -123,20 +123,23 @@ OVERRIDE_WAN_IP=""
 NO_WAN=false
 ROTATE=true
 REQUIRE_GROUP=""
+CADDY_PATH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --client-id)      [[ $# -gt 1 ]] || die "--client-id requiert une valeur"; CLIENT_ID="$2"; shift ;;
-    --public)         CLIENT_TYPE="public" ;;
-    --port)           [[ $# -gt 1 ]] || die "--port requiert une valeur"; APP_PORT="$2"; shift ;;
-    --redirect-path)  [[ $# -gt 1 ]] || die "--redirect-path requiert une valeur"; REDIRECT_PATH="$2"; shift ;;
-    --lan-ip)         [[ $# -gt 1 ]] || die "--lan-ip requiert une valeur"; OVERRIDE_LAN_IP="$2"; shift ;;
-    --wan-ip)         [[ $# -gt 1 ]] || die "--wan-ip requiert une valeur"; OVERRIDE_WAN_IP="$2"; shift ;;
-    --no-wan)         NO_WAN=true ;;
-    --no-rotate)      ROTATE=false ;;
-    --require-group)  [[ $# -gt 1 ]] || die "--require-group requiert une valeur"; REQUIRE_GROUP="$2"; shift ;;
-    --help|-h)        usage ;;
-    *)                die "Argument inconnu : '$1'" ;;
+    --client-id)       [[ $# -gt 1 ]] || die "--client-id requiert une valeur"; CLIENT_ID="$2"; shift ;;
+    --public)          CLIENT_TYPE="public" ;;
+    --port)            [[ $# -gt 1 ]] || die "--port requiert une valeur"; APP_PORT="$2"; shift ;;
+    --redirect-path)   [[ $# -gt 1 ]] || die "--redirect-path requiert une valeur"; REDIRECT_PATH="$2"; shift ;;
+    --lan-ip)          [[ $# -gt 1 ]] || die "--lan-ip requiert une valeur"; OVERRIDE_LAN_IP="$2"; shift ;;
+    --wan-ip)          [[ $# -gt 1 ]] || die "--wan-ip requiert une valeur"; OVERRIDE_WAN_IP="$2"; shift ;;
+    --no-wan)          NO_WAN=true ;;
+    --no-rotate)       ROTATE=false ;;
+    --require-group)   [[ $# -gt 1 ]] || die "--require-group requiert une valeur"; REQUIRE_GROUP="$2"; shift ;;
+    --caddy-path)      [[ $# -gt 1 ]] || die "--caddy-path requiert une valeur"; CADDY_PATH="$2"; shift ;;
+    --caddy-subdomain) [[ $# -gt 1 ]] || die "--caddy-subdomain requiert une valeur"; CADDY_PATH="$2"; shift ;;  # alias rétrocompat
+    --help|-h)         usage ;;
+    *)                 die "Argument inconnu : '$1'" ;;
   esac
   shift
 done
@@ -611,6 +614,19 @@ if [[ -n "$APP_PORT" ]]; then
     DESIRED_URIS+=("http://${_host}:${APP_PORT}${REDIRECT_PATH}")
     DESIRED_ORIGINS+=("http://${_host}:${APP_PORT}")
   done
+fi
+
+# URIs HTTPS via Caddy — ajoutées si --caddy-path est fourni et DOMAIN configuré
+if [[ -n "$CADDY_PATH" ]]; then
+  _ROOT_ENV="$(cd "$(dirname "$0")" && pwd)/.env"
+  _DOMAIN=$(_env_val "$_ROOT_ENV" "DOMAIN" "CHANGE_ME")
+  if [[ "$_DOMAIN" != "CHANGE_ME" && -n "$_DOMAIN" ]]; then
+    DESIRED_URIS+=("https://${_DOMAIN}/${CADDY_PATH}${REDIRECT_PATH}")
+    DESIRED_ORIGINS+=("https://${_DOMAIN}")
+    info "URI HTTPS Caddy : https://${_DOMAIN}/${CADDY_PATH}${REDIRECT_PATH}"
+  else
+    info "DOMAIN non configuré — URI HTTPS ignorée (--caddy-path ${CADDY_PATH})"
+  fi
 fi
 
 # Construire les JSON arrays

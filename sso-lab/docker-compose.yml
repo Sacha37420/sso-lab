@@ -17,8 +17,33 @@ volumes:
   ldap-data:
   ldap-config:
   keycloak-data:
+  caddy-data:
 
 services:
+
+  # ──────────────────────────────────────────
+  # Caddy (reverse-proxy HTTPS)
+  # Écoute sur 80/443, récupère les certs Let's Encrypt automatiquement.
+  # Découvre les services via les labels Docker sur chaque container.
+  # Prérequis : DOMAIN et ACME_EMAIL renseignés dans .env + reset_url.sh lancé.
+  # ──────────────────────────────────────────
+  caddy:
+    image: lucaslorentz/caddy-docker-proxy:ci-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "${PORT_HTTP:-80}:80"
+      - "${PORT_HTTPS:-443}:443"
+    environment:
+      CADDY_INGRESS_NETWORKS: "sso-lab_sso-net"
+      CADDY_DOCKER_CADDYFILE_PATH: /etc/caddy/Caddyfile
+      ACME_EMAIL: "${ACME_EMAIL}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - caddy-data:/data
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      - sso-net
 
   # ──────────────────────────────────────────
   # OpenLDAP
@@ -55,9 +80,7 @@ services:
     container_name: phpldapadmin
     restart: always
     environment:
-      # Adresse du serveur LDAP (nom du service Docker)
       PHPLDAPADMIN_LDAP_HOSTS: "openldap"
-      # Désactive HTTPS (lab local uniquement)
       PHPLDAPADMIN_HTTPS: "false"
     ports:
       - "${PORT_PHPLDAPADMIN}:80"
@@ -77,27 +100,31 @@ services:
     restart: always
     env_file: .env
     environment:
-      # Compte administrateur Keycloak (console web)
       KEYCLOAK_ADMIN: "${KEYCLOAK_ADMIN}"
       KEYCLOAK_ADMIN_PASSWORD: "${KEYCLOAK_ADMIN_PASSWORD}"
-      # Mode dev : HTTP autorisé, pas de cache, rechargement à chaud
       KC_HTTP_ENABLED: "true"
       KC_HOSTNAME_STRICT: "false"
       KC_HOSTNAME_STRICT_HTTPS: "false"
+      # KC_PROXY edge : indique à Keycloak qu'il est derrière un reverse-proxy TLS (Caddy).
+      # Requis pour que les redirects et l'iss des JWT utilisent https.
+      KC_PROXY: "edge"
       # KC_HOSTNAME_URL : fixe l'issuer JWT à une valeur stable.
-      # Sans cela, l'iss du token = host de la requête entrante (browser),
-      # ce qui cause un mismatch avec la discovery OIDC fetchée en interne par pgAdmin.
-      KC_HOSTNAME_URL: "${SERVER_URL_WAN}:${PORT_KEYCLOAK}"
+      # HTTP  → http://IP_WAN:8080  |  HTTPS → https://auth.DOMAINE
+      # Mis à jour par reset_url.sh via KEYCLOAK_HOSTNAME_URL dans .env
+      KC_HOSTNAME_URL: "${KEYCLOAK_HOSTNAME_URL}"
     ports:
       - "${PORT_KEYCLOAK}:8080"
     networks:
       - sso-net
     depends_on:
       - openldap
-    # "start-dev" lance Keycloak en mode développement (H2 embarqué)
     command: ["start-dev"]
     volumes:
       - keycloak-data:/opt/keycloak/data
+    labels:
+      caddy: "${DOMAIN}"
+      caddy.handle_path: "/auth/*"
+      caddy.handle_path.reverse_proxy: "{{upstreams 8080}}"
 
   # ──────────────────────────────────────────
   # Spring Boot App (construite à l'étape 3)

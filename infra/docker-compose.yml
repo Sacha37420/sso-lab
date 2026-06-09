@@ -82,8 +82,7 @@ services:
     env_file: .env
     environment:
       PGADMIN_SERVER_JSON_FILE: /var/lib/pgadmin/servers.json
-      # URL Keycloak accessible depuis le navigateur (dérivée de SERVER_URL_LAN dans infra/.env)
-      KEYCLOAK_PUBLIC_URL: "${SERVER_URL_WAN}:${PORT_KEYCLOAK}"
+      KEYCLOAK_PUBLIC_URL: "${KEYCLOAK_PUBLIC_URL}"
     entrypoint: ["/bin/sh", "/pgadmin4/docker-entrypoint.sh"]
     volumes:
       - pgadmin-data:/var/lib/pgadmin

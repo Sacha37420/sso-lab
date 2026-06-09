@@ -99,15 +99,16 @@ bash "$SCRIPT_DIR/get-ports-list.sh"
 echo -e "\033[0;32m✓ ports.env généré.\033[0m"
 
 # ── 9. Ouverture des ports Bbox ──────────────────────────────────────
-echo -e "\033[0;36m══ Ouverture des ports sur la Bbox (open-bbox-ports.sh)\033[0m"
+# HTTPS (DOMAIN configuré) → seulement 80+443 ; HTTP → tous les PORT_*
+echo -e "\033[0;36m══ Ouverture des ports sur la Bbox (open-bbox-ports2.sh)\033[0m"
 BBOX_IP=$(grep -E '^BBOX_IP=' "$SCRIPT_DIR/bbox.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
 BBOX_IP="${BBOX_IP:-192.168.1.254}"
 if curl -sk --max-time 3 "https://${BBOX_IP}/api/v1/device" > /dev/null 2>&1; then
-  bash "$SCRIPT_DIR/open-bbox-ports.sh"
+  bash "$SCRIPT_DIR/open-bbox-ports2.sh"
   echo -e "\033[0;32m✓ Ports ouverts sur la Bbox.\033[0m"
 else
   echo -e "\033[1;33m⚠ Bbox non détectée sur ${BBOX_IP} — ouvrez les ports manuellement.\033[0m"
-  echo -e "\033[1;33m⚠ Relancez manuellement : bash open-bbox-ports.sh\033[0m"
+  echo -e "\033[1;33m⚠ Relancez manuellement : bash open-bbox-ports2.sh\033[0m"
   echo -e "\033[1;33m⚠ Ou configurez la redirection de port dans l'interface de votre routeur.\033[0m"
 fi
 

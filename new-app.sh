@@ -195,6 +195,9 @@ write_env_files() {
     echo "SERVER_URL_WAN=http://VOTRE_IP_WAN"
     echo "KEYCLOAK_URL=http://192.168.1.X:8080"
     echo "KEYCLOAK_PUBLIC_URL=http://VOTRE_IP_WAN:8080"
+    echo ""
+    echo "# ── HTTPS / Caddy ─────────────────────────────────────────────────────────────"
+    echo "DOMAIN=CHANGE_ME"
   } > "${dir}/.env.example"
   cp "${dir}/.env.example" "${dir}/.env"
   ok ".env et .env.example créés"
@@ -273,7 +276,7 @@ EOF
 }
 
 nginx_conf_angular() {
-  local dir="$1"
+  local dir="$1" name="${2:-app}"
   cat > "${dir}/nginx.conf" << 'EOF'
 server {
     listen 80;
@@ -283,6 +286,8 @@ server {
 
     location / {
         try_files $uri $uri/ /index.html;
+        sub_filter '<base href="/">' '<base href="/__APP_PATH__/">';
+        sub_filter_once on;
     }
 
     location = /assets/env.js {
@@ -300,18 +305,32 @@ server {
     add_header Referrer-Policy strict-origin-when-cross-origin;
 }
 EOF
+  sed -i "s|__APP_PATH__|${name}|g" "${dir}/nginx.conf"
   ok "nginx.conf"
 }
 
 nginx_entrypoint_angular() {
-  local dir="$1" has_backend="${2:-false}"
+  local dir="$1" has_backend="${2:-false}" app_name="${3:-}"
   {
     printf '#!/bin/sh\n'
     printf '# Généré par new-app.sh — injecte la configuration Keycloak dans env.js\n'
     printf 'set -e\n\n'
     printf 'ASSETS=/usr/share/nginx/html/assets\n'
     printf 'mkdir -p "$ASSETS"\n\n'
-    printf 'cat > "$ASSETS/env.js" << JSEOF\n'
+    printf 'if [ "${DOMAIN:-CHANGE_ME}" != "CHANGE_ME" ] && [ -n "${DOMAIN:-}" ]; then\n'
+    printf '  cat > "$ASSETS/env.js" << JSEOF\n'
+    printf 'window.__env = {\n'
+    printf '  keycloakUrl:      "${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}",\n'
+    printf '  keycloakRealm:    "${KEYCLOAK_REALM:-ssolab}",\n'
+    printf '  keycloakClientId: "${KEYCLOAK_CLIENT_ID}",\n'
+    if [[ "$has_backend" == "true" ]]; then
+      printf '  apiUrl:           "https://${DOMAIN}/%s",\n' "${app_name}-api"
+    fi
+    printf '  appUrl:           "https://${DOMAIN}/%s/"\n' "${app_name}"
+    printf '};\n'
+    printf 'JSEOF\n'
+    printf 'else\n'
+    printf '  cat > "$ASSETS/env.js" << JSEOF\n'
     printf 'window.__env = {\n'
     printf '  keycloakUrl:      "${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}",\n'
     printf '  keycloakRealm:    "${KEYCLOAK_REALM:-ssolab}",\n'
@@ -321,7 +340,8 @@ nginx_entrypoint_angular() {
     fi
     printf "  appUrl:           window.location.protocol + '//' + window.location.hostname + ':\${PORT_FRONTEND:-4200}'\n"
     printf '};\n'
-    printf 'JSEOF\n\n'
+    printf 'JSEOF\n'
+    printf 'fi\n\n'
     printf 'chmod 644 "$ASSETS/env.js"\n'
     printf 'echo "[nginx] env.js généré."\n'
   } > "${dir}/nginx-entrypoint.sh"
@@ -357,6 +377,10 @@ services:
     networks:
       - sso-net
       - dev-net
+    labels:
+      caddy: "\${DOMAIN}"
+      caddy.handle_path: "/${name}/*"
+      caddy.handle_path.reverse_proxy: "{{upstreams 8080}}"
 EOF
   ok "docker-compose.yml"
 }
@@ -387,6 +411,10 @@ services:
       - dev-net
     volumes:
       - .:/app   # hot-reload : les modifications du code sont prises en compte sans rebuild
+    labels:
+      caddy: "\${DOMAIN}"
+      caddy.handle_path: "/${name}/*"
+      caddy.handle_path.reverse_proxy: "{{upstreams 8000}}"
 EOF
   ok "docker-compose.yml"
 }
@@ -398,7 +426,11 @@ version: "3.9"
 
 # Angular SPA servie par nginx.
 # Les appels vers Keycloak et l'API sont effectués par le navigateur.
-# Aucun réseau Docker interne n'est nécessaire.
+
+networks:
+  sso-net:
+    external: true
+    name: sso-lab_sso-net
 
 services:
   ${name}:
@@ -408,6 +440,15 @@ services:
     env_file: .env
     ports:
       - "${port}:80"
+    networks:
+      - sso-net
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx-entrypoint.sh:/docker-entrypoint.d/40-env-config.sh:ro
+    labels:
+      caddy: "\${DOMAIN}"
+      caddy.handle_path: "/${name}/*"
+      caddy.handle_path.reverse_proxy: "{{upstreams 80}}"
 EOF
   ok "docker-compose.yml"
 }
@@ -437,6 +478,10 @@ services:
     networks:
       - sso-net
       - dev-net
+    labels:
+      caddy: "\${DOMAIN}"
+      caddy.handle_path: "/${name}-api/*"
+      caddy.handle_path.reverse_proxy: "{{upstreams 8080}}"
 
   frontend:
     build: ./frontend
@@ -445,6 +490,15 @@ services:
     env_file: .env
     ports:
       - "${fport}:80"
+    networks:
+      - sso-net
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend/nginx-entrypoint.sh:/docker-entrypoint.d/40-env-config.sh:ro
+    labels:
+      caddy: "\${DOMAIN}"
+      caddy.handle_path: "/${name}/*"
+      caddy.handle_path.reverse_proxy: "{{upstreams 80}}"
 EOF
   ok "docker-compose.yml (backend + frontend)"
 }
@@ -476,6 +530,10 @@ services:
       - dev-net
     volumes:
       - ./backend:/app
+    labels:
+      caddy: "\${DOMAIN}"
+      caddy.handle_path: "/${name}-api/*"
+      caddy.handle_path.reverse_proxy: "{{upstreams 8000}}"
 
   frontend:
     build: ./frontend
@@ -484,6 +542,15 @@ services:
     env_file: .env
     ports:
       - "${fport}:80"
+    networks:
+      - sso-net
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend/nginx-entrypoint.sh:/docker-entrypoint.d/40-env-config.sh:ro
+    labels:
+      caddy: "\${DOMAIN}"
+      caddy.handle_path: "/${name}/*"
+      caddy.handle_path.reverse_proxy: "{{upstreams 80}}"
 EOF
   ok "docker-compose.yml (backend + frontend)"
 }
@@ -748,8 +815,8 @@ case "$APP_TYPE" in
     mkdir -p "$APP_DIR/backend" "$APP_DIR/frontend"
     dockerfile_spring        "$APP_DIR/backend"
     dockerfile_angular       "$APP_DIR/frontend" "${APP_NAME}-frontend"
-    nginx_conf_angular       "$APP_DIR/frontend"
-    nginx_entrypoint_angular "$APP_DIR/frontend" "true"
+    nginx_conf_angular       "$APP_DIR/frontend" "$APP_NAME"
+    nginx_entrypoint_angular "$APP_DIR/frontend" "true" "$APP_NAME"
     dc_spring_angular        "$APP_DIR" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
     write_env_files          "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
     add_schema               "$DB_SCHEMA"
@@ -787,14 +854,14 @@ case "$APP_TYPE" in
     dockerfile_django        "$APP_DIR/backend"
     requirements_django      "$APP_DIR/backend"
     dockerfile_angular       "$APP_DIR/frontend" "${APP_NAME}-frontend"
-    nginx_conf_angular       "$APP_DIR/frontend"
-    nginx_entrypoint_angular "$APP_DIR/frontend" "true"
+    nginx_conf_angular       "$APP_DIR/frontend" "$APP_NAME"
+    nginx_entrypoint_angular "$APP_DIR/frontend" "true" "$APP_NAME"
     dc_django_angular        "$APP_DIR" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
     write_env_files          "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT" "django"
     add_schema               "$DB_SCHEMA"
     register_ports           "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
-    printf -- '--public --port %s\n' "$ANGULAR_PORT" > "${APP_DIR}/.keycloak-client-opts"
-    ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT})"
+    printf -- '--public --port %s --caddy-path %s\n' "$ANGULAR_PORT" "$APP_NAME" > "${APP_DIR}/.keycloak-client-opts"
+    ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT}, path /${APP_NAME})"
     if [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]]; then
       scaffold_django  "$APP_DIR/backend"  "$APP_NAME"            "$DB_SCHEMA"
       chown -R "$(id -u):$(id -g)" "$APP_DIR/backend" 2>/dev/null || true
@@ -806,14 +873,14 @@ case "$APP_TYPE" in
   # ── 5) Angular seul ──────────────────────────────────────────────────────────
   5)
     dockerfile_angular       "$APP_DIR" "$APP_NAME"
-    nginx_conf_angular       "$APP_DIR"
-    nginx_entrypoint_angular "$APP_DIR" "false"
+    nginx_conf_angular       "$APP_DIR" "$APP_NAME"
+    nginx_entrypoint_angular "$APP_DIR" "false" "$APP_NAME"
     dc_angular_only          "$APP_DIR" "$APP_NAME" "$ANGULAR_PORT"
     write_env_files          "$APP_DIR" "$DB_SCHEMA" "false" "$APP_NAME" "" "$ANGULAR_PORT"
     # Pas de schéma BDD : Angular est un frontend, il ne se connecte pas à PostgreSQL
     register_ports           "$APP_NAME" "" "$ANGULAR_PORT"
-    printf -- '--public --port %s\n' "$ANGULAR_PORT" > "${APP_DIR}/.keycloak-client-opts"
-    ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT})"
+    printf -- '--public --port %s --caddy-path %s\n' "$ANGULAR_PORT" "$APP_NAME" > "${APP_DIR}/.keycloak-client-opts"
+    ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT}, path /${APP_NAME})"
     [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]] && scaffold_angular "$APP_DIR" "$APP_NAME" "$ANGULAR_PORT" "" "angular-only" && {
       if [[ -n "${SUDO_UID-}" ]]; then
         chown -R "${SUDO_UID}:${SUDO_GID:-$(id -g)}" "$APP_DIR" 2>/dev/null || true
@@ -838,14 +905,18 @@ echo -e "  ${BOLD}Dossier  ${NC}: $APP_DIR"
 [[ -n "$ANGULAR_PORT" ]] && echo -e "  ${BOLD}Frontend ${NC}: http://localhost:${ANGULAR_PORT}"
 echo ""
 echo -e "  ${YELLOW}${BOLD}Étapes suivantes :${NC}"
-echo -e "  ${BOLD}1.${NC} Remplir ${CYAN}${APP_NAME}/.env${NC}"
-echo -e "     → KEYCLOAK_CLIENT_SECRET (copier depuis Keycloak)"
-echo -e "  ${BOLD}2.${NC} Créer le client '${APP_NAME}' dans Keycloak"
-echo -e "     → ${CYAN}http://localhost:8080${NC} — realm ssolab — Clients — Create client"
-if [[ -n "$BACKEND_PORT" ]]; then
-  echo -e "     Valid redirect URIs : ${CYAN}http://localhost:${BACKEND_PORT}/*${NC}"
-elif [[ -n "$ANGULAR_PORT" ]]; then
-  echo -e "     Valid redirect URIs : ${CYAN}http://localhost:${ANGULAR_PORT}/*${NC}"
+echo -e "  ${BOLD}1.${NC} Remplir ${CYAN}${APP_NAME}/.env${NC} (DOMAIN, KEYCLOAK_CLIENT_SECRET…)"
+if [[ "$APP_TYPE" =~ ^[45]$ ]]; then
+  echo -e "  ${BOLD}2.${NC} Créer le client Keycloak automatiquement :"
+  echo -e "     ${CYAN}bash create-app-client.sh ${APP_NAME} \$(cat ${APP_NAME}/.keycloak-client-opts)${NC}"
+else
+  echo -e "  ${BOLD}2.${NC} Créer le client '${APP_NAME}' dans Keycloak"
+  echo -e "     → ${CYAN}http://localhost:8080${NC} — realm ssolab — Clients — Create client"
+  if [[ -n "$BACKEND_PORT" ]]; then
+    echo -e "     Valid redirect URIs : ${CYAN}http://localhost:${BACKEND_PORT}/*${NC}"
+  elif [[ -n "$ANGULAR_PORT" ]]; then
+    echo -e "     Valid redirect URIs : ${CYAN}http://localhost:${ANGULAR_PORT}/*${NC}"
+  fi
 fi
 if [[ "$APP_TYPE" != "5" ]]; then
   echo -e "  ${BOLD}3.${NC} Si le container postgres tourne déjà (schéma absent du volume) :"
@@ -853,7 +924,7 @@ if [[ "$APP_TYPE" != "5" ]]; then
   echo -e "       -c \"CREATE SCHEMA IF NOT EXISTS ${DB_SCHEMA};\"${NC}"
 fi
 echo ""
-echo -e "  ${BOLD}Lancer :${NC} ${CYAN}cd dev/${APP_NAME} && docker compose up -d${NC}"
+echo -e "  ${BOLD}Lancer :${NC} ${CYAN}bash setup2.sh ${APP_NAME} --yes${NC}"
 echo ""
 
 # ──────────────────────────────────────────────────────────────────────────────

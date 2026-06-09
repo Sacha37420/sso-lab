@@ -3,13 +3,18 @@
 # reset_url.sh — Propage les adresses réseau depuis bbox.env vers tous les
 #                fichiers .env des projets du workspace.
 #
-# Source de vérité : bbox.env (SERVER_URL_LAN, SERVER_URL_WAN)
-# PORT_KEYCLOAK     : lu dans sso-lab/.env
+# Sources de vérité :
+#   bbox.env  → SERVER_URL_LAN, SERVER_URL_WAN
+#   .env      → DOMAIN, ACME_EMAIL  (racine du workspace)
+#
+# En mode HTTP  (DOMAIN=CHANGE_ME) : URLs basées sur l'IP WAN + ports directs.
+# En mode HTTPS (DOMAIN configuré) : URLs basées sur les sous-domaines Caddy.
 #
 # Usage :
 #   1. Éditer bbox.env → renseigner SERVER_URL_WAN (IP publique WAN)
-#   2. ./reset_url.sh
-#   3. Redémarrer les stacks (voir instructions en fin de script)
+#   2. Optionnel : éditer .env → renseigner DOMAIN et ACME_EMAIL
+#   3. ./reset_url.sh
+#   4. Redémarrer les stacks concernées (voir instructions en fin de script)
 #
 # Idempotent : peut être relancé sans risque.
 # Ne crée pas de nouvelles clés — met uniquement à jour les clés existantes.
@@ -40,6 +45,8 @@ upsert_env() {
 
 # ── Lecture des sources ────────────────────────────────────────────────────
 BBOX_ENV="$SCRIPT_DIR/bbox.env"
+ROOT_ENV="$SCRIPT_DIR/.env"
+
 [[ -f "$BBOX_ENV" ]] || { echo "❌  bbox.env introuvable dans $SCRIPT_DIR" >&2; exit 1; }
 
 SERVER_URL_LAN="$(_env_val "$BBOX_ENV" SERVER_URL_LAN)"
@@ -51,6 +58,14 @@ PORT_KEYCLOAK="$(_env_val  "$SCRIPT_DIR/sso-lab/.env" PORT_KEYCLOAK  "8080")"
 HPORT_POSTGRES="$(_env_val "$SCRIPT_DIR/infra/.env"   HPORT_POSTGRES "5432")"
 
 REALM="ssolab"
+
+# ── Lecture du domaine HTTPS ──────────────────────────────────────────────
+DOMAIN="CHANGE_ME"
+ACME_EMAIL="CHANGE_ME"
+if [[ -f "$ROOT_ENV" ]]; then
+  DOMAIN="$(_env_val "$ROOT_ENV" DOMAIN "CHANGE_ME")"
+  ACME_EMAIL="$(_env_val "$ROOT_ENV" ACME_EMAIL "CHANGE_ME")"
+fi
 
 # ── Validation de SERVER_URL_WAN ─────────────────────────────────────────
 if [[ -z "$SERVER_URL_WAN" ]]; then
@@ -152,15 +167,30 @@ fi
 echo ""
 
 # ── Variables dérivées ────────────────────────────────────────────────────
-KC_URL="${SERVER_URL_WAN}:${PORT_KEYCLOAK}"
-KC_ISSUER_URI="${KC_URL}/realms/${REALM}"
+KC_URL="${SERVER_URL_WAN}:${PORT_KEYCLOAK}"          # IP WAN directe (toujours)
+
+# En mode HTTPS, les URLs publiques Keycloak passent par Caddy (sous-domaine auth.)
+if [[ "$DOMAIN" != "CHANGE_ME" && -n "$DOMAIN" ]]; then
+  KC_PUBLIC_URL="https://${DOMAIN}/auth"
+  KC_ISSUER_URI="https://${DOMAIN}/auth/realms/${REALM}"
+  KC_HOSTNAME_URL="https://${DOMAIN}/auth"
+  URL_MODE="HTTPS — domaine : ${DOMAIN} (Caddy path /auth)"
+else
+  KC_PUBLIC_URL="${KC_URL}"
+  KC_ISSUER_URI="${KC_URL}/realms/${REALM}"
+  KC_HOSTNAME_URL="${KC_URL}"
+  URL_MODE="HTTP — IP directe (DOMAIN non configuré)"
+fi
 
 echo "=== reset_url ==="
-echo "  LAN              : ${SERVER_URL_LAN}"
-echo "  WAN              : ${SERVER_URL_WAN}"
-echo "  Keycloak (WAN)   : ${KC_URL}"
-echo "  PORT_KEYCLOAK    : ${PORT_KEYCLOAK}"
-echo "  HPORT_POSTGRES   : ${HPORT_POSTGRES}"
+echo "  MODE              : ${URL_MODE}"
+echo "  LAN               : ${SERVER_URL_LAN}"
+echo "  WAN               : ${SERVER_URL_WAN}"
+echo "  Keycloak direct   : ${KC_URL}"
+echo "  Keycloak public   : ${KC_PUBLIC_URL}"
+echo "  Keycloak issuer   : ${KC_ISSUER_URI}"
+echo "  PORT_KEYCLOAK     : ${PORT_KEYCLOAK}"
+echo "  HPORT_POSTGRES    : ${HPORT_POSTGRES}"
 echo ""
 
 # ── Parcours de tous les .env des sous-projets ────────────────────────────
@@ -174,19 +204,21 @@ while IFS= read -r envfile; do
 
   rel="${envfile#"$SCRIPT_DIR"/}"
   dir="$(dirname "$rel")"
-  changed=0
 
   # Snapshot avant modif pour détecter si quelque chose a changé
   before=$(md5sum "$envfile" 2>/dev/null | cut -d' ' -f1)
 
-  upsert_env "$envfile" SERVER_URL_LAN      "$SERVER_URL_LAN"
-  upsert_env "$envfile" SERVER_URL_WAN      "$SERVER_URL_WAN"
-  upsert_env "$envfile" KEYCLOAK_PUBLIC_URL "$KC_URL"
-  upsert_env "$envfile" KEYCLOAK_URL        "$KC_URL"
-  upsert_env "$envfile" KEYCLOAK_ISSUER_URI "$KC_ISSUER_URI"
-  upsert_env "$envfile" PORT_KEYCLOAK       "$PORT_KEYCLOAK"
-  upsert_env "$envfile" HPORT_POSTGRES      "$HPORT_POSTGRES"
-  upsert_env "$envfile" HPORT_DB            "$HPORT_POSTGRES"   # alias spring-app
+  upsert_env "$envfile" SERVER_URL_LAN       "$SERVER_URL_LAN"
+  upsert_env "$envfile" SERVER_URL_WAN       "$SERVER_URL_WAN"
+  upsert_env "$envfile" KEYCLOAK_PUBLIC_URL  "$KC_PUBLIC_URL"
+  upsert_env "$envfile" KEYCLOAK_URL         "$KC_URL"
+  upsert_env "$envfile" KEYCLOAK_ISSUER_URI  "$KC_ISSUER_URI"
+  upsert_env "$envfile" KEYCLOAK_HOSTNAME_URL "$KC_HOSTNAME_URL"
+  upsert_env "$envfile" PORT_KEYCLOAK        "$PORT_KEYCLOAK"
+  upsert_env "$envfile" HPORT_POSTGRES       "$HPORT_POSTGRES"
+  upsert_env "$envfile" HPORT_DB             "$HPORT_POSTGRES"   # alias spring-app
+  upsert_env "$envfile" DOMAIN               "$DOMAIN"
+  upsert_env "$envfile" ACME_EMAIL           "$ACME_EMAIL"
 
   after=$(md5sum "$envfile" 2>/dev/null | cut -d' ' -f1)
 
