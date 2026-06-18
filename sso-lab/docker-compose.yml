@@ -134,48 +134,84 @@ services:
       caddy.handle_path.reverse_proxy: "{{upstreams 8080}}"
 
   # ──────────────────────────────────────────
+  # oauth2-proxy — SSO Keycloak devant code-server
+  # Intercepte /code/*, vérifie la session Keycloak, puis forward à code-server.
+  # Le client Keycloak "code-server" doit être créé avant le premier démarrage :
+  #   bash sso-lab/setup-code-server-auth.sh
+  # ──────────────────────────────────────────
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    container_name: oauth2-proxy-code
+    restart: unless-stopped
+    environment:
+      # Provider OIDC — Keycloak
+      OAUTH2_PROXY_PROVIDER: keycloak-oidc
+      # L'issuer doit correspondre exactement au claim iss dans les tokens Keycloak
+      OAUTH2_PROXY_OIDC_ISSUER_URL: "${KEYCLOAK_HOSTNAME_URL}/realms/ssolab"
+      OAUTH2_PROXY_CLIENT_ID: code-server
+      OAUTH2_PROXY_CLIENT_SECRET: "${CODE_SERVER_CLIENT_SECRET}"
+      # Discovery manuelle : LOGIN_URL = URL externe (browser redirect),
+      # REDEEM_URL + JWKS_URL = réseau Docker interne (échanges serveur-serveur).
+      # Évite les problèmes DNS split-horizon quand le DOMAIN n'est pas résolvable
+      # depuis l'intérieur du réseau Docker.
+      OAUTH2_PROXY_SKIP_OIDC_DISCOVERY: "true"
+      OAUTH2_PROXY_LOGIN_URL: "${KEYCLOAK_HOSTNAME_URL}/realms/ssolab/protocol/openid-connect/auth"
+      OAUTH2_PROXY_REDEEM_URL: "http://keycloak:8080/realms/ssolab/protocol/openid-connect/token"
+      OAUTH2_PROXY_OIDC_JWKS_URL: "http://keycloak:8080/realms/ssolab/protocol/openid-connect/certs"
+      # Proxy vers code-server
+      OAUTH2_PROXY_UPSTREAM: "http://code-server:8091"
+      OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
+      OAUTH2_PROXY_REDIRECT_URL: "https://${DOMAIN}/code/oauth2/callback"
+      # Cookie de session signé (HTTPS uniquement)
+      OAUTH2_PROXY_COOKIE_SECRET: "${CODE_SERVER_COOKIE_SECRET}"
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_SAMESITE: "lax"
+      OAUTH2_PROXY_COOKIE_NAME: "_oauth2_proxy_code"
+      # Accès : tous les utilisateurs authentifiés dans le realm ssolab
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+    networks:
+      - sso-net
+    depends_on:
+      - keycloak
+      - code-server
+    labels:
+      caddy: "${DOMAIN}"
+      caddy.handle_path: "/code/*"
+      caddy.handle_path.reverse_proxy: "{{upstreams 4180}}"
+
+  # ──────────────────────────────────────────
   # Code Server — VS Code dans le navigateur
   # Workspace : /home/sacha/dev (même répertoire que SSH)
   # Claude Code CLI pré-installé dans l'image
-  # Accessible via Caddy : /code/*
+  # Non exposé directement : passe obligatoirement par oauth2-proxy
   # ──────────────────────────────────────────
   code-server:
     build: ./code-server
     container_name: code-server
     restart: unless-stopped
-    # Tourne en tant que l'utilisateur hôte (UID 1000 = sacha) pour que
-    # git, SSH et les permissions de fichiers correspondent au répertoire monté.
     user: "1000:1000"
     environment:
       - HOME=/home/coder
-      # Identité git héritée de l'hôte
       - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-Dev}
       - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-dev@localhost}
       - GIT_COMMITTER_NAME=${GIT_AUTHOR_NAME:-Dev}
       - GIT_COMMITTER_EMAIL=${GIT_AUTHOR_EMAIL:-dev@localhost}
     volumes:
-      # Workspace = même dossier qu'en SSH
       - /home/sacha/dev:/home/coder/dev:rw
-      # Auth Claude Code : même session OAuth que VS Code local (pas de clé API)
       - /home/sacha/.claude:/home/coder/.claude:rw
-      # Clés SSH pour git push
       - /home/sacha/.ssh:/home/coder/.ssh:ro
-      # Persistance des extensions VS Code et paramètres entre redémarrages
       - code-server-data:/home/coder/.local
     command:
       - code-server
       - --bind-addr=0.0.0.0:8091
-      # Mot de passe activé : seul l'accès via DOMAIN/code/ est possible,
-      # mais un mot de passe reste préférable si DOMAIN est public.
-      # Mettre PASSWORD dans sso-lab/.env pour changer.
-      - --auth=password
+      # auth=none : l'authentification est entièrement gérée par oauth2-proxy en amont.
+      # code-server n'est pas exposé directement (pas de labels Caddy).
+      - --auth=none
       - /home/coder/dev
     networks:
       - sso-net
-    labels:
-      caddy: "${DOMAIN}"
-      caddy.handle_path: "/code/*"
-      caddy.handle_path.reverse_proxy: "{{upstreams 8091}}"
 
   # ──────────────────────────────────────────
   # Spring Boot App (construite à l'étape 3)
