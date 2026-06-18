@@ -112,6 +112,11 @@ services:
       # HTTP  → http://IP_WAN:8080  |  HTTPS → https://auth.DOMAINE
       # Mis à jour par reset_url.sh via KEYCLOAK_HOSTNAME_URL dans .env
       KC_HOSTNAME_URL: "${KEYCLOAK_HOSTNAME_URL}"
+      # KC_HOSTNAME_ADMIN_URL : fixe l'URL de la console admin indépendamment du
+      # path stripping de Caddy (/auth/* → /). Sans ça, Keycloak calcule le
+      # redirect_uri depuis la requête brute (IP locale, sans préfixe /auth)
+      # → invalid_redirect_uri → la console reste bloquée sur "Loading the Admin UI".
+      KC_HOSTNAME_ADMIN_URL: "${KEYCLOAK_HOSTNAME_URL}"
     ports:
       - "${PORT_KEYCLOAK}:8080"
     networks:
@@ -121,10 +126,40 @@ services:
     command: ["start-dev"]
     volumes:
       - keycloak-data:/opt/keycloak/data
+      - ./keycloak-theme/ssolab:/opt/keycloak/themes/ssolab:ro
     labels:
       caddy: "${DOMAIN}"
       caddy.handle_path: "/auth/*"
       caddy.handle_path.reverse_proxy: "{{upstreams 8080}}"
+
+  # ──────────────────────────────────────────
+  # Code Server — VS Code dans le navigateur
+  # Workspace : /home/sacha/dev (même répertoire que SSH)
+  # Claude Code CLI pré-installé dans l'image
+  # Accessible via Caddy : /code/*
+  # ──────────────────────────────────────────
+  code-server:
+    build: ./code-server
+    container_name: code-server
+    restart: unless-stopped
+    user: root
+    environment:
+      - HOME=/root
+    volumes:
+      - /home/sacha/dev:/home/coder/dev:rw
+      - /home/sacha/.config:/home/coder/.config:rw
+      - /home/sacha/.ssh:/home/coder/.ssh:ro
+    command:
+      - code-server
+      - --bind-addr=0.0.0.0:8091
+      - --auth=none
+      - /home/coder/dev
+    networks:
+      - sso-net
+    labels:
+      caddy: "${DOMAIN}"
+      caddy.handle_path: "/code/*"
+      caddy.handle_path.reverse_proxy: "{{upstreams 8091}}"
 
   # ──────────────────────────────────────────
   # Spring Boot App (construite à l'étape 3)

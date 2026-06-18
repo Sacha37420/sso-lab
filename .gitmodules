@@ -10,3 +10,6 @@
 [submodule "analyse-lora"]
 	path = analyse-lora
 	url = https://github.com/Sacha37420/analyse-lora.git
+[submodule "app-builder"]
+	path = app-builder
+	url = https://github.com/Sacha37420/app-builder.git
