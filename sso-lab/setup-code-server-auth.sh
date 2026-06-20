@@ -46,15 +46,17 @@ fi
 # ── Client Keycloak ───────────────────────────────────────────────────────────
 info "Création/mise à jour du client Keycloak 'code-server'..."
 
-# Répertoire temporaire pour isoler le secret généré par create-app-client.sh
-TMP_APP=$(mktemp -d)
+# Répertoire temporaire avec un nom valide à l'intérieur de dev/
+# (create-app-client.sh valide ^[a-zA-Z0-9_-]+$ et cherche le .env dans dev/<nom>)
+TMP_NAME="_code-server-setup"
+TMP_APP="${ROOT_DIR}/${TMP_NAME}"
+mkdir -p "$TMP_APP"
 echo "KEYCLOAK_CLIENT_SECRET=" > "${TMP_APP}/.env"
 trap 'rm -rf "$TMP_APP"' EXIT
 
-bash "$CREATE_CLIENT" "$TMP_APP" \
+bash "$CREATE_CLIENT" "$TMP_NAME" \
   --client-id code-server \
-  --redirect-path /oauth2/callback \
-  --caddy-path code
+  --redirect-path /oauth2/callback
 
 # Récupérer le secret
 CLIENT_SECRET=$(grep "^KEYCLOAK_CLIENT_SECRET=" "${TMP_APP}/.env" | cut -d= -f2-)
