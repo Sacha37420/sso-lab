@@ -13,3 +13,6 @@
 [submodule "app-builder"]
 	path = app-builder
 	url = https://github.com/Sacha37420/app-builder.git
+[submodule "restauration"]
+	path = restauration
+	url = https://github.com/Sacha37420/restauration.git
