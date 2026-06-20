@@ -19,3 +19,6 @@ google-agenda/
 
 # Fichier LDAP — contient des mots de passe hashés, géré localement
 sso-lab/ldap/init.ldif
+
+# Dossier de debug local
+.debug/
