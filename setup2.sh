@@ -54,7 +54,12 @@ echo -e "\033[0;32m✓ sso-lab démarré.\033[0m"
 echo -e "\033[0;36m══ 5/7  Attente de Keycloak\033[0m"
 KC_PORT=$(grep -E '^PORT_KEYCLOAK=' "$SCRIPT_DIR/sso-lab/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
 KC_PORT="${KC_PORT:-8080}"
-KC_HEALTH="http://localhost:${KC_PORT}/realms/master"
+# Depuis un container Docker (ex: code-server), utiliser le hostname keycloak
+if [ -f /.dockerenv ]; then
+  KC_HEALTH="http://keycloak:${KC_PORT}/realms/master"
+else
+  KC_HEALTH="http://localhost:${KC_PORT}/realms/master"
+fi
 TIMEOUT=300
 ELAPSED=0
 echo "   Sonde : $KC_HEALTH"

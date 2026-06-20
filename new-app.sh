@@ -143,9 +143,10 @@ add_schema() {
 # $3 = "true" si l'app se connecte à la BDD, "false" sinon
 # $5 = port backend (optionnel), $6 = port frontend (optionnel)
 # $7 = framework : "django" | "spring" (défaut spring)
+# $8 = script_name : préfixe de chemin Caddy (ex: /mon-app-api) pour SCRIPT_NAME Django
 write_env_files() {
   local dir="$1" schema="$2" has_db="$3" client_id="$4"
-  local bport="${5:-}" fport="${6:-}" framework="${7:-spring}"
+  local bport="${5:-}" fport="${6:-}" framework="${7:-spring}" script_name="${8:-}"
   {
     echo "# ── Adresses ─────────────────────────────────────────────────────"
     [[ -n "$bport" ]] && echo "PORT_BACKEND=${bport}"
@@ -170,6 +171,9 @@ write_env_files() {
       echo "SECRET_KEY=${_secret}"
       echo "DEBUG=False"
       echo "ALLOWED_HOSTS=*"
+      echo ""
+      echo "# ── Reverse proxy (Caddy) ────────────────────────────────────────"
+      echo "SCRIPT_NAME=${script_name}"
       echo ""
     fi
     echo "# ── SSO Keycloak ─────────────────────────────────────────────────"
@@ -247,7 +251,7 @@ dockerfile_angular() {
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --silent
+RUN npm install --silent
 COPY . .
 RUN npm run build
 
@@ -842,7 +846,7 @@ case "$APP_TYPE" in
     dockerfile_django   "$APP_DIR"
     requirements_django "$APP_DIR"
     dc_django_only      "$APP_DIR" "$APP_NAME" "$BACKEND_PORT"
-    write_env_files     "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "" "django"
+    write_env_files     "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "" "django" "/${APP_NAME}"
     add_schema          "$DB_SCHEMA"
     register_ports      "$APP_NAME" "$BACKEND_PORT" ""
     [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]] && scaffold_django "$APP_DIR" "$APP_NAME" "$DB_SCHEMA" "django-only"
@@ -857,7 +861,7 @@ case "$APP_TYPE" in
     nginx_conf_angular       "$APP_DIR/frontend" "$APP_NAME"
     nginx_entrypoint_angular "$APP_DIR/frontend" "true" "$APP_NAME"
     dc_django_angular        "$APP_DIR" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
-    write_env_files          "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT" "django"
+    write_env_files          "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT" "django" "/${APP_NAME}-api"
     add_schema               "$DB_SCHEMA"
     register_ports           "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
     printf -- '--public --port %s --caddy-path %s\n' "$ANGULAR_PORT" "$APP_NAME" > "${APP_DIR}/.keycloak-client-opts"

@@ -1,4 +1,4 @@
-import { ApplicationConfig, APP_INITIALIZER, provideZonelessChangeDetection } from '@angular/core';
+import { ApplicationConfig, APP_INITIALIZER } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { routes } from './app.routes';
@@ -11,7 +11,6 @@ function initKeycloak(kc: KeycloakService): () => Promise<boolean> {
 
 export const appConfig: ApplicationConfig = {
   providers: [
-    provideZonelessChangeDetection(),
     provideRouter(routes),
     provideHttpClient(withInterceptors([authInterceptor])),
     {

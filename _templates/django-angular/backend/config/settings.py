@@ -9,6 +9,11 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-__APP_SLUG__-change-i
 DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*').split(',')
 
+# ── Reverse proxy (Caddy) ──────────────────────────────────────────────────────
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+FORCE_SCRIPT_NAME = config('SCRIPT_NAME', default='')
+
 import os
 # ── Applications ──────────────────────────────────────────────────────────────
 # ── Répertoires de templates ──────────────────────────────────────────────────
@@ -117,7 +122,7 @@ SPECTACULAR_SETTINGS = {
         'scope': 'openid profile email',
         'authorizationUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/auth',
         'tokenUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/token',
-        'oauth2RedirectUrl': '/api/docs/oauth2-redirect.html',
+        'oauth2RedirectUrl': f'{FORCE_SCRIPT_NAME}/api/docs/oauth2-redirect.html',
     },
     'POSTPROCESSING_HOOKS': [
         'config.spectacular_hooks.add_bearer_security',

@@ -207,18 +207,27 @@ done
 [[ -f "$SSO_ENV_FILE" ]] \
   || die "$SSO_ENV_FILE introuvable.\nCopiez sso-lab/.env.example → sso-lab/.env et remplissez les valeurs."
 
-KEYCLOAK_URL=$(_env_val "$SSO_ENV_FILE" "KEYCLOAK_HOSTNAME_URL" "http://192.168.1.50:8080")
 ADMIN_USER=$(_env_val   "$SSO_ENV_FILE" "KEYCLOAK_ADMIN"         "admin")
 ADMIN_PASS=$(_env_val   "$SSO_ENV_FILE" "KEYCLOAK_ADMIN_PASSWORD" "")
 REALM="ssolab"
 
 [[ -n "$ADMIN_PASS" ]] || die "KEYCLOAK_ADMIN_PASSWORD vide dans $SSO_ENV_FILE"
 
-# Port Keycloak (extrait de l'URL : http://host:8080 → 8080)
-KC_PORT=$(echo "$KEYCLOAK_URL" \
-          | sed 's|.*://[^/:]*:\([0-9]\{1,5\}\).*|\1|' \
-          | grep -E '^[0-9]+$' || echo "8080")
+# Port Keycloak — source de vérité : PORT_KEYCLOAK dans sso-lab/.env
+KC_PORT=$(_env_val "$SSO_ENV_FILE" "PORT_KEYCLOAK" "8080")
 KC_PORT="${KC_PORT:-8080}"
+
+# URL admin (appels curl) : localhost depuis le host, keycloak depuis un container Docker
+# (hairpin NAT non supporté sur Bbox ; KEYCLOAK_HOSTNAME_URL passe par le WAN)
+if [ -f /.dockerenv ]; then
+  KEYCLOAK_URL="http://keycloak:${KC_PORT}"
+else
+  KEYCLOAK_URL="http://localhost:${KC_PORT}"
+fi
+
+# URL publique (écrite dans le .env de l'app) : ce que Django/Angular utilisent
+# pour valider les JWT — doit correspondre à l'iss des tokens émis par Keycloak
+KEYCLOAK_PUBLIC_URL=$(_env_val "$SSO_ENV_FILE" "KEYCLOAK_HOSTNAME_URL" "http://localhost:${KC_PORT}")
 
 # ── IP LAN ────────────────────────────────────────────────────────────────────
 LAN_IP=""
@@ -283,7 +292,8 @@ echo "  Port          : ${APP_PORT:-— (redirect URIs non calculées, utiliser 
 echo "  Redirect path : $REDIRECT_PATH"
 echo "  LAN IP        : ${LAN_IP:-—}"
 echo "  WAN IP        : ${WAN_IP:-—}"
-echo "  Keycloak      : $KEYCLOAK_URL  (realm: $REALM)"
+echo "  Keycloak admin : $KEYCLOAK_URL  (appels API — localhost)"
+echo "  Keycloak public: $KEYCLOAK_PUBLIC_URL  (écrit dans .env — realm: $REALM)"
 echo "  .env cible    : $APP_ENV"
 echo ""
 
@@ -722,10 +732,10 @@ fi
 info "5/5 — Mise à jour de $APP_ENV..."
 
 mkdir -p "$APP_DIR"
-upsert_env "$APP_ENV" "KEYCLOAK_URL"        "$KEYCLOAK_URL"
+upsert_env "$APP_ENV" "KEYCLOAK_URL"         "$KEYCLOAK_PUBLIC_URL"
 upsert_env "$APP_ENV" "KEYCLOAK_REALM"      "$REALM"
 upsert_env "$APP_ENV" "KEYCLOAK_CLIENT_ID"  "$CLIENT_ID"
-upsert_env "$APP_ENV" "KEYCLOAK_ISSUER_URI" "$KEYCLOAK_URL/realms/$REALM"
+upsert_env "$APP_ENV" "KEYCLOAK_ISSUER_URI" "$KEYCLOAK_PUBLIC_URL/realms/$REALM"
 upsert_env "$APP_ENV" "PORT_KEYCLOAK"       "$KC_PORT"
 success "$APP_ENV mis à jour."
 
