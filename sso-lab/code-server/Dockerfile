@@ -2,7 +2,9 @@ FROM ghcr.io/coder/code-server:latest
 USER root
 
 # Aligner l'UID/GID de l'utilisateur "coder" sur celui de l'hôte (sacha = 1000)
-RUN usermod -u 1000 coder && groupmod -g 1000 coder
+# Créer le groupe docker avec le GID hôte (989) et y ajouter coder
+RUN usermod -u 1000 coder && groupmod -g 1000 coder && \
+    groupadd -g 989 docker && usermod -aG docker coder
 
 # Installer Node.js 20 LTS (npm n'est pas dans le PATH de l'image de base)
 # puis Claude Code CLI + outils de développement
