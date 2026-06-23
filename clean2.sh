@@ -19,7 +19,8 @@ if [[ -n "$APP_NAME" ]]; then
     echo "■ Pas de docker-compose.yml pour $APP_NAME"
   fi
 else
-  # Global : comme clean.sh
+  # Global : infra est protégée — ses volumes contiennent la base PostgreSQL
+  # partagée par toutes les apps. On l'arrête sans --volumes.
   COMPOSE_DIRS=()
   while IFS= read -r compose; do
     dir="$(dirname "$compose")"
@@ -29,8 +30,13 @@ else
     compose="$dir/docker-compose.yml"
     [[ -f "$compose" ]] || continue
     name="$(basename "$dir")"
-    echo "■ $name — down --volumes ..."
-    docker compose -f "$compose" down --volumes --remove-orphans 2>&1 | sed 's/^/  /' || true
+    if [[ "$name" == "infra" ]]; then
+      echo "■ $name — down (volumes préservés — base PostgreSQL partagée) ..."
+      docker compose -f "$compose" down --remove-orphans 2>&1 | sed 's/^/  /' || true
+    else
+      echo "■ $name — down --volumes ..."
+      docker compose -f "$compose" down --volumes --remove-orphans 2>&1 | sed 's/^/  /' || true
+    fi
   done
 fi
 echo ""
