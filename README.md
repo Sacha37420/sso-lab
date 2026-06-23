@@ -1,6 +1,8 @@
-# SSO Lab — Plateforme d'authentification SSO
+# dev/ — Lab SSO multi-applications
 
-Lab d'apprentissage SSO/LDAP autour de **Keycloak**, **OpenLDAP**, **PostgreSQL** et **pgAdmin**, avec deux applications clientes (Spring Boot + Angular) authentifiées via OIDC.
+Plateforme d'apprentissage et de développement autour de **Keycloak**, **OpenLDAP**, **PostgreSQL** et **Caddy**, hébergeant plusieurs applications Django + Angular authentifiées via OIDC.
+
+Les applications sont des **sous-modules git** autonomes. Les scripts du dépôt parent gèrent le cycle de vie complet (scaffold, déploiement, Keycloak, ports réseau).
 
 ---
 
@@ -8,150 +10,242 @@ Lab d'apprentissage SSO/LDAP autour de **Keycloak**, **OpenLDAP**, **PostgreSQL*
 
 ```
 dev/
-├── sso-lab/            ← Keycloak 22 + OpenLDAP + phpLDAPadmin
-├── infra/              ← PostgreSQL 16 + pgAdmin 8 (OAuth2 Keycloak)
-├── front-cadriciel/    ← Angular 17 SPA  [submodule git]
-├── spring-app/         ← Spring Boot 3   [submodule git]
-├── bbox.env            ← source de vérité réseau (LAN/WAN, Bbox)
-├── setup.sh            ← initialisation complète depuis zéro
-├── clean.sh            ← remise à zéro (volumes compris)
-├── reset_url.sh        ← propage les IPs vers tous les .env
-├── init-secrets.sh     ← génère des mots de passe forts
-├── recompose_docker.sh ← gère le cycle de vie des stacks Docker
+├── sso-lab/            ← Keycloak 22 + OpenLDAP + phpLDAPadmin + Caddy + code-server
+├── infra/              ← PostgreSQL 16 + pgAdmin 8
+├── _templates/         ← templates Django+Angular (copiés par new-app.sh)
+├── analyse-lora/       ← Django + Angular  [submodule]
+├── app-builder/        ← Django + Angular  [submodule] — éditeur de specs d'apps
+├── front-cadriciel/    ← Angular seul      [submodule] — tableau de bord du lab
+├── restauration/       ← Django + Angular  [submodule]
+├── spring-app/         ← Spring Boot       [submodule]
+├── table-manager/      ← [submodule]
+├── new-app.sh          ← scaffold interactif d'une nouvelle app
+├── setup2.sh           ← déploiement complet d'une app (ou de tout le lab)
 ├── create-app-client.sh← crée/met à jour les clients Keycloak
-├── new-app.sh          ← scaffolde une nouvelle application
-├── get-ports-list.sh   ← génère ports.env depuis tous les .env
-└── open-bbox-ports.sh  ← ouvre les ports NAT sur la Bbox Bouygues
+├── recompose_docker.sh ← cycle de vie des stacks Docker
+├── clean2.sh           ← arrête et supprime les containers d'une app
+├── reset_url.sh        ← propage LAN/WAN/Keycloak dans tous les .env
+├── get-ports-list.sh   ← régénère ports.env depuis .ports
+├── open-bbox-ports2.sh ← ouvre les ports NAT sur la Bbox Bouygues
+├── init-secrets.sh     ← génère des mots de passe forts
+├── .ports              ← registre des ports (géré par new-app.sh)
+└── bbox.env            ← source de vérité réseau (LAN/WAN)
 ```
 
 ---
 
 ## Services et ports
 
-| Service        | Stack      | Port | Accès                              |
-|----------------|------------|------|------------------------------------|
-| Keycloak       | sso-lab    | 8080 | `http://LAN_IP:8080`               |
-| phpLDAPadmin   | sso-lab    | 8081 | `http://LAN_IP:8081`               |
-| pgAdmin        | infra      | 5050 | `http://LAN_IP:5050`               |
-| PostgreSQL     | infra      | —    | interne uniquement (`dev-net`)     |
-| Spring Boot    | spring-app | 8082 | `http://LAN_IP:8082`               |
-| Angular        | front-cadriciel | 4200 | `http://LAN_IP:4200`          |
+### Infrastructure
+
+| Service | Port LAN | URL HTTPS |
+|---|---|---|
+| Keycloak | 8080 | `https://DOMAIN/auth/` |
+| phpLDAPadmin | 8081 | direct LAN uniquement |
+| pgAdmin | 5050 | direct LAN uniquement |
+| PostgreSQL | 5432 | interne Docker uniquement |
+| code-server | — | `https://DOMAIN/code/` |
+
+### Applications
+
+| Application | Port backend | URL API (HTTPS) | Port frontend | URL frontend (HTTPS) |
+|---|---|---|---|---|
+| front-cadriciel | — | — | 4200 | `https://DOMAIN/cadriciel/` |
+| app-builder | 8087 | `https://DOMAIN/app-builder-api/` | 4205 | `https://DOMAIN/app-builder/` |
+| analyse-lora | 8086 | `https://DOMAIN/lora-api/` | 4204 | `https://DOMAIN/lora/` |
+| restauration | 8088 | `https://DOMAIN/restauration-api/` | 4206 | `https://DOMAIN/restauration/` |
+| spring-app | 8082 | direct LAN uniquement | — | — |
 
 ---
 
-## Réseaux Docker
+## Accès
 
-| Réseau            | Utilisé par                                      |
-|-------------------|--------------------------------------------------|
-| `sso-lab_sso-net` | Keycloak, OpenLDAP, phpLDAPadmin, infra, apps    |
-| `dev-net`         | PostgreSQL, pgAdmin, Spring Boot, Angular        |
+**Caddy** (dans `sso-lab`) sert de reverse proxy HTTPS avec certificats Let's Encrypt automatiques.
+
+| Chemin | Service |
+|---|---|
+| `https://DOMAIN/auth/` | Keycloak (realm ssolab) |
+| `https://DOMAIN/code/` | code-server (VS Code navigateur) — restreint aux groupes `developers` et `admins` |
+| `https://DOMAIN/cadriciel/` | front-cadriciel (tableau de bord lab) |
+
+`code-server` est protégé par **oauth2-proxy** : seuls les utilisateurs authentifiés Keycloak appartenant aux groupes `developers` ou `admins` y ont accès. Docker de l'hôte est accessible depuis son terminal.
 
 ---
 
 ## Utilisateurs LDAP
 
-| Utilisateur | Groupes                          | Accès pgAdmin |
-|-------------|----------------------------------|---------------|
-| sacha       | developers, admins, famille, amis | ✓            |
-| hassan      | developers, amis                 | ✓             |
-| lea         | famille, amis                    | ✗             |
-| elodie      | famille                          | ✗             |
+| Utilisateur | Groupes | code-server |
+|---|---|---|
+| sacha | developers, admins, famille, amis | ✓ |
+| hassan | developers, amis | ✓ |
+| lea | famille, amis | ✗ |
+| elodie | famille | ✗ |
 
-> pgAdmin est restreint au groupe **developers** via `OAUTH2_ADDITIONAL_CLAIMS`.
+> pgAdmin est restreint au groupe **developers** via OAuth2.
 
 ---
 
-## Premier démarrage
+## Réseaux Docker
 
-### Prérequis
+| Réseau | Utilisé par |
+|---|---|
+| `sso-lab_sso-net` | Keycloak, LDAP, Caddy, oauth2-proxy, code-server, toutes les apps |
+| `dev-net` | PostgreSQL, pgAdmin, backends Django/Spring |
 
-- Docker + Docker Compose
-- `curl`, `jq`
-- Cloner avec les submodules :
+---
 
-```bash
-git clone --recurse-submodules https://github.com/Sacha37420/sso-lab.git dev
-cd dev
-```
+## Créer une nouvelle application — méthode standard
 
-### Configuration initiale
-
-Éditer **`bbox.env`** (source de vérité pour toutes les IPs) :
-
-```env
-SERVER_URL_LAN=http://192.168.1.X   # IP LAN de la machine hôte
-SERVER_URL_WAN=http://X.X.X.X       # IP publique WAN
-BBOX_ADMIN_PASSWORD=...             # mot de passe admin de la Bbox (si Bbox Bouygues)
-```
-
-### Lancement
+### Étape 1 — Scaffold
 
 ```bash
-bash setup.sh        # interactif (demande confirmation)
-bash setup.sh --yes  # silencieux (CI)
+bash new-app.sh
 ```
 
-Ce script enchaîne 9 étapes :
+Le script demande interactivement : nom, type (Spring / Django / Angular), ports. Il crée le dossier complet avec backend, frontend, docker-compose, Dockerfiles, nginx, `.env`…
 
-| # | Étape                  | Script                   |
-|---|------------------------|--------------------------|
-| 1 | Nettoyage complet      | `clean.sh`               |
-| 2 | Propagation des IPs    | `reset_url.sh`           |
-| 3 | Génération des secrets | `init-secrets.sh`        |
-| 4 | Démarrage sso-lab      | `recompose_docker.sh`    |
-| 5 | Attente Keycloak       | *(sonde + sleep 20s)*    |
-| 6 | Config Keycloak        | `create-app-client.sh`   |
-| 7 | Démarrage de tout      | `recompose_docker.sh`    |
-| 8 | Génération ports.env   | `get-ports-list.sh`      |
-| 9 | Ouverture ports Bbox   | `open-bbox-ports.sh`     |
+Pour une saisie non-interactive :
+```bash
+printf 'mon-app\n4\n8089\n4207\nO\n' | bash new-app.sh
+# Types : 1=Spring  2=Spring+Angular  3=Django  4=Django+Angular  5=Angular
+```
+
+### Étape 2 — Dépôt GitHub + sous-module
+
+```bash
+cd mon-app
+git init && git checkout -b main
+git add . && git commit -m "feat: initial scaffold"
+gh repo create Sacha37420/mon-app --public
+git remote add origin https://github.com/Sacha37420/mon-app.git
+git push -u origin main
+cd ..
+sed -i '/^mon-app\/$/d' .gitignore
+git submodule add https://github.com/Sacha37420/mon-app.git mon-app
+```
+
+### Étape 3 — Remplir `.env`
+
+```bash
+nano mon-app/.env
+# Champs minimaux : SECRET_KEY, DEBUG=True, DOMAIN=CHANGE_ME
+```
+
+### Étape 4 — Déploiement complet
+
+```bash
+bash setup2.sh mon-app --yes
+```
+
+`setup2.sh` enchaîne dans l'ordre :
+1. `clean2.sh <app>` — arrête et supprime les containers
+2. `reset_url.sh` — propage LAN/WAN/Keycloak dans tous les `.env`
+3. Démarrage de **sso-lab** (si nécessaire)
+4. Attente Keycloak (jusqu'à 300 s)
+5. `create-app-client.sh <app>` — crée le client Keycloak (secret, redirect URIs, claim `groups`)
+6. `recompose_docker.sh --app <app> --force` — build et démarre les containers
+7. `get-ports-list.sh` — régénère `ports.env`
+8. `open-bbox-ports2.sh` — ouvre les ports sur le routeur Bbox
+
+> **Les groupes métier Keycloak** (ex: `manager`, `cuisinier`) ne sont pas créés par `setup2.sh` — c'est une étape manuelle après déploiement si l'app en a besoin.
+
+> **Le schéma PostgreSQL** est ajouté automatiquement dans `infra/init/00_schemas.sql` par `new-app.sh`. Si la base existait déjà, créer le schéma manuellement :
+> ```bash
+> docker exec dev-postgres psql -U devuser -d devdb \
+>   -c "CREATE SCHEMA IF NOT EXISTS mon_app; GRANT ALL ON SCHEMA mon_app TO devuser;"
+> docker exec mon-app-backend python3 manage.py migrate
+> ```
+
+---
+
+## Créer une application — méthode IA avancée (app-builder + cadriciel)
+
+Pour des applications plus complexes, le lab intègre un workflow de conception assistée par IA :
+
+### Vue d'ensemble
+
+```
+app-builder  →  front-cadriciel  →  code-server (Claude Code)  →  new-app.sh
+(specs)          (prompts)           (construction)                 (scaffold)
+```
+
+### Étape 1 — Concevoir les specs dans app-builder
+
+**app-builder** (`https://LAN_IP:4205`) est un éditeur visuel de spécifications d'application. Pour chaque app (`AppSpec`), on y définit :
+
+- **Modèles de données** (`DataModel`) — entités métier, champs, types, relations (FK, M2M)
+- **Groupes d'endpoints** (`EndpointGroup` / `Endpoint`) — API REST : méthode, path, opération CRUD, rôles requis, schémas requête/réponse
+- **Services frontend** (`FrontendService`) — services Angular qui consomment les endpoints
+- **Pages** (`Page`) — routes, layout (liste / détail / formulaire / dashboard), composants
+- **Interactions** — clics, formulaires, navigation, affichage
+- **Pipelines de données** — enchaînements d'appels service → transformation → mise à jour d'état
+
+### Étape 2 — Générer les prompts dans front-cadriciel
+
+**front-cadriciel** (`https://DOMAIN/cadriciel/`) est le tableau de bord central du lab. Sa page **"Prompts de déploiement"** lit les specs de app-builder et génère des **prompts Claude Code** prêts à l'emploi, couvrant :
+
+- Le scaffold initial via `new-app.sh`
+- L'implémentation Django (models, serializers, views, permissions)
+- L'implémentation Angular (services, composants, routing, guards)
+- La configuration Keycloak (groupes, rôles)
+
+### Étape 3 — Construire l'app depuis code-server
+
+Ouvrir **code-server** (`https://DOMAIN/code/`), coller le prompt généré dans Claude Code et laisser l'IA construire l'application. Les scripts `new-app.sh` et `setup2.sh` sont directement exécutables depuis le terminal intégré (Docker de l'hôte monté).
 
 ---
 
 ## Opérations courantes
 
-### Redémarrer une stack
+### Rebuilder une app
 
 ```bash
-bash recompose_docker.sh --app sso-lab --force
-bash recompose_docker.sh --app infra --force
-bash recompose_docker.sh --force          # toutes les stacks
+bash setup2.sh mon-app --yes
 ```
 
-### Regénérer les clients Keycloak
+### Rebuilder uniquement les containers (sans recréer le client Keycloak)
 
 ```bash
-bash create-app-client.sh                 # toutes les apps
-bash create-app-client.sh spring-app      # une seule app
-bash create-app-client.sh infra --client-id pgadmin --port 5050
-bash create-app-client.sh front-cadriciel --public --port 4200
+bash recompose_docker.sh --app mon-app --force
 ```
 
-Options disponibles : `--client-id`, `--public`, `--port`, `--redirect-path`, `--no-rotate`, `--no-wan`
+### Recréer le client Keycloak seul
+
+```bash
+bash create-app-client.sh mon-app $(cat mon-app/.keycloak-client-opts)
+```
 
 ### Changer l'IP du serveur
 
 ```bash
 # 1. Éditer bbox.env → SERVER_URL_LAN / SERVER_URL_WAN
-vim bbox.env
-# 2. Propager vers tous les .env
-bash reset_url.sh
-# 3. Redémarrer les stacks
-bash recompose_docker.sh --force
+nano bbox.env
+# 2. Propager vers tous les .env et redémarrer
+bash reset_url.sh && bash recompose_docker.sh --force
 ```
 
-### Ajouter une nouvelle application
+### Arrêter une app
 
 ```bash
-bash new-app.sh
-# → assistant interactif : Spring Boot / Django / Angular (seul ou combiné)
-# → crée le dossier, docker-compose.yml, .env.example, .keycloak-client-opts
+bash clean2.sh mon-app
 ```
 
-### Remettre à zéro
+---
 
-```bash
-bash clean.sh    # arrête tout, supprime volumes + images locales + caches
-```
+## Scripts utiles
+
+| Script | Rôle |
+|---|---|
+| `new-app.sh` | Scaffold interactif d'une nouvelle app |
+| `setup2.sh <app> --yes` | Déploiement complet (clean → Keycloak → Docker → ports) |
+| `create-app-client.sh <app>` | Créer/mettre à jour le client Keycloak seul |
+| `recompose_docker.sh --app <app>` | Rebuilder et redémarrer les containers |
+| `clean2.sh <app>` | Arrêter et supprimer les containers d'une app |
+| `reset_url.sh` | Propager LAN/WAN/Keycloak dans tous les `.env` |
+| `get-ports-list.sh` | Régénérer `ports.env` depuis `.ports` |
+| `open-bbox-ports2.sh` | Ouvrir les ports sur le routeur Bbox |
+| `init-secrets.sh` | Générer des mots de passe forts |
+| `sso-lab/setup-code-server-auth.sh` | Créer le client Keycloak pour code-server |
 
 ---
 
@@ -160,33 +254,31 @@ bash clean.sh    # arrête tout, supprime volumes + images locales + caches
 Tous les `.env` sont ignorés par git. Chaque dossier contient un `.env.example` à copier :
 
 ```bash
-cp sso-lab/.env.example    sso-lab/.env
-cp infra/.env.example      infra/.env
-cp front-cadriciel/.env.example front-cadriciel/.env
-cp spring-app/.env.example spring-app/.env
-cp bbox.env.example        bbox.env
+cp sso-lab/.env.example   sso-lab/.env
+cp infra/.env.example     infra/.env
+cp mon-app/.env.example   mon-app/.env
+cp bbox.env.example       bbox.env
 ```
 
-Les mots de passe (`CHANGE_ME`) sont ensuite générés automatiquement par `init-secrets.sh`.
+`infra/init/00_schemas.sql` est la source de vérité pour les schémas PostgreSQL — `new-app.sh` y ajoute automatiquement la ligne `CREATE SCHEMA` de chaque nouvelle app.
 
 ---
 
 ## Dépôts Git
 
-| Repo                                                      | Contenu                  |
-|-----------------------------------------------------------|--------------------------|
-| [sso-lab](https://github.com/Sacha37420/sso-lab)         | Infra + scripts (ce repo)|
-| [front-cadriciel](https://github.com/Sacha37420/front-cadriciel) | Angular SPA       |
-| [spring-app](https://github.com/Sacha37420/spring-app)   | Spring Boot app          |
+| Dépôt | Contenu | Type |
+|---|---|---|
+| [sso-lab](https://github.com/Sacha37420/sso-lab) | Infra + scripts (dépôt parent) | — |
+| [app-builder](https://github.com/Sacha37420/app-builder) | Éditeur de specs d'apps | Django + Angular |
+| [front-cadriciel](https://github.com/Sacha37420/front-cadriciel) | Tableau de bord lab | Angular |
+| [analyse-lora](https://github.com/Sacha37420/analyse-lora) | Analyse LoRa | Django + Angular |
+| [spring-app](https://github.com/Sacha37420/spring-app) | Exemple Spring Boot | Spring Boot |
+| [table-manager](https://github.com/Sacha37420/table-manager) | Gestionnaire de tables | — |
 
-`front-cadriciel` et `spring-app` sont des **git submodules** du repo principal.
-
-Mettre à jour les submodules :
-
+Mettre à jour les pointeurs de sous-modules :
 ```bash
 git submodule update --remote --merge
 ```
-
 
 ---
 
@@ -195,296 +287,52 @@ git submodule update --remote --merge
 ```
 dev/
 ├── README.md
-├── .gitignore              ← ignore tous les .env (secrets)
+├── .gitignore              ← ignore tous les .env et .debug/
+├── .ports                  ← registre des ports (géré par new-app.sh)
+├── bbox.env                ← source de vérité réseau (non commité)
+├── bbox.env.example
 ├── infra/                  ← PostgreSQL + pgAdmin  [restart: always]
 │   ├── docker-compose.yml
-│   ├── .env                ← credentials postgres + pgAdmin (non commité)
-│   ├── init/
-│   │   ├── 00_schemas.sql      ← CREATE SCHEMA par app  ← MODIFIER ICI
-│   │   └── 01_pg_hba_trust.sh  ← trust auth pour dev (pas de mot de passe DB)
-│   └── pgadmin/
-│       ├── config_local.py     ← config pgAdmin (OAuth2 Keycloak)
-│       └── docker-entrypoint.sh
-├── sso-lab/                ← Keycloak + OpenLDAP   [restart: always]
+│   ├── .env                ← credentials (non commité)
+│   └── init/
+│       ├── 00_schemas.sql      ← CREATE SCHEMA par app  ← MODIFIER ICI
+│       └── 01_pg_hba_trust.sh
+├── sso-lab/                ← Keycloak + OpenLDAP + Caddy + code-server
 │   ├── docker-compose.yml
-│   ├── .env                ← credentials LDAP + Keycloak (non commité)
-│   └── ldap/
-│       └── init.ldif           ← utilisateurs et groupes LDAP
-├── spring-app/             ← exemple d'app connectée aux deux infras
-└── mon-app/                ← nouvelle app (même modèle)
-    ├── .env                ← secrets réels       (non commité)
-    ├── .env.example        ← template            (commité)
-    └── docker-compose.yml
+│   ├── .env                ← credentials (non commité)
+│   ├── code-server/        ← Dockerfile code-server
+│   ├── ldap/
+│   │   └── init.ldif           ← utilisateurs et groupes LDAP
+│   └── caddy/
+│       └── Caddyfile
+├── _templates/             ← templates copiés par new-app.sh
+│   └── django-angular/
+│       ├── backend/            ← Django + auth Keycloak JWT + drf-spectacular
+│       └── frontend/           ← Angular + Keycloak + auth guard + interceptor
+└── <app>/                  ← nouvelle app (même modèle)
+    ├── .env                ← secrets (non commité)
+    ├── .env.example        ← template (commité)
+    ├── docker-compose.yml
+    ├── backend/
+    └── frontend/
 ```
 
 ---
 
 ## Démarrage des infrastructures
 
-`infra/` et `sso-lab/` utilisent `restart: always` : une fois démarrés, ils redémarrent automatiquement avec Docker. Il suffit de les lancer **une seule fois**.
+`infra/` et `sso-lab/` utilisent `restart: always` : une fois démarrés, ils redémarrent automatiquement avec Docker.
 
 ```bash
-cd ~/dev/sso-lab && docker compose up -d   # Keycloak + OpenLDAP
-cd ~/dev/infra   && docker compose up -d   # PostgreSQL + pgAdmin
+# Premier lancement (ou après un reset complet)
+bash setup2.sh --yes   # démarre tout le lab
 ```
 
-Ensuite, on ne manipule plus que les applications :
+Ensuite on ne manipule plus que les applications individuelles :
 
 ```bash
-cd ~/dev/mon-app && docker compose up -d    # démarrer
-cd ~/dev/mon-app && docker compose down     # arrêter
+bash setup2.sh mon-app --yes    # déployer une app
+bash clean2.sh mon-app          # arrêter une app
 ```
 
-> Pour stopper l'infrastructure sans perdre les données :
-> ```bash
-> docker compose -f ~/dev/infra/docker-compose.yml stop
-> docker compose -f ~/dev/sso-lab/docker-compose.yml stop
-> ```
-> `stop` suspend les containers. `down` les supprime (les volumes persistent). `down --volumes` supprime aussi les données.
-
----
-
-## Référence rapide
-
-### URLs
-
-| Service | Navigateur | Depuis un container |
-|---|---|---|
-| Keycloak admin | `http://192.168.1.50:8080` | `http://keycloak:8080` sur `sso-lab_sso-net` |
-| phpLDAPadmin | `http://192.168.1.50:8081` | — |
-| pgAdmin | `http://192.168.1.50:5050` | — |
-| PostgreSQL | non exposé | `postgres:5432` sur `dev-net` |
-
-### Credentials
-
-| Service | Identifiant | Mot de passe |
-|---|---|---|
-| Keycloak admin | `admin` | `adminpassword` |
-| phpLDAPadmin | `cn=admin,dc=ssolab,dc=local` | `adminpassword` |
-| pgAdmin (SSO) | compte LDAP (ex. `sacha`) | mot de passe LDAP |
-| PostgreSQL | `devuser` | `devpassword` |
-
-### Paramètres Keycloak
-
-| Paramètre | Valeur |
-|---|---|
-| Realm | `ssolab` |
-| Issuer URI (depuis un container) | `http://keycloak:8080/realms/ssolab` |
-| Issuer URI (depuis l'hôte) | `http://192.168.1.50:8080/realms/ssolab` |
-
----
-
-## Créer une nouvelle application
-
-### Étape 1 — Déclarer le schéma PostgreSQL
-
-La base `devdb` est partagée. Chaque app a son propre schéma pour éviter les collisions de noms de tables.
-
-Ajouter une ligne dans [`infra/init/00_schemas.sql`](infra/init/00_schemas.sql) :
-
-```sql
-CREATE SCHEMA IF NOT EXISTS mon_app;
-```
-
-> Ce fichier s'exécute uniquement au **premier démarrage** du container postgres (volume vide).  
-> Si postgres tourne déjà, créer le schéma directement :
-> ```bash
-> docker exec dev-postgres psql -U devuser -d devdb -c "CREATE SCHEMA IF NOT EXISTS mon_app;"
-> ```
-
----
-
-### Étape 2 — Créer le client Keycloak
-
-1. Aller sur `http://192.168.1.50:8080` → `admin / adminpassword`
-2. Sélectionner le realm **ssolab**
-3. **Clients → Create client**
-   - Client type : `OpenID Connect`
-   - Client ID : `mon-app`
-   - Client authentication : **ON** (mode confidentiel → génère un secret)
-4. **Settings** → Valid redirect URIs : `http://192.168.1.50:8083/*`
-5. **Credentials** → copier le `Client secret`
-
----
-
-### Étape 3 — Créer le fichier `.env`
-
-```bash
-cp ~/dev/spring-app/.env.example ~/dev/mon-app/.env
-```
-
-Remplir `mon-app/.env` :
-
-```dotenv
-# ── Base de données ──────────────────────────────────────────────
-DB_HOST=postgres
-DB_PORT=5432
-DB_NAME=devdb
-DB_SCHEMA=mon_app          # ← nom du schéma créé à l'étape 1
-DB_USER=devuser
-DB_PASSWORD=devpassword
-
-# ── SSO Keycloak ─────────────────────────────────────────────────
-KEYCLOAK_CLIENT_ID=mon-app
-KEYCLOAK_CLIENT_SECRET=<secret copié depuis Keycloak>
-KEYCLOAK_ISSUER_URI=http://keycloak:8080/realms/ssolab
-```
-
-> Le `.env` ne doit jamais être commité. Commiter uniquement `.env.example` avec des valeurs vides.
-
----
-
-### Étape 4 — `docker-compose.yml`
-
-Déclarer les deux réseaux infra comme **externes** et y rattacher le service :
-
-```yaml
-# mon-app/docker-compose.yml
-
-networks:
-  sso-net:
-    external: true
-    name: sso-lab_sso-net   # ← réseau créé par sso-lab/docker-compose.yml
-  dev-net:
-    external: true
-    name: dev-net            # ← réseau créé par infra/docker-compose.yml
-
-services:
-  mon-app:
-    build: .
-    container_name: mon-app
-    restart: unless-stopped
-    env_file: .env
-    ports:
-      - "8083:8083"
-    networks:
-      - sso-net   # ← pour joindre keycloak:8080
-      - dev-net   # ← pour joindre postgres:5432
-```
-
-> Retirer `sso-net` si l'app n'a pas de SSO, `dev-net` si elle n'a pas de base de données.
-
----
-
-### Étape 5 — `application.yml` (Spring Boot)
-
-```yaml
-server:
-  port: 8083
-
-spring:
-  datasource:
-    url: jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:devdb}?currentSchema=${DB_SCHEMA:mon_app}
-    username: ${DB_USER:devuser}
-    password: ${DB_PASSWORD:devpassword}
-    driver-class-name: org.postgresql.Driver
-
-  jpa:
-    hibernate:
-      ddl-auto: update
-    properties:
-      hibernate:
-        default_schema: ${DB_SCHEMA:mon_app}
-
-  security:
-    oauth2:
-      client:
-        registration:
-          keycloak:
-            client-id: ${KEYCLOAK_CLIENT_ID:mon-app}
-            client-secret: ${KEYCLOAK_CLIENT_SECRET}
-            scope: openid, profile, email
-            authorization-grant-type: authorization_code
-            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
-        provider:
-          keycloak:
-            issuer-uri: ${KEYCLOAK_ISSUER_URI:http://keycloak:8080/realms/ssolab}
-            user-name-attribute: preferred_username
-```
-
-> La syntaxe `${VAR:valeur_par_défaut}` permet de lancer l'app hors Docker (en local) sans définir les variables d'environnement.
-
----
-
-### Étape 6 — `pom.xml`
-
-```xml
-<!-- Base de données -->
-<dependency>
-    <groupId>org.postgresql</groupId>
-    <artifactId>postgresql</artifactId>
-    <scope>runtime</scope>
-</dependency>
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-data-jpa</artifactId>
-</dependency>
-
-<!-- SSO -->
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-oauth2-client</artifactId>
-</dependency>
-```
-
----
-
-### Étape 7 — SecurityConfig (Spring Boot)
-
-```java
-@Configuration
-@EnableWebSecurity
-public class SecurityConfig {
-
-    private final ClientRegistrationRepository clientRegistrationRepository;
-
-    public SecurityConfig(ClientRegistrationRepository clientRegistrationRepository) {
-        this.clientRegistrationRepository = clientRegistrationRepository;
-    }
-
-    @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        http
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/", "/error").permitAll()
-                .anyRequest().authenticated()
-            )
-            .oauth2Login(Customizer.withDefaults())
-            .logout(logout -> logout
-                .logoutSuccessHandler(oidcLogoutHandler())
-            );
-        return http.build();
-    }
-
-    private LogoutSuccessHandler oidcLogoutHandler() {
-        OidcClientInitiatedLogoutSuccessHandler handler =
-            new OidcClientInitiatedLogoutSuccessHandler(clientRegistrationRepository);
-        handler.setPostLogoutRedirectUri("{baseUrl}");
-        return handler;
-    }
-}
-```
-
-Le login SSO est déclenché en redirigeant l'utilisateur vers :
-
-```
-GET /oauth2/authorization/keycloak
-```
-
----
-
-## Isolation réseau — récapitulatif
-
-```
-  ┌─────────────── sso-lab_sso-net ──────────────────┐
-  │  openldap:389   phpldapadmin   keycloak:8080      │
-  │                                     ▲             │
-  └─────────────────────────────────────┼─────────────┘
-                                        │ OAuth2/OIDC
-                                    mon-app
-                                        │ JDBC
-  ┌───────────────── dev-net ───────────┼─────────────┐
-  │  postgres:5432  (port non exposé)   ▼             │
-  └────────────────────────────────────────────────────┘
-```
-
+> **Journal de bugs** : les incidents rencontrés et leurs corrections sont documentés dans `.debug/` (ignoré par git).
