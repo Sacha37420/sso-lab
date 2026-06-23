@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────────
+# init.ldif.example — Template d'initialisation OpenLDAP
+#
+# Copier en init.ldif et remplacer les mots de passe CHANGE_ME
+# avant le premier démarrage d'openldap.
+#
+# Structure :
+#   dc=ssolab,dc=local          ← racine (créée automatiquement)
+#   └── ou=people               ← utilisateurs
+#   └── ou=groups               ← groupes
+#
+# Le fichier est chargé UNE SEULE FOIS au premier démarrage.
+# Pour le recharger : docker compose down --volumes  puis  up
+# ─────────────────────────────────────────────────────────────────
+
+# ── Unité organisationnelle : utilisateurs ────────────────────────
+dn: ou=people,dc=ssolab,dc=local
+objectClass: organizationalUnit
+ou: people
+
+# ── Unité organisationnelle : groupes ─────────────────────────────
+dn: ou=groups,dc=ssolab,dc=local
+objectClass: organizationalUnit
+ou: groups
+
+# ── Utilisateur : admin (développeur) ────────────────────────────
+dn: uid=admin,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: admin
+cn: Admin
+sn: Admin
+givenName: Admin
+mail: admin@ssolab.local
+userPassword: CHANGE_ME
+
+# ── Groupe : developers ───────────────────────────────────────────
+dn: cn=developers,ou=groups,dc=ssolab,dc=local
+objectClass: groupOfNames
+cn: developers
+member: uid=admin,ou=people,dc=ssolab,dc=local
+
+# ── Groupe : admins ───────────────────────────────────────────────
+dn: cn=admins,ou=groups,dc=ssolab,dc=local
+objectClass: groupOfNames
+cn: admins
+member: uid=admin,ou=people,dc=ssolab,dc=local

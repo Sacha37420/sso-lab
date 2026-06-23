@@ -11,6 +11,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="${1:-}"
 FORCE=false
+PORTS_REGISTRY="$SCRIPT_DIR/.ports"
 
 # Gestion du flag --yes
 if [[ "$APP_NAME" == "--yes" || "$APP_NAME" == "-y" ]]; then
@@ -18,6 +19,18 @@ if [[ "$APP_NAME" == "--yes" || "$APP_NAME" == "-y" ]]; then
   APP_NAME=""
 elif [[ "${2:-}" == "--yes" || "${2:-}" == "-y" ]]; then
   FORCE=true
+fi
+
+# ── Auto-enregistrement des ports si l'app est absente de .ports ──────
+if [[ -n "$APP_NAME" ]] && ! grep -qE "^${APP_NAME}:" "$PORTS_REGISTRY" 2>/dev/null; then
+  DC="$SCRIPT_DIR/$APP_NAME/docker-compose.yml"
+  if [[ -f "$DC" ]]; then
+    # Convention : container port 8000 = backend Django, port 80 = frontend nginx
+    BPORT=$(grep -E '^\s+- "[0-9]+:8000"' "$DC" | sed 's/.*"\([0-9]*\):8000".*/\1/' | head -1)
+    FPORT=$(grep -E '^\s+- "[0-9]+:80"' "$DC" | sed 's/.*"\([0-9]*\):80".*/\1/' | head -1)
+    echo "${APP_NAME}:${BPORT:-}:${FPORT:-}" >> "$PORTS_REGISTRY"
+    echo -e "  \033[0;32m✔ $APP_NAME enregistré dans .ports (backend: ${BPORT:-—}  frontend: ${FPORT:-—})\033[0m"
+  fi
 fi
 
 # ── 1. Nettoyage complet ──────────────────────────────────────────────
