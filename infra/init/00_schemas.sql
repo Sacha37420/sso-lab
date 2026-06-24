@@ -32,3 +32,5 @@ CREATE SCHEMA IF NOT EXISTS analyse_lora;
 CREATE SCHEMA IF NOT EXISTS app_builder;
 
 CREATE SCHEMA IF NOT EXISTS restauration;
+
+CREATE SCHEMA IF NOT EXISTS traitement_de_fichiers_compils;

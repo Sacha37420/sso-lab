@@ -16,3 +16,6 @@
 [submodule "restauration"]
 	path = restauration
 	url = https://github.com/Sacha37420/restauration.git
+[submodule "traitement-de-fichiers-compils"]
+	path = traitement-de-fichiers-compils
+	url = https://github.com/Sacha37420/traitement-de-fichiers-compils.git
