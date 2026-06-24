@@ -30,8 +30,8 @@ else
     compose="$dir/docker-compose.yml"
     [[ -f "$compose" ]] || continue
     name="$(basename "$dir")"
-    if [[ "$name" == "infra" ]]; then
-      echo "■ $name — down (volumes préservés — base PostgreSQL partagée) ..."
+    if [[ "$name" == "infra" || "$name" == "sso-lab" ]]; then
+      echo "■ $name — down (volumes préservés — infrastructure partagée) ..."
       docker compose -f "$compose" down --remove-orphans 2>&1 | sed 's/^/  /' || true
     else
       echo "■ $name — down --volumes ..."

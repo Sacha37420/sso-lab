@@ -100,6 +100,8 @@ if [[ -n "$APP_NAME" ]]; then
 else
   bash "$SCRIPT_DIR/create-app-client.sh"
 fi
+# Client code-server (oauth2-proxy) : recréé si absent (idempotent)
+bash "$SCRIPT_DIR/sso-lab/setup-code-server-auth.sh"
 echo -e "\033[0;32m✓ Clients Keycloak configurés.\033[0m"
 
 # ── 7. Démarrage des stacks ──────────────────────────────────────────
