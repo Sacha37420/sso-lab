@@ -160,6 +160,9 @@ services:
       # Accès : tous les utilisateurs authentifiés dans le realm ssolab
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       OAUTH2_PROXY_ALLOWED_GROUPS: "developers,admins"
+      # Forcer les scopes sans "groups" : Keycloak n'a pas ce scope mais les groupes
+      # arrivent via le mapper du client (claim "groups" dans le token).
+      OAUTH2_PROXY_SCOPE: "openid email profile"
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
       OAUTH2_PROXY_REVERSE_PROXY: "true"
     # --upstream passé en CLI (l'env var OAUTH2_PROXY_UPSTREAM est ignorée en v7 pour les slices)
