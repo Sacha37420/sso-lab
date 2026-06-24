@@ -195,6 +195,8 @@ services:
     container_name: code-server
     restart: unless-stopped
     user: "1000:1000"
+    group_add:
+      - "989"   # gid du groupe docker sur l'hôte → accès /var/run/docker.sock
     environment:
       - HOME=/home/coder
       - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-Dev}
