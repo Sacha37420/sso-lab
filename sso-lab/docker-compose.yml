@@ -163,6 +163,8 @@ services:
       # Forcer les scopes sans "groups" : Keycloak n'a pas ce scope mais les groupes
       # arrivent via le mapper du client (claim "groups" dans le token).
       OAUTH2_PROXY_SCOPE: "openid email profile"
+      # Comptes LDAP : Keycloak envoie email_verified=false, oauth2-proxy le rejette sinon
+      OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL: "true"
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
       OAUTH2_PROXY_REVERSE_PROXY: "true"
     # --upstream passé en CLI (l'env var OAUTH2_PROXY_UPSTREAM est ignorée en v7 pour les slices)
