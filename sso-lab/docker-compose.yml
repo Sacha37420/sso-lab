@@ -159,7 +159,7 @@ services:
       OAUTH2_PROXY_COOKIE_NAME: "_oauth2_proxy_code"
       # Accès : tous les utilisateurs authentifiés dans le realm ssolab
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
-      OAUTH2_PROXY_ALLOWED_GROUPS: "/developers,/admins"
+      OAUTH2_PROXY_ALLOWED_GROUPS: "developers,admins"
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
       OAUTH2_PROXY_REVERSE_PROXY: "true"
     # --upstream passé en CLI (l'env var OAUTH2_PROXY_UPSTREAM est ignorée en v7 pour les slices)
