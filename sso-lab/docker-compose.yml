@@ -61,16 +61,15 @@ services:
       LDAP_ADMIN_PASSWORD: "${LDAP_ADMIN_PASSWORD}"
       LDAP_CONFIG_PASSWORD: "${LDAP_CONFIG_PASSWORD}"
       LDAP_ADDITIONAL_MODULES: "memberof"
-      LDAP_SEED_INTERNAL_LDIF_PATH: "/container/service/slapd/assets/config/bootstrap/ldif/custom"
     volumes:
       - ldap-data:/var/lib/ldap
       - ldap-config:/etc/ldap/slapd.d
-      - ./ldap/init.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/init.ldif:ro
+      - ./ldap/init.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/init.ldif
     ports:
       - "${PORT_LDAP}:${PORT_LDAP}"
     networks:
       - sso-net
-    command: ["--copy-service", "--loglevel", "debug"]
+    command: ["--copy-service", "--loglevel", "warning"]
 
   # ──────────────────────────────────────────
   # phpLDAPadmin
