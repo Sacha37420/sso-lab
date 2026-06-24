@@ -70,6 +70,48 @@ else
 fi
 success "CODE_SERVER_CLIENT_SECRET mis à jour dans sso-lab/.env"
 
+# ── Audience mapper (aud: code-server dans l'access token) ───────────────────
+# Sans ce mapper, oauth2-proxy rejette le token car aud=[account] ≠ code-server.
+info "Ajout du mapper d'audience Keycloak (idempotent)..."
+
+KC_PORT=$(grep -E '^PORT_KEYCLOAK=' "$ENV_FILE" | cut -d= -f2 | tr -d '[:space:]' || echo "8080")
+KC_ADMIN_USER=$(grep -E '^KEYCLOAK_ADMIN=' "$ENV_FILE" | cut -d= -f2 | tr -d '[:space:]' || echo "admin")
+KC_ADMIN_PASS=$(grep -E '^KEYCLOAK_ADMIN_PASSWORD=' "$ENV_FILE" | cut -d= -f2 | tr -d '[:space:]')
+KC_URL="http://localhost:${KC_PORT}"
+
+KC_TOKEN=$(curl -s -X POST "${KC_URL}/realms/master/protocol/openid-connect/token" \
+  -d "client_id=admin-cli&grant_type=password&username=${KC_ADMIN_USER}&password=${KC_ADMIN_PASS}" \
+  | jq -r .access_token)
+[[ -n "$KC_TOKEN" && "$KC_TOKEN" != "null" ]] || die "Impossible d'obtenir un token admin Keycloak"
+
+CLIENT_UUID=$(curl -s -H "Authorization: Bearer $KC_TOKEN" \
+  "${KC_URL}/admin/realms/ssolab/clients?clientId=code-server" | jq -r '.[0].id')
+[[ -n "$CLIENT_UUID" && "$CLIENT_UUID" != "null" ]] || die "Client code-server introuvable dans ssolab"
+
+EXISTING=$(curl -s -H "Authorization: Bearer $KC_TOKEN" \
+  "${KC_URL}/admin/realms/ssolab/clients/${CLIENT_UUID}/protocol-mappers/models" \
+  | jq -r '.[] | select(.name == "audience-code-server") | .name')
+
+if [[ -z "$EXISTING" ]]; then
+  HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X POST "${KC_URL}/admin/realms/ssolab/clients/${CLIENT_UUID}/protocol-mappers/models" \
+    -H "Authorization: Bearer $KC_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "name": "audience-code-server",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-audience-mapper",
+      "config": {
+        "included.client.audience": "code-server",
+        "id.token.claim": "false",
+        "access.token.claim": "true"
+      }
+    }')
+  [[ "$HTTP" == "201" ]] && success "Audience mapper créé" || die "Échec création mapper (HTTP $HTTP)"
+else
+  info "Audience mapper déjà présent — conservé"
+fi
+
 echo ""
 echo "─────────────────────────────────────────────"
 success "Terminé. Redémarrer oauth2-proxy pour appliquer :"
