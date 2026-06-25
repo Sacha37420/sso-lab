@@ -17,3 +17,14 @@ body {
 a {
   color: #1976d2;
 }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  border: none;
+  text-decoration: none;
+  user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
