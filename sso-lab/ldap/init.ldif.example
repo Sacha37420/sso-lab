@@ -1,13 +1,29 @@
 # ─────────────────────────────────────────────────────────────────
 # init.ldif.example — Template d'initialisation OpenLDAP
 #
-# Copier en init.ldif et remplacer les mots de passe CHANGE_ME
-# avant le premier démarrage d'openldap.
+# Copier en init.ldif, remplacer les mots de passe CHANGE_ME et
+# adapter les emails avant le premier démarrage d'openldap.
 #
 # Structure :
 #   dc=ssolab,dc=local          ← racine (créée automatiquement)
 #   └── ou=people               ← utilisateurs
+#       ├── uid=sacha
+#       ├── uid=Carpeta
+#       ├── uid=hassan
+#       ├── uid=lea
+#       ├── uid=elodie
+#       ├── uid=naty
+#       ├── uid=maria
+#       ├── uid=sabrina
+#       └── uid=bruno
 #   └── ou=groups               ← groupes
+#       ├── cn=developers       ← sacha, hassan
+#       ├── cn=admins           ← sacha
+#       ├── cn=famille          ← sacha, lea, elodie
+#       ├── cn=amis             ← sacha, hassan, lea
+#       ├── cn=dom              ← naty, maria
+#       ├── cn=harem            ← sacha, Carpeta
+#       └── cn=manager          ← sacha, elodie, sabrina
 #
 # Le fichier est chargé UNE SEULE FOIS au premier démarrage.
 # Pour le recharger : docker compose down --volumes  puis  up
@@ -23,25 +39,156 @@ dn: ou=groups,dc=ssolab,dc=local
 objectClass: organizationalUnit
 ou: groups
 
-# ── Utilisateur : admin (développeur) ────────────────────────────
-dn: uid=admin,ou=people,dc=ssolab,dc=local
+# ── Utilisateur : sacha ───────────────────────────────────────────
+# inetOrgPerson = schéma standard pour les personnes (email, prénom…)
+# shadowAccount = permet un mot de passe hashé
+dn: uid=sacha,ou=people,dc=ssolab,dc=local
 objectClass: inetOrgPerson
 objectClass: shadowAccount
-uid: admin
-cn: Admin
-sn: Admin
-givenName: Admin
-mail: admin@ssolab.local
+uid: sacha
+cn: Sacha
+sn: Sacha
+givenName: Sacha
+mail: sacha@ssolab.local
+# Mot de passe en clair — OpenLDAP le hashera en SHA au démarrage
+userPassword: CHANGE_ME
+
+# ── Utilisateur : Carpeta ─────────────────────────────────────────
+dn: uid=Carpeta,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: Carpeta
+cn: Carpeta
+sn: Carpeta
+givenName: Carpeta
+mail: carpeta@ssolab.local
+userPassword: CHANGE_ME
+
+# ── Utilisateur : hassan ──────────────────────────────────────────
+dn: uid=hassan,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: hassan
+cn: Hassan
+sn: Hassan
+givenName: Hassan
+mail: hassan@ssolab.local
+userPassword: CHANGE_ME
+
+# ── Utilisateur : lea ─────────────────────────────────────────────
+dn: uid=lea,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: lea
+cn: Léa
+sn: Lea
+givenName: Léa
+mail: lea@ssolab.local
+userPassword: CHANGE_ME
+
+# ── Utilisateur : elodie ──────────────────────────────────────────
+dn: uid=elodie,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: elodie
+cn: Élodie
+sn: Elodie
+givenName: Élodie
+mail: elodie@ssolab.local
+userPassword: CHANGE_ME
+
+# ── Utilisateur : naty ────────────────────────────────────────────
+dn: uid=naty,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: naty
+cn: Goddess Naty
+sn: Naty
+givenName: Naty
+mail: naty@ssolab.local
+userPassword: CHANGE_ME
+
+# ── Utilisateur : maria ───────────────────────────────────────────
+dn: uid=maria,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: maria
+cn: Maria
+sn: Maria
+givenName: Maria
+mail: maria@ssolab.local
+userPassword: CHANGE_ME
+
+# ── Utilisateur : sabrina ─────────────────────────────────────────
+dn: uid=sabrina,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: sabrina
+cn: Sabrina
+sn: Sabrina
+givenName: Sabrina
+mail: sabrina@ssolab.local
+userPassword: CHANGE_ME
+
+# ── Utilisateur : bruno ───────────────────────────────────────────
+dn: uid=bruno,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: bruno
+cn: Bruno
+sn: Bruno
+givenName: Bruno
+mail: bruno@ssolab.local
 userPassword: CHANGE_ME
 
 # ── Groupe : developers ───────────────────────────────────────────
+# groupOfNames = groupe dont les membres sont des DN complets
 dn: cn=developers,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: developers
-member: uid=admin,ou=people,dc=ssolab,dc=local
+member: uid=sacha,ou=people,dc=ssolab,dc=local
+member: uid=hassan,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : admins ───────────────────────────────────────────────
 dn: cn=admins,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: admins
-member: uid=admin,ou=people,dc=ssolab,dc=local
+member: uid=sacha,ou=people,dc=ssolab,dc=local
+
+# ── Groupe : famille ──────────────────────────────────────────────
+dn: cn=famille,ou=groups,dc=ssolab,dc=local
+objectClass: groupOfNames
+cn: famille
+member: uid=sacha,ou=people,dc=ssolab,dc=local
+member: uid=lea,ou=people,dc=ssolab,dc=local
+member: uid=elodie,ou=people,dc=ssolab,dc=local
+
+# ── Groupe : amis ─────────────────────────────────────────────────
+dn: cn=amis,ou=groups,dc=ssolab,dc=local
+objectClass: groupOfNames
+cn: amis
+member: uid=sacha,ou=people,dc=ssolab,dc=local
+member: uid=hassan,ou=people,dc=ssolab,dc=local
+member: uid=lea,ou=people,dc=ssolab,dc=local
+
+# ── Groupe : dom ──────────────────────────────────────────────────
+dn: cn=dom,ou=groups,dc=ssolab,dc=local
+objectClass: groupOfNames
+cn: dom
+member: uid=naty,ou=people,dc=ssolab,dc=local
+member: uid=maria,ou=people,dc=ssolab,dc=local
+
+# ── Groupe : harem ────────────────────────────────────────────────
+dn: cn=harem,ou=groups,dc=ssolab,dc=local
+objectClass: groupOfNames
+cn: harem
+member: uid=sacha,ou=people,dc=ssolab,dc=local
+member: uid=Carpeta,ou=people,dc=ssolab,dc=local
+
+# ── Groupe : manager ──────────────────────────────────────────────
+dn: cn=manager,ou=groups,dc=ssolab,dc=local
+objectClass: groupOfNames
+cn: manager
+member: uid=sacha,ou=people,dc=ssolab,dc=local
+member: uid=elodie,ou=people,dc=ssolab,dc=local
+member: uid=sabrina,ou=people,dc=ssolab,dc=local
