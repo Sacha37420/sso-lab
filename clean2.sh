@@ -19,8 +19,11 @@ if [[ -n "$APP_NAME" ]]; then
     echo "■ Pas de docker-compose.yml pour $APP_NAME"
   fi
 else
-  # Global : infra est protégée — ses volumes contiennent la base PostgreSQL
-  # partagée par toutes les apps. On l'arrête sans --volumes.
+  # Global : infra ET sso-lab sont protégées — on les arrête sans --volumes.
+  #   - infra   : ses volumes contiennent la base PostgreSQL partagée par les apps.
+  #   - sso-lab : ses volumes contiennent le realm Keycloak (clients, fédération)
+  #               et l'annuaire LDAP — coûteux à reconstruire.
+  # Pour wiper sso-lab volontairement : clean2.sh sso-lab (branche ciblée ci-dessus).
   COMPOSE_DIRS=()
   while IFS= read -r compose; do
     dir="$(dirname "$compose")"
