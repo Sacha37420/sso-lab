@@ -544,7 +544,7 @@ else
         "membership.ldap.attribute":            ["member"],
         "membership.attribute.type":            ["DN"],
         "groups.path":                          ["/"],
-        "mode":                                 ["WRITABLE"],
+        "mode":                                 ["LDAP_ONLY"],
         "user.roles.retrieve.strategy":         ["LOAD_GROUPS_BY_MEMBER_ATTRIBUTE"],
         "drop.non.existing.groups.during.sync": ["false"]
       }
@@ -581,18 +581,20 @@ else
   fi
 fi
 
-# ── Forcer mode=WRITABLE sur le Group Mapper (idempotent) ─────────────────────
+# ── Forcer mode=LDAP_ONLY sur le Group Mapper (idempotent) ────────────────────
 #   Permet à Keycloak d'écrire l'appartenance aux groupes dans le LDAP (member),
 #   donc de gérer les rôles depuis une app (ex. restauration). Corrige un mapper
-#   déjà existant resté en READ_ONLY.
+#   déjà existant resté en READ_ONLY (ou en valeur invalide).
+#   NB : pour un group-mapper le mode « écriture » est LDAP_ONLY (≠ editMode du
+#   provider qui, lui, vaut WRITABLE) — l'enum LDAPGroupMapperMode n'a pas WRITABLE.
 if [[ -n "$GROUP_MAPPER_KC_ID" ]]; then
   GM_COMPONENT=$(curl -sf \
     -H "Authorization: Bearer $ACCESS_TOKEN" \
     "$KEYCLOAK_URL/admin/realms/$REALM/components/$GROUP_MAPPER_KC_ID")
   GM_MODE=$(echo "$GM_COMPONENT" | jq -r '.config.mode[0] // empty')
-  if [[ "$GM_MODE" != "WRITABLE" ]]; then
-    info "  Passage du Group Mapper en mode=WRITABLE (était: ${GM_MODE:-?})..."
-    GM_PAYLOAD=$(echo "$GM_COMPONENT" | jq '.config.mode = ["WRITABLE"]')
+  if [[ "$GM_MODE" != "LDAP_ONLY" ]]; then
+    info "  Passage du Group Mapper en mode=LDAP_ONLY (était: ${GM_MODE:-?})..."
+    GM_PAYLOAD=$(echo "$GM_COMPONENT" | jq '.config.mode = ["LDAP_ONLY"]')
     GM_HTTP=$(curl -s -o /tmp/_kc_gmmode.json -w "%{http_code}" \
       -X PUT \
       -H "Authorization: Bearer $ACCESS_TOKEN" \
@@ -600,10 +602,10 @@ if [[ -n "$GROUP_MAPPER_KC_ID" ]]; then
       -d "$GM_PAYLOAD" \
       "$KEYCLOAK_URL/admin/realms/$REALM/components/$GROUP_MAPPER_KC_ID")
     [[ "$GM_HTTP" =~ ^2 ]] \
-      && success "  Group Mapper en WRITABLE." \
-      || warn    "  Group Mapper WRITABLE : HTTP $GM_HTTP — $(cat /tmp/_kc_gmmode.json)"
+      && success "  Group Mapper en LDAP_ONLY." \
+      || warn    "  Group Mapper LDAP_ONLY : HTTP $GM_HTTP — $(cat /tmp/_kc_gmmode.json)"
   else
-    success "  Group Mapper déjà en WRITABLE."
+    success "  Group Mapper déjà en LDAP_ONLY."
   fi
 fi
 
