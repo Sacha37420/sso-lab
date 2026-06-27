@@ -544,7 +544,7 @@ else
         "membership.ldap.attribute":            ["member"],
         "membership.attribute.type":            ["DN"],
         "groups.path":                          ["/"],
-        "mode":                                 ["READ_ONLY"],
+        "mode":                                 ["WRITABLE"],
         "user.roles.retrieve.strategy":         ["LOAD_GROUPS_BY_MEMBER_ATTRIBUTE"],
         "drop.non.existing.groups.during.sync": ["false"]
       }
@@ -578,6 +578,32 @@ else
     [[ "$GRP_SYNC_HTTP" =~ ^2 ]] \
       && success "  Synchronisation groupes terminée." \
       || warn    "  Synchronisation groupes : HTTP $GRP_SYNC_HTTP — $(cat /tmp/_kc_grpsync.json)"
+  fi
+fi
+
+# ── Forcer mode=WRITABLE sur le Group Mapper (idempotent) ─────────────────────
+#   Permet à Keycloak d'écrire l'appartenance aux groupes dans le LDAP (member),
+#   donc de gérer les rôles depuis une app (ex. restauration). Corrige un mapper
+#   déjà existant resté en READ_ONLY.
+if [[ -n "$GROUP_MAPPER_KC_ID" ]]; then
+  GM_COMPONENT=$(curl -sf \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$KEYCLOAK_URL/admin/realms/$REALM/components/$GROUP_MAPPER_KC_ID")
+  GM_MODE=$(echo "$GM_COMPONENT" | jq -r '.config.mode[0] // empty')
+  if [[ "$GM_MODE" != "WRITABLE" ]]; then
+    info "  Passage du Group Mapper en mode=WRITABLE (était: ${GM_MODE:-?})..."
+    GM_PAYLOAD=$(echo "$GM_COMPONENT" | jq '.config.mode = ["WRITABLE"]')
+    GM_HTTP=$(curl -s -o /tmp/_kc_gmmode.json -w "%{http_code}" \
+      -X PUT \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "$GM_PAYLOAD" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/components/$GROUP_MAPPER_KC_ID")
+    [[ "$GM_HTTP" =~ ^2 ]] \
+      && success "  Group Mapper en WRITABLE." \
+      || warn    "  Group Mapper WRITABLE : HTTP $GM_HTTP — $(cat /tmp/_kc_gmmode.json)"
+  else
+    success "  Group Mapper déjà en WRITABLE."
   fi
 fi
 
@@ -869,6 +895,72 @@ if [[ -n "$REQUIRE_GROUP" ]]; then
         || warn    "  Assignation rôle→groupe : HTTP $ASSIGN_HTTP"
     fi
   fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Service account : client confidentiel compagnon "<app>-admin"
+#   Activé si <app>/.keycloak-service-account-roles existe (1 ligne = 1 rôle du
+#   client realm-management). Permet au backend de l'app d'agir en admin Keycloak
+#   (créer des utilisateurs, gérer les groupes) via le flux client_credentials —
+#   sans toucher au client applicatif (qui peut être public, ex. SPA Angular).
+# ══════════════════════════════════════════════════════════════════════════════
+SA_ROLES_FILE="$APP_DIR/.keycloak-service-account-roles"
+if [[ -f "$SA_ROLES_FILE" ]]; then
+  ADMIN_CLIENT_ID="${APP_NAME}-admin"
+  info "Service account — client compagnon '$ADMIN_CLIENT_ID'..."
+
+  ADMIN_UUID=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$KEYCLOAK_URL/admin/realms/$REALM/clients?clientId=$ADMIN_CLIENT_ID" \
+    | jq -r '.[0].id // empty')
+
+  if [[ -z "$ADMIN_UUID" ]]; then
+    ADMIN_PAYLOAD=$(jq -n --arg cid "$ADMIN_CLIENT_ID" '{
+      clientId: $cid, name: $cid, enabled: true, protocol: "openid-connect",
+      publicClient: false, clientAuthenticatorType: "client-secret",
+      standardFlowEnabled: false, directAccessGrantsEnabled: false,
+      serviceAccountsEnabled: true, redirectUris: [], webOrigins: []
+    }')
+    AC_HTTP=$(curl -s -o /tmp/_kc_adminclient.json -w "%{http_code}" -X POST \
+      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -d "$ADMIN_PAYLOAD" "$KEYCLOAK_URL/admin/realms/$REALM/clients")
+    [[ "$AC_HTTP" == "201" ]] \
+      || die "Création du client '$ADMIN_CLIENT_ID' échouée (HTTP $AC_HTTP) : $(cat /tmp/_kc_adminclient.json)"
+    ADMIN_UUID=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/clients?clientId=$ADMIN_CLIENT_ID" | jq -r '.[0].id // empty')
+    success "  Client '$ADMIN_CLIENT_ID' créé (UUID: $ADMIN_UUID)."
+  else
+    success "  Client '$ADMIN_CLIENT_ID' existant (UUID: $ADMIN_UUID)."
+  fi
+
+  ADMIN_SECRET=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$KEYCLOAK_URL/admin/realms/$REALM/clients/$ADMIN_UUID/client-secret" | jq -r '.value // empty')
+  [[ -n "$ADMIN_SECRET" ]] || die "Secret du client '$ADMIN_CLIENT_ID' introuvable."
+
+  SA_USER_ID=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$KEYCLOAK_URL/admin/realms/$REALM/clients/$ADMIN_UUID/service-account-user" | jq -r '.id // empty')
+  [[ -n "$SA_USER_ID" ]] || die "Service account user introuvable pour '$ADMIN_CLIENT_ID'."
+
+  RM_UUID=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$KEYCLOAK_URL/admin/realms/$REALM/clients?clientId=realm-management" | jq -r '.[0].id // empty')
+  [[ -n "$RM_UUID" ]] || die "Client realm-management introuvable."
+
+  while IFS= read -r SA_ROLE || [[ -n "$SA_ROLE" ]]; do
+    SA_ROLE="$(echo "$SA_ROLE" | sed 's/[[:space:]]*#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [[ -z "$SA_ROLE" ]] && continue
+    SA_ROLE_JSON=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/clients/$RM_UUID/roles/$SA_ROLE")
+    [[ -n "$(echo "$SA_ROLE_JSON" | jq -r '.id // empty')" ]] \
+      || { warn "  Rôle realm-management '$SA_ROLE' introuvable — ignoré."; continue; }
+    curl -s -o /dev/null -X POST \
+      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -d "[$(echo "$SA_ROLE_JSON" | jq -c '{id, name}')]" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/users/$SA_USER_ID/role-mappings/clients/$RM_UUID"
+    success "  Rôle '$SA_ROLE' assigné au service account."
+  done < "$SA_ROLES_FILE"
+
+  upsert_env "$APP_ENV" "KEYCLOAK_ADMIN_CLIENT_ID"     "$ADMIN_CLIENT_ID"
+  upsert_env "$APP_ENV" "KEYCLOAK_ADMIN_CLIENT_SECRET" "$ADMIN_SECRET"
+  success "  Identifiants admin écrits dans $APP_ENV (KEYCLOAK_ADMIN_CLIENT_ID/SECRET)."
 fi
 
 # ── Résumé ────────────────────────────────────────────────────────────────────
