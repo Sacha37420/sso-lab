@@ -335,7 +335,7 @@ else
     registrationAllowed:     false,
     loginWithEmailAllowed:   true,
     duplicateEmailsAllowed:  false,
-    resetPasswordAllowed:    false,
+    resetPasswordAllowed:    true,
     editUsernameAllowed:     false,
     bruteForceProtected:     false,
     accessTokenLifespan:     3600,
@@ -352,6 +352,50 @@ else
   [[ "$HTTP_STATUS" == "201" ]] \
     || die "Création du realm échouée (HTTP $HTTP_STATUS) : $(cat /tmp/_kc_realm.json)"
   success "Realm '$REALM' créé."
+fi
+
+# ── Réglages realm idempotents : « mot de passe oublié » + SMTP ───────────────
+#   Appliqués à chaque exécution (donc aussi sur un realm déjà existant).
+#   Le SMTP est lu depuis sso-lab/.env. Tant que SMTP_FROM est vide, on ne
+#   touche pas à la config SMTP : le lien « mot de passe oublié » s'affichera
+#   mais ne pourra pas envoyer d'email.
+SMTP_FROM_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_FROM" "")
+if [[ -n "$SMTP_FROM_VAL" ]]; then
+  info "  Configuration SMTP du realm (from: $SMTP_FROM_VAL)..."
+  SMTP_HOST_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_HOST" "smtp.gmail.com")
+  SMTP_PORT_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_PORT" "587")
+  SMTP_USER_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_USER" "")
+  SMTP_PASS_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_PASSWORD" "")
+  SMTP_DISP_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_FROM_DISPLAY" "SSO Lab")
+  SMTP_STARTTLS_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_STARTTLS" "true")
+  SMTP_SSL_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_SSL" "false")
+  [[ -n "$SMTP_USER_VAL" ]] && SMTP_AUTH_VAL="true" || SMTP_AUTH_VAL="false"
+
+  REALM_SMTP_PAYLOAD=$(jq -n \
+    --arg host "$SMTP_HOST_VAL" --arg port "$SMTP_PORT_VAL" \
+    --arg from "$SMTP_FROM_VAL" --arg disp "$SMTP_DISP_VAL" \
+    --arg user "$SMTP_USER_VAL" --arg pass "$SMTP_PASS_VAL" \
+    --arg starttls "$SMTP_STARTTLS_VAL" --arg ssl "$SMTP_SSL_VAL" \
+    --arg auth "$SMTP_AUTH_VAL" \
+    '{
+      resetPasswordAllowed: true,
+      smtpServer: {
+        host: $host, port: $port, from: $from, fromDisplayName: $disp,
+        starttls: $starttls, ssl: $ssl, auth: $auth, user: $user, password: $pass
+      }
+    }')
+
+  SMTP_HTTP=$(curl -s -o /tmp/_kc_smtp.json -w "%{http_code}" \
+    -X PUT \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$REALM_SMTP_PAYLOAD" \
+    "$KEYCLOAK_URL/admin/realms/$REALM")
+  [[ "$SMTP_HTTP" =~ ^2 ]] \
+    && success "  SMTP du realm configuré." \
+    || warn    "  SMTP du realm : HTTP $SMTP_HTTP — $(cat /tmp/_kc_smtp.json)"
+else
+  info "  SMTP non configuré (SMTP_FROM vide dans sso-lab/.env) — « mot de passe oublié » sans envoi d'email."
 fi
 
 # ── Fédération LDAP (vérifiée à chaque exécution) ─────────────────────────────
@@ -396,7 +440,7 @@ else
         fullSyncPeriod:              ["-1"],
         changedSyncPeriod:           ["-1"],
         cachePolicy:                 ["DEFAULT"],
-        editMode:                    ["READ_ONLY"],
+        editMode:                    ["WRITABLE"],
         vendor:                      ["other"],
         usernameLDAPAttribute:       ["uid"],
         rdnLDAPAttribute:            ["uid"],
@@ -445,6 +489,29 @@ else
   [[ "$SYNC_HTTP" =~ ^2 ]] \
     && success "  Synchronisation utilisateurs terminée." \
     || warn    "  Synchronisation utilisateurs : HTTP $SYNC_HTTP — $(cat /tmp/_kc_sync.json)"
+fi
+
+# ── Forcer editMode=WRITABLE sur le provider LDAP (idempotent) ────────────────
+#   Indispensable pour que « mot de passe oublié » puisse réécrire le mot de
+#   passe dans LDAP. Corrige le mode si le provider existait déjà en READ_ONLY.
+LDAP_COMPONENT=$(curl -sf \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "$KEYCLOAK_URL/admin/realms/$REALM/components/$LDAP_PROVIDER_ID")
+CURRENT_EDIT_MODE=$(echo "$LDAP_COMPONENT" | jq -r '.config.editMode[0] // empty')
+if [[ "$CURRENT_EDIT_MODE" != "WRITABLE" ]]; then
+  info "  Passage du provider LDAP en editMode=WRITABLE (était: ${CURRENT_EDIT_MODE:-?})..."
+  LDAP_WRITABLE_PAYLOAD=$(echo "$LDAP_COMPONENT" | jq '.config.editMode = ["WRITABLE"]')
+  EM_HTTP=$(curl -s -o /tmp/_kc_editmode.json -w "%{http_code}" \
+    -X PUT \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$LDAP_WRITABLE_PAYLOAD" \
+    "$KEYCLOAK_URL/admin/realms/$REALM/components/$LDAP_PROVIDER_ID")
+  [[ "$EM_HTTP" =~ ^2 ]] \
+    && success "  Provider LDAP en WRITABLE." \
+    || warn    "  editMode WRITABLE : HTTP $EM_HTTP — $(cat /tmp/_kc_editmode.json)"
+else
+  success "  Provider LDAP déjà en WRITABLE."
 fi
 
 # ── Group Mapper LDAP → Keycloak (vérifié à chaque exécution) ─────────────────
