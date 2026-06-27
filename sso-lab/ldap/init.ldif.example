@@ -17,13 +17,22 @@
 #       ├── uid=sabrina
 #       └── uid=bruno
 #   └── ou=groups               ← groupes
-#       ├── cn=developers       ← sacha, hassan
+#       ├── cn=developers       ← sacha, hassan        (app : analyse-lora)
 #       ├── cn=admins           ← sacha
 #       ├── cn=famille          ← sacha, lea, elodie
 #       ├── cn=amis             ← sacha, hassan, lea
-#       ├── cn=dom              ← naty, maria
+#       ├── cn=dom              ← naty, maria          (app : google-agenda)
 #       ├── cn=harem            ← sacha, Carpeta
-#       └── cn=manager          ← sacha, elodie, sabrina
+#       ├── cn=manager          ← sacha, elodie, sabrina (app : restauration)
+#       ├── cn=cuisinier        ← sacha                (app : restauration)
+#       └── cn=serveur          ← sacha                (app : restauration)
+#
+# Groupes requis par les applications (autorisation via le claim JWT "groups") :
+#   - analyse-lora  : developers
+#   - restauration  : manager, cuisinier, serveur
+#   - google-agenda : dom
+#   (app-builder, front-cadriciel, traitement-de-fichiers-compils, test-* :
+#    authentification seule, aucun groupe imposé)
 #
 # Le fichier est chargé UNE SEULE FOIS au premier démarrage.
 # Pour le recharger : docker compose down --volumes  puis  up
@@ -186,9 +195,24 @@ member: uid=sacha,ou=people,dc=ssolab,dc=local
 member: uid=Carpeta,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : manager ──────────────────────────────────────────────
+# Utilisé par : restauration (rôle manager) + google-agenda
 dn: cn=manager,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: manager
 member: uid=sacha,ou=people,dc=ssolab,dc=local
 member: uid=elodie,ou=people,dc=ssolab,dc=local
 member: uid=sabrina,ou=people,dc=ssolab,dc=local
+
+# ── Groupe : cuisinier ────────────────────────────────────────────
+# Requis par : restauration (rôle cuisinier). Adapter les membres.
+dn: cn=cuisinier,ou=groups,dc=ssolab,dc=local
+objectClass: groupOfNames
+cn: cuisinier
+member: uid=sacha,ou=people,dc=ssolab,dc=local
+
+# ── Groupe : serveur ──────────────────────────────────────────────
+# Requis par : restauration (rôle serveur). Adapter les membres.
+dn: cn=serveur,ou=groups,dc=ssolab,dc=local
+objectClass: groupOfNames
+cn: serveur
+member: uid=sacha,ou=people,dc=ssolab,dc=local
