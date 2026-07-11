@@ -54,9 +54,14 @@ mkdir -p "$TMP_APP"
 echo "KEYCLOAK_CLIENT_SECRET=" > "${TMP_APP}/.env"
 trap 'rm -rf "$TMP_APP"' EXIT
 
+# --no-rotate : le secret n'est généré qu'à la création du client. Sans ce flag,
+# chaque run rotationnerait le secret dans Keycloak alors que le container
+# oauth2-proxy garde l'ancien (Config.Env est figé à la création) → token
+# exchange en "unauthorized_client" et 500 sur /code/oauth2/callback.
 bash "$CREATE_CLIENT" "$TMP_NAME" \
   --client-id code-server \
-  --redirect-path /oauth2/callback
+  --redirect-path /oauth2/callback \
+  --no-rotate
 
 # Récupérer le secret
 CLIENT_SECRET=$(grep "^KEYCLOAK_CLIENT_SECRET=" "${TMP_APP}/.env" | cut -d= -f2-)
@@ -112,8 +117,16 @@ else
   info "Audience mapper déjà présent — conservé"
 fi
 
+# ── Application du secret à oauth2-proxy ─────────────────────────────────────
+# Indispensable : Docker fige Config.Env à la création du container, un simple
+# restart ne relit pas le .env. --force-recreate garantit la prise en compte du
+# secret même si le reste de la config est inchangé ; --no-deps évite de
+# redémarrer keycloak et code-server au passage.
+info "Recréation d'oauth2-proxy pour appliquer le secret..."
+docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up -d --no-deps --force-recreate oauth2-proxy \
+  || die "Échec de la recréation d'oauth2-proxy"
+
 echo ""
 echo "─────────────────────────────────────────────"
-success "Terminé. Redémarrer oauth2-proxy pour appliquer :"
-echo "  docker compose -f sso-lab/docker-compose.yml up -d oauth2-proxy"
+success "Terminé — oauth2-proxy est à jour."
 echo "─────────────────────────────────────────────"
