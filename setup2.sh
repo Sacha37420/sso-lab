@@ -60,8 +60,14 @@ fi
 
 # ── 4. Démarrage de sso-lab ───────────────────────────────────────────
 echo -e "\033[0;36m══ 4/7  Démarrage de sso-lab (Keycloak + LDAP)\033[0m"
-bash "$SCRIPT_DIR/recompose_docker.sh" --app sso-lab
-echo -e "\033[0;32m✓ sso-lab démarré.\033[0m"
+_KC_PORT_PROBE=$(grep -E '^PORT_KEYCLOAK=' "$SCRIPT_DIR/sso-lab/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
+_KC_PORT_PROBE="${_KC_PORT_PROBE:-8080}"
+if [[ -n "$APP_NAME" ]] && curl -sf "http://localhost:${_KC_PORT_PROBE}/realms/master" > /dev/null 2>&1; then
+  echo -e "\033[0;33m⚠ sso-lab déjà actif — redémarrage ignoré.\033[0m"
+else
+  bash "$SCRIPT_DIR/recompose_docker.sh" --app sso-lab
+  echo -e "\033[0;32m✓ sso-lab démarré.\033[0m"
+fi
 
 # ── 5. Attente Keycloak ───────────────────────────────────────────────
 echo -e "\033[0;36m══ 5/7  Attente de Keycloak\033[0m"
