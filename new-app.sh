@@ -128,7 +128,14 @@ DO_SCAFFOLD="${DO_SCAFFOLD:-O}"
 # FONCTIONS COMMUNES
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Ajoute CREATE SCHEMA dans infra/init/00_schemas.sql
+# Ajoute CREATE SCHEMA dans infra/init/00_schemas.sql, ET le crée dans la base
+# déjà en cours d'exécution.
+#
+# 00_schemas.sql n'est joué qu'à l'initialisation du volume Postgres : pour une app
+# créée alors que dev-postgres tourne, le schéma n'existerait jamais. Django, dont
+# le search_path est « <schema>,public », se rabattrait alors sur public et y créerait
+# ses tables sans rien signaler (toutes les apps partagent l'app label « api », donc
+# il croit ses migrations déjà appliquées).
 add_schema() {
   local schema="$1"
   if grep -q "CREATE SCHEMA IF NOT EXISTS ${schema};" "$INFRA_SCHEMAS" 2>/dev/null; then
@@ -136,6 +143,14 @@ add_schema() {
   else
     printf '\nCREATE SCHEMA IF NOT EXISTS %s;\n' "${schema}" >> "$INFRA_SCHEMAS"
     ok "Schéma '${schema}' ajouté dans infra/init/00_schemas.sql"
+  fi
+
+  # Sans effet si le container n'est pas démarré : le schéma viendra du fichier d'init.
+  if docker ps --format '{{.Names}}' | grep -qx "${PG_CONTAINER:-dev-postgres}"; then
+    docker exec "${PG_CONTAINER:-dev-postgres}" psql -U devuser -d devdb -q \
+      -c "CREATE SCHEMA IF NOT EXISTS \"${schema}\" AUTHORIZATION devuser;" \
+      && ok "Schéma '${schema}' créé dans la base en cours d'exécution" \
+      || warn "Création du schéma '${schema}' à chaud impossible — lancez : bash ensure-schemas.sh"
   fi
 }
 

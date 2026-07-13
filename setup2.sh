@@ -110,6 +110,19 @@ fi
 bash "$SCRIPT_DIR/sso-lab/setup-code-server-auth.sh"
 echo -e "\033[0;32m✓ Clients Keycloak configurés.\033[0m"
 
+# ── 6bis. Schémas Postgres ───────────────────────────────────────────
+# Impérativement avant le démarrage des containers : c'est à son lancement que le
+# backend Django exécute `migrate`. Si le schéma n'existe pas encore (00_schemas.sql
+# n'est joué qu'à l'initialisation du volume), Django écrit dans public et croit ses
+# migrations déjà appliquées — backend up, logs propres, base vide.
+echo -e "\033[0;36m══ Vérification des schémas Postgres (ensure-schemas.sh)\033[0m"
+if [[ -n "$APP_NAME" ]]; then
+  bash "$SCRIPT_DIR/ensure-schemas.sh" "$APP_NAME"
+else
+  bash "$SCRIPT_DIR/ensure-schemas.sh"
+fi
+echo -e "\033[0;32m✓ Schémas vérifiés.\033[0m"
+
 # ── 7. Démarrage des stacks ──────────────────────────────────────────
 echo -e "\033[0;36m══ 7/7  Démarrage des stacks\033[0m"
 if [[ -n "$APP_NAME" ]]; then
