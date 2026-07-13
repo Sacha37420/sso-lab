@@ -19,3 +19,6 @@
 [submodule "traitement-de-fichiers-compils"]
 	path = traitement-de-fichiers-compils
 	url = https://github.com/Sacha37420/traitement-de-fichiers-compils.git
+[submodule "arbre-genealogique"]
+	path = arbre-genealogique
+	url = https://github.com/Sacha37420/arbre-genealogique.git
