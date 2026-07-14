@@ -202,7 +202,13 @@ write_env_files() {
       echo "DB_NAME=devdb"
       echo "DB_SCHEMA=${schema}"
       echo "DB_USER=devuser"
-      echo "DB_PASSWORD=devpassword"
+      # Source de vérité du mot de passe partagé : infra/.env (POSTGRES_PASSWORD).
+      # On l'y lit plutôt que de coder 'devpassword' en dur — sinon toute nouvelle
+      # app naîtrait avec l'ancienne valeur, et reset_url.sh devrait la corriger.
+      # Au pire (infra/.env absent au scaffold), reset_url.sh l'alignera au 1er setup2.
+      local _db_pass
+      _db_pass="$(grep -E '^POSTGRES_PASSWORD=' "$DEV_DIR/infra/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+      echo "DB_PASSWORD=${_db_pass:-devpassword}"
       echo ""
     fi
     if [[ "$framework" == "django" ]]; then

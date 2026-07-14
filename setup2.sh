@@ -2,11 +2,21 @@
 # setup2.sh — Initialisation complète du projet, version paramétrable par app
 #
 # Usage :
-#   bash setup2.sh [nom-app] [--yes] [--restart-sso-lab] [--keep-password <uids>]
+#   bash setup2.sh [nom-app] [--yes] [--restart-sso-lab] [--rotate-secrets] [--keep-password <uids>]
 #
 # --keep-password carpeta,naty : exclut ces comptes du renouvellement de mot de
 #   passe (liste CSV, insensible à la casse). Leur mot de passe actuel est conservé
 #   dans init.ldif et recopié dans sso-lab/.env. Sans effet hors --restart-sso-lab.
+#
+# --rotate-secrets : régénère les secrets applicatifs AVANT le redéploiement, puis
+#   les propage et redémarre. Deux rotations :
+#     • SECRET_KEY Django de l'app ciblée (ou de toutes les apps si aucun nom) —
+#       invalide les sessions en cours de cette/ces app(s) ;
+#     • mot de passe PostgreSQL partagé (rôle devuser), à chaud via ALTER ROLE,
+#       écrit dans infra/.env et propagé à toutes les apps par reset_url.sh.
+#   À utiliser sur fuite d'un secret, ou périodiquement. Le fonctionnement normal
+#   (sans ce drapeau) ne régénère jamais ces secrets : il se contente d'aligner le
+#   DB_PASSWORD de chaque app sur infra/.env (auto-réparation via reset_url.sh).
 #
 # Si nom-app est fourni, seules les étapes applicables à cette app sont lancées.
 # Sinon, comportement identique à setup.sh (toutes les apps).
@@ -25,12 +35,14 @@ PORTS_REGISTRY="$SCRIPT_DIR/.ports"
 APP_NAME=""
 FORCE=false
 RESTART_SSO_LAB=false
+ROTATE_SECRETS=false
 KEEP_PASSWORD=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --yes|-y)          FORCE=true ;;
     --restart-sso-lab) RESTART_SSO_LAB=true ;;
+    --rotate-secrets)  ROTATE_SECRETS=true ;;
     --keep-password)
       [[ $# -gt 1 ]] || { echo "--keep-password requiert une valeur" >&2; exit 1; }
       KEEP_PASSWORD="$2"; shift ;;
@@ -93,6 +105,33 @@ else
   bash "$SCRIPT_DIR/clean2.sh"
 fi
 echo -e "\033[0;32m✓ Projet remis à zéro.\033[0m"
+
+# ── 1bis. Rotation des secrets applicatifs (--rotate-secrets) ─────────────────
+# Placée ICI, entre le nettoyage et reset_url : la rotation DB écrit le nouveau
+# mot de passe dans infra/.env, et l'étape 2 (reset_url) le propage aussitôt aux
+# .env des apps. Postgres est encore debout (clean2.sh épargne l'infra), ce qui
+# permet l'ALTER ROLE à chaud. La rotation précède le démarrage des stacks (7),
+# donc les containers repartent d'emblée avec les nouveaux secrets.
+if $ROTATE_SECRETS; then
+  echo -e "\033[0;36m══ 1bis  Rotation des secrets applicatifs (--rotate-secrets)\033[0m"
+
+  # Mot de passe DB partagé (lab-wide par nature).
+  bash "$SCRIPT_DIR/rotate-db-password.sh" --yes || {
+    echo -e "\033[0;31m✗ Rotation DB échouée — arrêt avant tout redéploiement.\033[0m" >&2; exit 1; }
+
+  # SECRET_KEY Django : l'app ciblée, ou toutes les apps si aucun nom fourni.
+  if [[ -n "$APP_NAME" ]]; then
+    bash "$SCRIPT_DIR/rotate-app-secret.sh" "$APP_NAME" || true
+  else
+    while IFS= read -r _envf; do
+      [[ "$_envf" == "$SCRIPT_DIR/.env" ]] && continue   # .env racine du workspace
+      _app="$(basename "$(dirname "$_envf")")"
+      [[ "$_app" == "sso-lab" || "$_app" == "infra" ]] && continue
+      bash "$SCRIPT_DIR/rotate-app-secret.sh" "$_app" || true
+    done < <(find "$SCRIPT_DIR" -maxdepth 2 -name ".env" | sort)
+  fi
+  echo -e "\033[0;32m✓ Secrets applicatifs rotés.\033[0m"
+fi
 
 # ── 2. Propagation des adresses réseau ────────────────────────────────
 echo -e "\033[0;36m══ 2/7  Propagation des adresses réseau (reset_url.sh)\033[0m"
