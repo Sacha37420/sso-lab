@@ -2,23 +2,75 @@
 # setup2.sh — Initialisation complète du projet, version paramétrable par app
 #
 # Usage :
-#   bash setup2.sh [nom-app] [--yes]
+#   bash setup2.sh [nom-app] [--yes] [--restart-sso-lab] [--keep-password <uids>]
+#
+# --keep-password carpeta,naty : exclut ces comptes du renouvellement de mot de
+#   passe (liste CSV, insensible à la casse). Leur mot de passe actuel est conservé
+#   dans init.ldif et recopié dans sso-lab/.env. Sans effet hors --restart-sso-lab.
 #
 # Si nom-app est fourni, seules les étapes applicables à cette app sont lancées.
 # Sinon, comportement identique à setup.sh (toutes les apps).
+#
+# --restart-sso-lab : repart d'une identité VIERGE. Arrête sso-lab, supprime ses
+#   volumes d'identité (annuaire LDAP + realm Keycloak), puis appelle
+#   init-secrets.sh avec --init-ldif-password — qui régénère TOUS les mots de
+#   passe, y compris ceux des utilisateurs LDAP dans init.ldif.
+#   À utiliser quand on veut réinitialiser les mots de passe : c'est la seule
+#   façon cohérente, puisque osixia ne rejoue init.ldif que sur un volume vierge.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_NAME="${1:-}"
-FORCE=false
 PORTS_REGISTRY="$SCRIPT_DIR/.ports"
 
-# Gestion du flag --yes
-if [[ "$APP_NAME" == "--yes" || "$APP_NAME" == "-y" ]]; then
-  FORCE=true
-  APP_NAME=""
-elif [[ "${2:-}" == "--yes" || "${2:-}" == "-y" ]]; then
-  FORCE=true
+APP_NAME=""
+FORCE=false
+RESTART_SSO_LAB=false
+KEEP_PASSWORD=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --yes|-y)          FORCE=true ;;
+    --restart-sso-lab) RESTART_SSO_LAB=true ;;
+    --keep-password)
+      [[ $# -gt 1 ]] || { echo "--keep-password requiert une valeur" >&2; exit 1; }
+      KEEP_PASSWORD="$2"; shift ;;
+    --keep-password=*) KEEP_PASSWORD="${1#*=}" ;;
+    -*)                echo "Option inconnue : $1" >&2; exit 1 ;;
+    *)                 [[ -z "$APP_NAME" ]] && APP_NAME="$1" ;;
+  esac
+  shift
+done
+
+# ── 0. Réinitialisation de sso-lab (--restart-sso-lab) ────────────────────────
+if $RESTART_SSO_LAB; then
+  echo -e "\033[0;36m══ 0/7  Réinitialisation de sso-lab (identité vierge)\033[0m"
+
+  # Volumes SUPPRIMÉS — l'identité, et rien d'autre :
+  #   ldap-data / ldap-config : l'annuaire. Le vider est ce qui permet à osixia
+  #     de rejouer init.ldif au prochain démarrage (il ne bootstrappe QUE sur un
+  #     volume vierge) — donc d'appliquer les nouveaux mots de passe.
+  #   keycloak-data           : le realm. Recréé par create-app-client.sh (realm,
+  #     fédération LDAP, clients, rôles et flows de restriction).
+  #
+  # Volumes PRÉSERVÉS — délibérément, malgré le « supprime ses volumes » :
+  #   caddy-data       : les certificats Let's Encrypt. Les perdre relancerait
+  #     l'émission, plafonnée à 5 certificats/semaine et par domaine : on peut
+  #     rester sans HTTPS plusieurs jours. Rien à voir avec l'identité.
+  #   code-server-data : extensions et réglages VS Code.
+  docker compose -f "$SCRIPT_DIR/sso-lab/docker-compose.yml" \
+                 --env-file "$SCRIPT_DIR/sso-lab/.env" \
+                 down --remove-orphans 2>&1 | sed 's/^/  /' || true
+
+  for _vol in sso-lab_ldap-data sso-lab_ldap-config sso-lab_keycloak-data; do
+    if docker volume inspect "$_vol" > /dev/null 2>&1; then
+      docker volume rm "$_vol" > /dev/null 2>&1 \
+        && echo "  ■ volume $_vol supprimé" \
+        || echo -e "  \033[0;31m✗ échec de suppression de $_vol\033[0m"
+    else
+      echo "  ■ volume $_vol absent — ignoré"
+    fi
+  done
+  echo -e "\033[0;32m✓ sso-lab réinitialisé (caddy-data et code-server-data préservés).\033[0m"
 fi
 
 # ── Auto-enregistrement des ports si l'app est absente de .ports ──────
@@ -48,13 +100,16 @@ bash "$SCRIPT_DIR/reset_url.sh"
 echo -e "\033[0;32m✓ Adresses réseau propagées.\033[0m"
 
 # ── 3. Génération des mots de passe forts ─────────────────────────────
-if [[ -z "$APP_NAME" ]]; then
+# Aussi déclenché par --restart-sso-lab même avec un nom d'app : les volumes
+# d'identité viennent d'être supprimés, il FAUT régénérer les secrets — sinon le
+# .env garderait des mots de passe qui ne correspondent plus à rien.
+if [[ -z "$APP_NAME" ]] || $RESTART_SSO_LAB; then
   echo -e "\033[0;36m══ 3/7  Génération des secrets\033[0m"
-  if $FORCE; then
-    bash "$SCRIPT_DIR/init-secrets.sh" --yes
-  else
-    bash "$SCRIPT_DIR/init-secrets.sh"
-  fi
+  SECRET_ARGS=()
+  $FORCE           && SECRET_ARGS+=( --yes )
+  $RESTART_SSO_LAB && SECRET_ARGS+=( --init-ldif-password )
+  [[ -n "$KEEP_PASSWORD" ]] && SECRET_ARGS+=( --keep-password "$KEEP_PASSWORD" )
+  bash "$SCRIPT_DIR/init-secrets.sh" "${SECRET_ARGS[@]+"${SECRET_ARGS[@]}"}"
   echo -e "\033[0;32m✓ Secrets générés.\033[0m"
 fi
 
@@ -109,6 +164,15 @@ fi
 # Client code-server (oauth2-proxy) : recréé si absent (idempotent)
 bash "$SCRIPT_DIR/sso-lab/setup-code-server-auth.sh"
 echo -e "\033[0;32m✓ Clients Keycloak configurés.\033[0m"
+
+# ── 6ter. Emails des comptes existants (après un realm neuf) ─────────────────
+# Le realm vient d'être recréé : tous les comptes importés de LDAP repartent à
+# emailVerified=false. Si VERIFY_EMAIL est activé un jour, ceux dont l'adresse est
+# factice (hassan@ssolab.local, maria@ssolab.local) ne pourraient plus se connecter.
+if $RESTART_SSO_LAB; then
+  echo -e "\033[0;36m══ Validation des emails des comptes existants\033[0m"
+  bash "$SCRIPT_DIR/sso-lab/verify-existing-emails.sh" || true
+fi
 
 # ── 6bis. Schémas Postgres ───────────────────────────────────────────
 # Impérativement avant le démarrage des containers : c'est à son lancement que le

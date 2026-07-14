@@ -17,8 +17,13 @@ test-bots/
 test-django-angular/
 google-agenda/
 
-# Fichier LDAP — contient des mots de passe hashés, géré localement
-sso-lab/ldap/init.ldif
+# Fichier LDAP — contient des mots de passe hashés, géré localement.
+# Le motif couvre aussi les sauvegardes (init.ldif.bak, init.ldif.bak-<uid>)
+# que setup2.sh --restart-sso-lab laisse derrière lui : elles portent les mêmes
+# hachages que l'original.
+sso-lab/ldap/init.ldif*
+# … mais le gabarit, lui, est versionné.
+!sso-lab/ldap/init.ldif.example
 
 # Dossier de debug local
 .debug/
