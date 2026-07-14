@@ -72,6 +72,80 @@ dev/
 
 ---
 
+## Cloisonnement des accès
+
+Être authentifié dans le realm `ssolab` **ne donne accès à rien**. Chaque application est réservée
+à un ou plusieurs groupes LDAP, et ce cloisonnement repose sur **deux verrous complémentaires** —
+aucun des deux ne suffit seul.
+
+### Verrou 1 — Barrière navigateur (Keycloak)
+
+Chaque client possède un flow d'authentification dédié `require-<client>`, lié via
+`authenticationFlowBindingOverrides.browser`. Il refuse la connexion (`Access denied`) à qui n'a pas
+le rôle realm `<client>-access` — rôle assigné aux groupes autorisés.
+
+Ce verrou ne protège que **la porte du navigateur**.
+
+### Verrou 2 — Serrure API (backend)
+
+Le flow ne voit jamais un appel direct à l'API. Le backend doit donc vérifier lui-même, dans
+`api/authentication.py` :
+
+- **`azp`** (le client émetteur du token) doit être celui de l'application ;
+- le claim **`groups`** doit croiser `KEYCLOAK_REQUIRED_GROUPS` (renseigné dans le `.env` de l'app).
+
+> ⚠️ **Pourquoi `azp` et pas `aud`** — Keycloak ne place pas le `clientId` dans `aud` sans mapper
+> d'audience dédié, et les backends tournent en `verify_aud: False`. Le realm expose par ailleurs
+> `admin-cli` en client **public avec le password grant activé** (défaut Keycloak, non désactivable
+> proprement). Sans contrôle de `azp`, n'importe quel compte du realm obtient un token via `admin-cli`
+> et appelle **n'importe quelle API**, sans jamais croiser le flow. C'est le contrôle de `azp` qui
+> ferme ce contournement.
+
+### Récapitulatif
+
+| Application | Type | Groupe(s) requis | Barrière navigateur | Serrure API |
+|---|---|---|---|---|
+| `app-builder` | Django + Angular | `admins` | ✅ flow | ✅ `azp` + `groups` |
+| `analyse-lora` | Django + Angular | `developers` | ✅ flow | ✅ `azp` + `groups` |
+| `arbre-genealogique` | Django + Angular | `famille` | ✅ flow | ✅ `azp` + `groups` |
+| `restauration` | Django + Angular | `manager`, `cuisinier`, `serveur` | ✅ flow | ✅ `azp` + `groups` |
+| `test-django-angular` | Django + Angular | `developers` | ✅ flow | ✅ `azp` + `groups` |
+| `traitement-de-fichiers-compils` | Django + Angular | `developers` | ✅ flow | ✅ `azp` + `groups` |
+| `front-cadriciel` | Angular seul | `developers` | ✅ flow | — *(pas de backend)* |
+| `test-angular` | Angular seul | `developers` | ✅ flow | — *(pas de backend)* |
+| **`code-server`** | oauth2-proxy | `developers`, `admins` | ✅ **oauth2-proxy** | — *(pas d'API exposée)* |
+
+**Le cas `code-server`** est le seul qui n'utilise pas de flow Keycloak : il est protégé **en amont**
+par `oauth2-proxy`, qui intercepte `/code/*`, valide la session Keycloak et refuse tout utilisateur
+hors de `OAUTH2_PROXY_ALLOWED_GROUPS` (`developers,admins`, dans `sso-lab/docker-compose.yml`).
+code-server tourne lui-même en `--auth=none` : **il n'a aucune protection propre**. Retirer
+oauth2-proxy l'exposerait nu — avec un terminal ayant accès au Docker de l'hôte.
+
+### Non couverts
+
+| Élément | Situation |
+|---|---|
+| `admin-cli` | Client Keycloak intégré, public, password grant actif. Ne peut pas être supprimé — neutralisé par le contrôle `azp` des backends. |
+| phpLDAPadmin, pgAdmin | Non exposés via Caddy (LAN uniquement). |
+
+### Restreindre une application
+
+Tout passe par `--require-group` dans `<app>/.keycloak-client-opts` (liste séparée par des virgules) :
+
+```bash
+# <app>/.keycloak-client-opts
+--public --port 4208 --caddy-path mon-app --require-group famille,amis
+```
+
+`create-app-client.sh` s'occupe du reste, de façon idempotente : rôle `<client>-access` assigné à
+chaque groupe, flow `require-<client>` créé et lié au client, et `KEYCLOAK_REQUIRED_GROUPS` écrit
+dans le `.env` de l'app pour armer la serrure backend.
+
+> ⚠️ **Un nouvel inscrit n'appartient à aucun groupe** : il n'a donc accès à **aucune** application
+> tant qu'on ne l'a pas ajouté à un groupe LDAP.
+
+---
+
 ## Utilisateurs LDAP
 
 | Utilisateur | Groupes | code-server |

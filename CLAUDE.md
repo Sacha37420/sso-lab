@@ -29,9 +29,12 @@ Ce que fait `new-app.sh` :
 - Crée `.keycloak-client-opts` (utilisé par `create-app-client.sh`)
 - **Ne crée pas** le client Keycloak ni le dépôt GitHub
 
-Pour une saisie non-interactive (automatisation) :
+Le script demande enfin le **groupe requis** (cloisonnement). Le laisser vide rend l'app
+accessible à tout compte du realm — le script le signale bruyamment.
+
+Pour une saisie non-interactive (automatisation) — noter la **dernière ligne**, le groupe :
 ```bash
-printf 'mon-app\n4\n8088\n4206\nO\n' | bash new-app.sh
+printf 'mon-app\n4\n8088\n4206\nO\ndevelopers\n' | bash new-app.sh
 ```
 
 ---
@@ -68,6 +71,21 @@ Champs à renseigner au minimum :
 
 ---
 
+### Étape 3 bis — Cloisonner l'app (à ne pas sauter)
+
+Le lab est **exposé sur Internet**. Être authentifié dans le realm `ssolab` ne doit donner accès
+à rien : toute app se réserve à un ou plusieurs groupes LDAP. Ajouter `--require-group` dans
+`<app>/.keycloak-client-opts` (liste séparée par des virgules) :
+
+```
+--public --port 4208 --caddy-path mon-app --require-group famille,amis
+```
+
+`create-app-client.sh` en déduit tout, de façon idempotente : rôle `<client>-access` assigné à chaque
+groupe, flow `require-<client>` lié au client, et `KEYCLOAK_REQUIRED_GROUPS` écrit dans `<app>/.env`.
+
+---
+
 ### Étape 4 — Déploiement complet : `setup2.sh`
 
 ```bash
@@ -89,6 +107,68 @@ bash setup2.sh mon-app --yes
 > ```bash
 > bash create-app-client.sh mon-app $(cat mon-app/.keycloak-client-opts)
 > ```
+
+---
+
+## Sécurité — cloisonnement des applications
+
+Le lab est exposé sur Internet. **Deux verrous** protègent chaque app, et il faut les deux :
+supprimer l'un ouvre l'app en grand.
+
+### Verrou 1 — Barrière navigateur (flow Keycloak)
+
+Flow `require-<client>` lié au client via `authenticationFlowBindingOverrides.browser`. Il refuse
+(`Access denied`) qui n'a pas le rôle realm `<client>-access`. Posé automatiquement par
+`create-app-client.sh` dès que `--require-group` est présent.
+
+**Structure obligatoire du flow** — ne pas improviser ici, les deux variantes évidentes sont fausses :
+
+```
+require-<client>                        (top level)
+  ├─ require-<client>-auth              REQUIRED      ← encapsule TOUTE l'authentification
+  │    ├─ Cookie                        ALTERNATIVE
+  │    ├─ Identity Provider Redirector  ALTERNATIVE
+  │    └─ require-<client>-forms        ALTERNATIVE
+  │         ├─ Username Password Form   REQUIRED
+  │         └─ require-<client>-otp     CONDITIONAL
+  └─ require-<client>-gate              CONDITIONAL   ← la barrière
+       ├─ Condition - user role (negate = true, rôle <client>-access)  REQUIRED
+       └─ Deny access                                                  REQUIRED
+```
+
+- ❌ **Barrière à la racine d'une copie du flow `browser`** → Keycloak compte un sous-flow
+  `CONDITIONAL` non désactivé comme « required », et `REQUIRED and ALTERNATIVE at same level` ⇒ il
+  **ignore les alternatives**. Le formulaire de login disparaît et **plus personne ne peut se
+  connecter**. (Vérifié : ça a cassé `test-angular`.)
+- ❌ **Barrière dans le sous-flow `forms`** → l'utilisateur qui a déjà une session SSO passe par
+  l'authentificateur `Cookie`, qui court-circuite `forms` : la barrière n'est jamais évaluée.
+  **Contournement vérifié.**
+- ✅ **Encapsuler l'authentification dans un sous-flow `REQUIRED`** supprime toute `ALTERNATIVE` de la
+  racine. La barrière, frère `CONDITIONAL`, est alors toujours évaluée — cookie SSO ou pas.
+
+### Verrou 2 — Serrure API (backend)
+
+**Le flow ne voit jamais un appel direct à l'API.** Tout backend Django doit vérifier lui-même, dans
+`api/authentication.py` (le template le fait déjà) :
+
+1. **`azp`** — le client émetteur du token doit être `settings.KEYCLOAK_CLIENT_ID` ;
+2. le claim **`groups`** doit croiser `settings.KEYCLOAK_REQUIRED_GROUPS` (vide ⇒ aucun filtre).
+
+> **Pourquoi `azp` et pas `aud`** : les backends tournent en `verify_aud: False` (Keycloak ne met pas
+> le `clientId` dans `aud` sans mapper d'audience). Or le realm expose `admin-cli` en client **public
+> avec password grant** (défaut Keycloak). Sans contrôle de `azp`, tout compte du realm obtient un
+> token via `admin-cli` et appelle **n'importe quelle API**, sans jamais croiser le flow — un token
+> `admin-cli` ne porte d'ailleurs aucun claim `groups`, donc le contrôle des groupes seul le
+> rejetterait aussi. **Ne jamais retirer ces deux contrôles.**
+
+### Règles
+
+- Toute nouvelle app **doit** avoir un `--require-group`. Sans lui, elle accepte tout compte du realm.
+- Un nouvel inscrit n'a **aucun groupe** ⇒ accès à **aucune** app. C'est voulu.
+- `code-server` est l'exception : pas de flow, protégé en amont par **oauth2-proxy**
+  (`OAUTH2_PROXY_ALLOWED_GROUPS`). Il tourne en `--auth=none` et n'a **aucune protection propre**.
+- Après tout changement de cloisonnement, **tester dans les deux sens** : un membre du groupe passe,
+  un non-membre est refusé — et vérifier qu'un non-membre avec une session SSO active est aussi refusé.
 
 ---
 
