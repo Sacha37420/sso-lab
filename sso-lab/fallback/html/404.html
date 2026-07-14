@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>404 — page introuvable</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f7f9;
+      --card: #ffffff;
+      --text: #1b1f24;
+      --muted: #6b727c;
+      --border: #e3e6ea;
+      --accent: #3b5bdb;
+      --row: #fafbfc;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #16181d;
+        --card: #1e2127;
+        --text: #e8eaed;
+        --muted: #9aa1ac;
+        --border: #2c3038;
+        --accent: #748ffc;
+        --row: #23262d;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.6;
+    }
+    .card {
+      width: 100%;
+      max-width: 46rem;
+      padding: 2.5rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .code {
+      font-size: 3.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0;
+      text-align: center;
+    }
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin: 0.25rem 0 0.75rem;
+      text-align: center;
+    }
+    .lead {
+      margin: 0 0 2rem;
+      color: var(--muted);
+      text-align: center;
+    }
+    h2 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin: 0 0 0.75rem;
+    }
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.925rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.7rem 0.9rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    tbody tr:nth-child(odd) { background: var(--row); }
+    tbody tr:last-child td { border-bottom: none; }
+    td.desc { color: var(--muted); }
+    td.link a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    td.link a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <p class="code">404</p>
+    <h1>Cette page n'existe pas</h1>
+    <p class="lead">L'adresse demandée ne correspond à aucune application du lab.</p>
+
+    <h2>Applications disponibles</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Application</th>
+            <th>Description</th>
+            <th>Lien</th>
+          </tr>
+        </thead>
+        <tbody>
+<!-- APPS:START — régénéré par complete_404.sh, ne pas éditer à la main -->
+          <tr>
+            <td><strong>Portail</strong></td>
+            <td class="desc">Tableau de bord du lab : applications déployées, éditeur de code et création de projet.</td>
+            <td class="link"><a href="/cadriciel/">/cadriciel/</a></td>
+          </tr>
+          <tr>
+            <td><strong>Analyse LoRa</strong></td>
+            <td class="desc">Suivi de capteurs LoRa : relevés, mesures calculées et droits d'accès par capteur.</td>
+            <td class="link"><a href="/lora/">/lora/</a></td>
+          </tr>
+          <tr>
+            <td><strong>App Builder</strong></td>
+            <td class="desc">Générateur d'applications : modèles de données, endpoints, pages et pipelines de déploiement.</td>
+            <td class="link"><a href="/app-builder/">/app-builder/</a></td>
+          </tr>
+          <tr>
+            <td><strong>Restauration</strong></td>
+            <td class="desc">Gestion de restaurant : fournisseurs, recettes, commandes, paiements, planning et analyses de ventes.</td>
+            <td class="link"><a href="/restauration/">/restauration/</a></td>
+          </tr>
+          <tr>
+            <td><strong>Traitement de fichiers</strong></td>
+            <td class="desc">Dépôt de fichiers avec édition, suivi des modifications et historique.</td>
+            <td class="link"><a href="/traitement-de-fichiers-compils/">/traitement-de-fichiers-compils/</a></td>
+          </tr>
+          <tr>
+            <td><strong>Arbre généalogique</strong></td>
+            <td class="desc">Affichage et édition d'arbres généalogiques : personnes, relations et périodes d'union.</td>
+            <td class="link"><a href="/arbre-genealogique/">/arbre-genealogique/</a></td>
+          </tr>
+<!-- APPS:END -->
+        </tbody>
+      </table>
+    </div>
+  </main>
+</body>
+</html>

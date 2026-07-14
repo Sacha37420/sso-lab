@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .app-descriptions — apps listées sur la page 404 du lab
+#
+# Lu par complete_404.sh, qui régénère le tableau de sso-lab/fallback/404.html.
+#
+# Format :  dossier | Nom affiché | Description | [lien]
+#
+#   dossier      dossier de l'app dans dev/ (doit exister)
+#   lien         optionnel : par défaut le préfixe front est déduit du label
+#                caddy.handle_path du docker-compose.yml de l'app. À renseigner
+#                seulement si l'app expose plusieurs routes (ex: sso-lab).
+#
+# Seules les apps listées ici apparaissent sur la page. Les lignes commentées
+# sont ignorées : c'est ainsi qu'on garde les bacs à sable et l'infra hors de la
+# page, qui est servie SANS authentification.
+# ─────────────────────────────────────────────────────────────────────────────
+
+front-cadriciel|Portail|Tableau de bord du lab : applications déployées, éditeur de code et création de projet.
+analyse-lora|Analyse LoRa|Suivi de capteurs LoRa : relevés, mesures calculées et droits d'accès par capteur.
+app-builder|App Builder|Générateur d'applications : modèles de données, endpoints, pages et pipelines de déploiement.
+restauration|Restauration|Gestion de restaurant : fournisseurs, recettes, commandes, paiements, planning et analyses de ventes.
+traitement-de-fichiers-compils|Traitement de fichiers|Dépôt de fichiers avec édition, suivi des modifications et historique.
+arbre-genealogique|Arbre généalogique|Affichage et édition d'arbres généalogiques : personnes, relations et périodes d'union.
+
+# ── Bacs à sable et infra (décommenter pour les afficher publiquement)
+# test-angular|Test Angular|Bac à sable du template Angular seul.
+# test-django-angular|Test Django + Angular|Bac à sable du template Django + Angular.
+# sso-lab|Keycloak|Console d'administration de l'IdP du lab.|/auth/
+# sso-lab|Code Server|VS Code dans le navigateur, protégé par le SSO.|/code/

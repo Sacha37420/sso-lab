@@ -47,6 +47,38 @@ services:
       - sso-net
 
   # ──────────────────────────────────────────
+  # Fallback — route par défaut du lab
+  # Reçoit tout ce qu'aucun préfixe d'app ne matche : le label
+  # `caddy.handle: "/*"` est le matcher le moins spécifique, et l'adaptateur
+  # Caddyfile trie les `handle` du plus spécifique au moins spécifique — cette
+  # route est donc toujours évaluée en dernier, après celles des apps.
+  # Sans elle, une URL inconnue traverse le routeur sans rencontrer de handler
+  # et Caddy répond 200 avec un corps vide (page blanche).
+  #
+  # Le catch-all doit venir d'un label et non d'un bloc de site dans
+  # caddy/Caddyfile : caddy-docker-proxy ne fusionne pas les deux sources pour
+  # un même domaine, il les concatène. Caddy rejette alors le domaine en double
+  # ("ambiguous site definition") et CDP supprime le bloc généré par les labels,
+  # ce qui fait disparaître les routes de toutes les apps.
+  # ──────────────────────────────────────────
+  fallback:
+    image: nginx:alpine
+    container_name: fallback
+    restart: unless-stopped
+    volumes:
+      - ./fallback/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Le répertoire est monté, pas le fichier : un bind-mount fichier est lié à
+      # l'inode, donc une réécriture de 404.html (par complete_404.sh) resterait
+      # invisible du container jusqu'à son redémarrage.
+      - ./fallback/html:/usr/share/nginx/html:ro
+    networks:
+      - sso-net
+    labels:
+      caddy: "${DOMAIN}"
+      caddy.handle: "/*"
+      caddy.handle.reverse_proxy: "{{upstreams 80}}"
+
+  # ──────────────────────────────────────────
   # OpenLDAP
   # Image : bitnami/openldap (maintenue activement, remplace osixia)
   # Rôle  : annuaire d'identités (users/groups)
