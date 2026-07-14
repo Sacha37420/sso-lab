@@ -21,9 +21,9 @@ die()     { echo -e "${RED}✗${NC} $*" >&2; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ENV_FILE="${SCRIPT_DIR}/.env"
-CREATE_CLIENT="${ROOT_DIR}/create-app-client.sh"
+CREATE_CLIENT="${ROOT_DIR}/scripts/create-app-client.sh"
 
-[[ -f "$CREATE_CLIENT" ]] || die "create-app-client.sh introuvable dans $ROOT_DIR"
+[[ -f "$CREATE_CLIENT" ]] || die "create-app-client.sh introuvable dans $ROOT_DIR/scripts"
 [[ -f "$ENV_FILE" ]]      || die ".env introuvable dans $SCRIPT_DIR"
 
 # ── Cookie secret ─────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ Les applications sont des **sous-modules git** pointant vers leurs propres dép�
 ### Étape 1 — Scaffold : `new-app.sh`
 
 ```bash
-bash new-app.sh
+bash scripts/new-app.sh
 ```
 
 Le script demande interactivement :
@@ -34,7 +34,7 @@ accessible à tout compte du realm — le script le signale bruyamment.
 
 Pour une saisie non-interactive (automatisation) — noter la **dernière ligne**, le groupe :
 ```bash
-printf 'mon-app\n4\n8088\n4206\nO\ndevelopers\n' | bash new-app.sh
+printf 'mon-app\n4\n8088\n4206\nO\ndevelopers\n' | bash scripts/new-app.sh
 ```
 
 ---
@@ -89,7 +89,7 @@ groupe, flow `require-<client>` lié au client, et `KEYCLOAK_REQUIRED_GROUPS` é
 ### Étape 4 — Déploiement complet : `setup2.sh`
 
 ```bash
-bash setup2.sh mon-app --yes
+bash scripts/setup2.sh mon-app --yes
 ```
 
 `setup2.sh <app>` enchaîne **dans l'ordre** :
@@ -105,7 +105,7 @@ bash setup2.sh mon-app --yes
 > **C'est `setup2.sh` qui crée le client Keycloak**, via `create-app-client.sh` à l'étape 5.  
 > `create-app-client.sh` peut aussi être appelé seul pour recréer/mettre à jour un client sans tout redéployer :
 > ```bash
-> bash create-app-client.sh mon-app $(cat mon-app/.keycloak-client-opts)
+> bash scripts/create-app-client.sh mon-app $(cat mon-app/.keycloak-client-opts)
 > ```
 
 ---
@@ -185,6 +185,11 @@ require-<client>                        (top level)
 ---
 
 ## Scripts utiles
+
+Les scripts d'orchestration vivent dans **`scripts/`** — les lancer avec `bash scripts/<nom>`
+depuis la racine `dev/` (ils résolvent eux-mêmes la racine, donc le répertoire courant importe peu).
+Les scripts **propres à un service** gardent leur chemin (ex: `sso-lab/setup-code-server-auth.sh`
+ci-dessous, lancé avec `bash sso-lab/…`).
 
 | Script | Rôle |
 |---|---|

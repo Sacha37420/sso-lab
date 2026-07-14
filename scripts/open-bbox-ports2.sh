@@ -9,7 +9,7 @@
 # Utilise l'API REST Bbox (Bouygues Telecom).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ── Sources ───────────────────────────────────────────────────────────────────
 source "$SCRIPT_DIR/.env"        # → SERVER_URL_LAN, DOMAIN

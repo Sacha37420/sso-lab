@@ -28,7 +28,7 @@ ok()   { echo -e "  ${GREEN}✔ $*${NC}"; }
 warn() { echo -e "  ${YELLOW}⚠ $*${NC}"; }
 info() { echo -e "  ${CYAN}→ $*${NC}"; }
 
-DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PG_CONTAINER="${PG_CONTAINER:-dev-postgres}"
 ONLY_APP="${1:-}"
 

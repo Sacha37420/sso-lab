@@ -21,7 +21,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESCRIPTIONS="$SCRIPT_DIR/.app-descriptions"
 TARGET="$SCRIPT_DIR/sso-lab/fallback/html/404.html"
 MARK_START='<!-- APPS:START'

@@ -29,8 +29,12 @@
 #   façon cohérente, puisque osixia ne rejoue init.ldif que sur un volume vierge.
 set -uo pipefail
 
+# SCRIPT_DIR = ce dossier (scripts/), pour appeler les scripts frères.
+# ROOT_DIR   = la racine du workspace (dev/), pour toutes les autres ressources
+#              (apps, sso-lab, infra, bbox.env, .env, .ports…).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PORTS_REGISTRY="$SCRIPT_DIR/.ports"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PORTS_REGISTRY="$ROOT_DIR/.ports"
 
 APP_NAME=""
 FORCE=false
@@ -69,8 +73,8 @@ if $RESTART_SSO_LAB; then
   #     l'émission, plafonnée à 5 certificats/semaine et par domaine : on peut
   #     rester sans HTTPS plusieurs jours. Rien à voir avec l'identité.
   #   code-server-data : extensions et réglages VS Code.
-  docker compose -f "$SCRIPT_DIR/sso-lab/docker-compose.yml" \
-                 --env-file "$SCRIPT_DIR/sso-lab/.env" \
+  docker compose -f "$ROOT_DIR/sso-lab/docker-compose.yml" \
+                 --env-file "$ROOT_DIR/sso-lab/.env" \
                  down --remove-orphans 2>&1 | sed 's/^/  /' || true
 
   for _vol in sso-lab_ldap-data sso-lab_ldap-config sso-lab_keycloak-data; do
@@ -87,7 +91,7 @@ fi
 
 # ── Auto-enregistrement des ports si l'app est absente de .ports ──────
 if [[ -n "$APP_NAME" ]] && ! grep -qE "^${APP_NAME}:" "$PORTS_REGISTRY" 2>/dev/null; then
-  DC="$SCRIPT_DIR/$APP_NAME/docker-compose.yml"
+  DC="$ROOT_DIR/$APP_NAME/docker-compose.yml"
   if [[ -f "$DC" ]]; then
     # Convention : container port 8000 = backend Django, port 80 = frontend nginx
     BPORT=$(grep -E '^\s+- "[0-9]+:8000"' "$DC" | sed 's/.*"\([0-9]*\):8000".*/\1/' | head -1)
@@ -124,11 +128,11 @@ if $ROTATE_SECRETS; then
     bash "$SCRIPT_DIR/rotate-app-secret.sh" "$APP_NAME" || true
   else
     while IFS= read -r _envf; do
-      [[ "$_envf" == "$SCRIPT_DIR/.env" ]] && continue   # .env racine du workspace
+      [[ "$_envf" == "$ROOT_DIR/.env" ]] && continue   # .env racine du workspace
       _app="$(basename "$(dirname "$_envf")")"
       [[ "$_app" == "sso-lab" || "$_app" == "infra" ]] && continue
       bash "$SCRIPT_DIR/rotate-app-secret.sh" "$_app" || true
-    done < <(find "$SCRIPT_DIR" -maxdepth 2 -name ".env" | sort)
+    done < <(find "$ROOT_DIR" -maxdepth 2 -name ".env" | sort)
   fi
   echo -e "\033[0;32m✓ Secrets applicatifs rotés.\033[0m"
 fi
@@ -154,7 +158,7 @@ fi
 
 # ── 4. Démarrage de sso-lab ───────────────────────────────────────────
 echo -e "\033[0;36m══ 4/7  Démarrage de sso-lab (Keycloak + LDAP)\033[0m"
-_KC_PORT_PROBE=$(grep -E '^PORT_KEYCLOAK=' "$SCRIPT_DIR/sso-lab/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
+_KC_PORT_PROBE=$(grep -E '^PORT_KEYCLOAK=' "$ROOT_DIR/sso-lab/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
 _KC_PORT_PROBE="${_KC_PORT_PROBE:-8080}"
 if [[ -n "$APP_NAME" ]] && curl -sf "http://localhost:${_KC_PORT_PROBE}/realms/master" > /dev/null 2>&1; then
   echo -e "\033[0;33m⚠ sso-lab déjà actif — redémarrage ignoré.\033[0m"
@@ -165,7 +169,7 @@ fi
 
 # ── 5. Attente Keycloak ───────────────────────────────────────────────
 echo -e "\033[0;36m══ 5/7  Attente de Keycloak\033[0m"
-KC_PORT=$(grep -E '^PORT_KEYCLOAK=' "$SCRIPT_DIR/sso-lab/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
+KC_PORT=$(grep -E '^PORT_KEYCLOAK=' "$ROOT_DIR/sso-lab/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
 KC_PORT="${KC_PORT:-8080}"
 # Depuis un container Docker (ex: code-server), utiliser le hostname keycloak
 if [ -f /.dockerenv ]; then
@@ -201,7 +205,7 @@ else
   bash "$SCRIPT_DIR/create-app-client.sh"
 fi
 # Client code-server (oauth2-proxy) : recréé si absent (idempotent)
-bash "$SCRIPT_DIR/sso-lab/setup-code-server-auth.sh"
+bash "$ROOT_DIR/sso-lab/setup-code-server-auth.sh"
 echo -e "\033[0;32m✓ Clients Keycloak configurés.\033[0m"
 
 # ── 6ter. Emails des comptes existants (après un realm neuf) ─────────────────
@@ -210,7 +214,7 @@ echo -e "\033[0;32m✓ Clients Keycloak configurés.\033[0m"
 # factice (hassan@ssolab.local, maria@ssolab.local) ne pourraient plus se connecter.
 if $RESTART_SSO_LAB; then
   echo -e "\033[0;36m══ Validation des emails des comptes existants\033[0m"
-  bash "$SCRIPT_DIR/sso-lab/verify-existing-emails.sh" || true
+  bash "$ROOT_DIR/sso-lab/verify-existing-emails.sh" || true
 fi
 
 # ── 6bis. Schémas Postgres ───────────────────────────────────────────
@@ -243,7 +247,7 @@ echo -e "\033[0;32m✓ ports.env généré.\033[0m"
 # ── 9. Ouverture des ports Bbox ──────────────────────────────────────
 # HTTPS (DOMAIN configuré) → seulement 80+443 ; HTTP → tous les PORT_*
 echo -e "\033[0;36m══ Ouverture des ports sur la Bbox (open-bbox-ports2.sh)\033[0m"
-BBOX_IP=$(grep -E '^BBOX_IP=' "$SCRIPT_DIR/bbox.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
+BBOX_IP=$(grep -E '^BBOX_IP=' "$ROOT_DIR/bbox.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
 BBOX_IP="${BBOX_IP:-192.168.1.254}"
 if curl -sk --max-time 3 "https://${BBOX_IP}/api/v1/device" > /dev/null 2>&1; then
   bash "$SCRIPT_DIR/open-bbox-ports2.sh"

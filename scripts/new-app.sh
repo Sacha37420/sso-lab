@@ -24,7 +24,7 @@ warn() { echo -e "  ${YELLOW}⚠ $*${NC}"; }
 err()  { echo -e "\n${RED}${BOLD}✘ Erreur : $*${NC}\n" >&2; exit 1; }
 info() { echo -e "  ${CYAN}→ $*${NC}"; }
 
-DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INFRA_SCHEMAS="$DEV_DIR/infra/init/00_schemas.sql"
 DOCKER_UID="$(id -u):$(id -g)"
 PORTS_REGISTRY="$DEV_DIR/.ports"

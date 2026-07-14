@@ -67,7 +67,7 @@ usage() {
 # Mode tout-en-un : aucun argument ou premier argument '*'
 # → crée les clients pour chaque dossier contenant un docker-compose.yml, sauf sso-lab
 if [[ $# -lt 1 ]] || [[ "${1:-}" == "*" ]]; then
-  _sd="$(cd "$(dirname "$0")" && pwd)"
+  _sd="$(cd "$(dirname "$0")/.." && pwd)"
   [[ $# -gt 0 ]] && shift   # consomme le '*' si présent
   _found=0
   while IFS= read -r _compose; do
@@ -100,7 +100,7 @@ fi
 APP_NAME="$1"; shift
 
 # Lire les options depuis .keycloak-client-opts si présent et si aucune option extra n'est passée
-_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+_SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 _OPTS_FILE="${_SCRIPT_DIR}/${APP_NAME}/.keycloak-client-opts"
 if [[ -f "$_OPTS_FILE" && $# -eq 0 ]]; then
   _extra_opts=()
@@ -155,7 +155,7 @@ done
 
 
 # ── Chemins ───────────────────────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SSO_ENV_FILE="$SCRIPT_DIR/sso-lab/.env"
 INFRA_ENV_FILE="$SCRIPT_DIR/infra/.env"
 APP_DIR="$SCRIPT_DIR/$APP_NAME"
@@ -778,7 +778,7 @@ fi
 
 # URIs HTTPS via Caddy — ajoutées si --caddy-path est fourni et DOMAIN configuré
 if [[ -n "$CADDY_PATH" ]]; then
-  _ROOT_ENV="$(cd "$(dirname "$0")" && pwd)/.env"
+  _ROOT_ENV="$(cd "$(dirname "$0")/.." && pwd)/.env"
   _DOMAIN=$(_env_val "$_ROOT_ENV" "DOMAIN" "CHANGE_ME")
   if [[ "$_DOMAIN" != "CHANGE_ME" && -n "$_DOMAIN" ]]; then
     DESIRED_URIS+=("https://${_DOMAIN}/${CADDY_PATH}${REDIRECT_PATH}")

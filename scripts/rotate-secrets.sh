@@ -21,7 +21,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SSO_ENV="$SCRIPT_DIR/sso-lab/.env"
 
 info(){ echo -e "\033[0;36m→\033[0m $*"; }

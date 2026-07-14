@@ -14,7 +14,7 @@
 #   Avec --app, avec --force  → arrête puis redémarre la stack ciblée
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ── Parsing des arguments ──────────────────────────────────────────────────────
 APP_NAME=""

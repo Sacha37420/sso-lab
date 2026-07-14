@@ -21,7 +21,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ── Lecture d'une valeur dans un fichier .env ──────────────────────────────
 _env_val() {

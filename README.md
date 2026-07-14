@@ -173,14 +173,14 @@ dans le `.env` de l'app pour armer la serrure backend.
 ### Étape 1 — Scaffold
 
 ```bash
-bash new-app.sh
+bash scripts/new-app.sh
 ```
 
 Le script demande interactivement : nom, type (Spring / Django / Angular), ports. Il crée le dossier complet avec backend, frontend, docker-compose, Dockerfiles, nginx, `.env`…
 
 Pour une saisie non-interactive :
 ```bash
-printf 'mon-app\n4\n8089\n4207\nO\n' | bash new-app.sh
+printf 'mon-app\n4\n8089\n4207\nO\n' | bash scripts/new-app.sh
 # Types : 1=Spring  2=Spring+Angular  3=Django  4=Django+Angular  5=Angular
 ```
 
@@ -208,7 +208,7 @@ nano mon-app/.env
 ### Étape 4 — Déploiement complet
 
 ```bash
-bash setup2.sh mon-app --yes
+bash scripts/setup2.sh mon-app --yes
 ```
 
 `setup2.sh` enchaîne dans l'ordre :
@@ -274,19 +274,19 @@ Ouvrir **code-server** (`https://DOMAIN/code/`), coller le prompt généré dans
 ### Rebuilder une app
 
 ```bash
-bash setup2.sh mon-app --yes
+bash scripts/setup2.sh mon-app --yes
 ```
 
 ### Rebuilder uniquement les containers (sans recréer le client Keycloak)
 
 ```bash
-bash recompose_docker.sh --app mon-app --force
+bash scripts/recompose_docker.sh --app mon-app --force
 ```
 
 ### Recréer le client Keycloak seul
 
 ```bash
-bash create-app-client.sh mon-app $(cat mon-app/.keycloak-client-opts)
+bash scripts/create-app-client.sh mon-app $(cat mon-app/.keycloak-client-opts)
 ```
 
 ### Changer l'IP du serveur
@@ -295,18 +295,22 @@ bash create-app-client.sh mon-app $(cat mon-app/.keycloak-client-opts)
 # 1. Éditer bbox.env → SERVER_URL_LAN / SERVER_URL_WAN
 nano bbox.env
 # 2. Propager vers tous les .env et redémarrer
-bash reset_url.sh && bash recompose_docker.sh --force
+bash scripts/reset_url.sh && bash scripts/recompose_docker.sh --force
 ```
 
 ### Arrêter une app
 
 ```bash
-bash clean2.sh mon-app
+bash scripts/clean2.sh mon-app
 ```
 
 ---
 
 ## Scripts utiles
+
+Les scripts d'orchestration vivent dans **`scripts/`** — les lancer avec `bash scripts/<nom>`
+depuis la racine `dev/` (ils résolvent eux-mêmes la racine, donc le répertoire courant importe peu).
+Les scripts internes à un service (ex: `sso-lab/`, `infra/`) restent dans leur dossier.
 
 | Script | Rôle |
 |---|---|
@@ -399,14 +403,14 @@ dev/
 
 ```bash
 # Premier lancement (ou après un reset complet)
-bash setup2.sh --yes   # démarre tout le lab
+bash scripts/setup2.sh --yes   # démarre tout le lab
 ```
 
 Ensuite on ne manipule plus que les applications individuelles :
 
 ```bash
-bash setup2.sh mon-app --yes    # déployer une app
-bash clean2.sh mon-app          # arrêter une app
+bash scripts/setup2.sh mon-app --yes    # déployer une app
+bash scripts/clean2.sh mon-app          # arrêter une app
 ```
 
 > **Journal de bugs** : les incidents rencontrés et leurs corrections sont documentés dans `.debug/` (ignoré par git).

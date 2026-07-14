@@ -5,7 +5,7 @@
 #   bash clean2.sh mon-app   ← ne nettoyer que mon-app
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="${1:-}"
 
 # ── 1. Arrêt des stacks Docker et suppression des volumes ──────────────

@@ -20,7 +20,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 APP="${1:-}"
 [[ -n "$APP" ]] || { echo "Usage : bash rotate-app-secret.sh <app>" >&2; exit 1; }

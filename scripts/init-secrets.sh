@@ -31,7 +31,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 SSO_ENV="$SCRIPT_DIR/sso-lab/.env"
 INIT_LDIF="$SCRIPT_DIR/sso-lab/ldap/init.ldif"
