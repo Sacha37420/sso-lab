@@ -17,14 +17,6 @@ CREATE SCHEMA IF NOT EXISTS spring_app;
 
 CREATE SCHEMA IF NOT EXISTS table_manager;
 
-CREATE SCHEMA IF NOT EXISTS test_django_angular;
-
-CREATE SCHEMA IF NOT EXISTS test_django;
-
-CREATE SCHEMA IF NOT EXISTS test_angular_django;
-
-CREATE SCHEMA IF NOT EXISTS test_bots;
-
 CREATE SCHEMA IF NOT EXISTS google_agenda;
 
 CREATE SCHEMA IF NOT EXISTS analyse_lora;

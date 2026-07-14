@@ -23,7 +23,5 @@ traitement-de-fichiers-compils|Traitement de fichiers|Dépôt de fichiers avec �
 arbre-genealogique|Arbre généalogique|Affichage et édition d'arbres généalogiques : personnes, relations et périodes d'union.
 
 # ── Bacs à sable et infra (décommenter pour les afficher publiquement)
-# test-angular|Test Angular|Bac à sable du template Angular seul.
-# test-django-angular|Test Django + Angular|Bac à sable du template Django + Angular.
 # sso-lab|Keycloak|Console d'administration de l'IdP du lab.|/auth/
 # sso-lab|Code Server|VS Code dans le navigateur, protégé par le SSO.|/code/

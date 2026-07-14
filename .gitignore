@@ -10,11 +10,6 @@ ports.env
 
 # Registre des ports — géré localement par new-app.sh
 .ports
-test-angular/
-test-django/
-test-angular-django/
-test-bots/
-test-django-angular/
 google-agenda/
 
 # Fichier LDAP — contient des mots de passe hashés, géré localement.
