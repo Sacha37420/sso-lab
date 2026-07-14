@@ -177,6 +177,23 @@ _env_val() {
   echo "${val:-$default}"
 }
 
+# ── Normalisation d'un booléen .env en littéral JSON ──────────────────────────
+# Tolère true/1/yes/oui/o ; tout le reste vaut false. Garantit une valeur que
+# `jq --argjson` accepte (une saisie libre du .env la ferait échouer).
+_bool() {
+  case "${1,,}" in
+    true|1|yes|y|oui|o) echo "true" ;;
+    *)                  echo "false" ;;
+  esac
+}
+
+# ── Encodage URL d'un composant de chemin/query ───────────────────────────────
+# Les alias de flow et noms de groupe peuvent contenir des caractères à échapper.
+_urlenc() {
+  python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1" \
+    2>/dev/null || echo "$1"
+}
+
 # ── Mise à jour idempotente d'une variable dans un fichier .env ───────────────
 # Usage : upsert_env <fichier> <clé> <valeur>
 # Remplace la ligne KEY=... existante (+ éventuelles lignes orphelines suivantes
@@ -354,13 +371,45 @@ else
   success "Realm '$REALM' créé."
 fi
 
-# ── Réglages realm idempotents : « mot de passe oublié » + SMTP ───────────────
-#   Appliqués à chaque exécution (donc aussi sur un realm déjà existant).
-#   Le SMTP est lu depuis sso-lab/.env. Tant que SMTP_FROM est vide, on ne
-#   touche pas à la config SMTP : le lien « mot de passe oublié » s'affichera
-#   mais ne pourra pas envoyer d'email.
+# ── Réglages realm idempotents : inscription, « mot de passe oublié », SMTP ───
+#   Appliqués à chaque exécution, donc aussi sur un realm déjà existant : c'est
+#   ici — et non dans le payload de création ci-dessus, qui ne joue qu'une fois
+#   dans la vie du realm — qu'il faut toucher aux réglages de login.
 SMTP_FROM_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_FROM" "")
-if [[ -n "$SMTP_FROM_VAL" ]]; then
+SMTP_PASS_CHECK=$(_env_val "$SSO_ENV_FILE" "SMTP_PASSWORD" "")
+REGISTRATION_VAL=$(_bool "$(_env_val "$SSO_ENV_FILE" "REGISTRATION_ALLOWED" "false")")
+VERIFY_EMAIL_VAL=$(_bool "$(_env_val "$SSO_ENV_FILE" "VERIFY_EMAIL" "true")")
+
+# Un SMTP incomplet n'envoie rien. Or « inscription » et « vérification d'email »
+# enferment l'utilisateur dehors si le mail ne part pas : le nouvel inscrit reste
+# bloqué sur « vérifiez votre email », et TOUT compte existant à emailVerified=false
+# se voit réclamer une validation impossible à la connexion suivante. On désactive
+# donc les deux tant que le SMTP n'est pas réellement utilisable.
+#   Un relais local sans authentification est légitime (SMTP_USER vide) : on
+#   n'exige un mot de passe que si un utilisateur SMTP est déclaré.
+SMTP_USER_CHECK=$(_env_val "$SSO_ENV_FILE" "SMTP_USER" "")
+SMTP_READY=true
+[[ -z "$SMTP_FROM_VAL" ]] && SMTP_READY=false
+[[ -n "$SMTP_USER_CHECK" && -z "$SMTP_PASS_CHECK" ]] && SMTP_READY=false
+if [[ "$SMTP_READY" != "true" ]]; then
+  if [[ "$REGISTRATION_VAL" == "true" || "$VERIFY_EMAIL_VAL" == "true" ]]; then
+    warn "  SMTP incomplet dans sso-lab/.env (SMTP_FROM et/ou SMTP_PASSWORD vide)."
+    warn "  → inscription et vérification d'email laissées désactivées."
+  fi
+  REGISTRATION_VAL="false"
+  VERIFY_EMAIL_VAL="false"
+fi
+
+REALM_LOGIN_PAYLOAD=$(jq -n \
+  --argjson registration "$REGISTRATION_VAL" \
+  --argjson verify "$VERIFY_EMAIL_VAL" \
+  '{
+    resetPasswordAllowed: true,
+    registrationAllowed:  $registration,
+    verifyEmail:          $verify
+  }')
+
+if [[ "$SMTP_READY" == "true" ]]; then
   info "  Configuration SMTP du realm (from: $SMTP_FROM_VAL)..."
   SMTP_HOST_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_HOST" "smtp.gmail.com")
   SMTP_PORT_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_PORT" "587")
@@ -371,32 +420,32 @@ if [[ -n "$SMTP_FROM_VAL" ]]; then
   SMTP_SSL_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_SSL" "false")
   [[ -n "$SMTP_USER_VAL" ]] && SMTP_AUTH_VAL="true" || SMTP_AUTH_VAL="false"
 
-  REALM_SMTP_PAYLOAD=$(jq -n \
+  REALM_LOGIN_PAYLOAD=$(echo "$REALM_LOGIN_PAYLOAD" | jq \
     --arg host "$SMTP_HOST_VAL" --arg port "$SMTP_PORT_VAL" \
     --arg from "$SMTP_FROM_VAL" --arg disp "$SMTP_DISP_VAL" \
     --arg user "$SMTP_USER_VAL" --arg pass "$SMTP_PASS_VAL" \
     --arg starttls "$SMTP_STARTTLS_VAL" --arg ssl "$SMTP_SSL_VAL" \
     --arg auth "$SMTP_AUTH_VAL" \
-    '{
-      resetPasswordAllowed: true,
+    '. + {
       smtpServer: {
         host: $host, port: $port, from: $from, fromDisplayName: $disp,
         starttls: $starttls, ssl: $ssl, auth: $auth, user: $user, password: $pass
       }
     }')
-
-  SMTP_HTTP=$(curl -s -o /tmp/_kc_smtp.json -w "%{http_code}" \
-    -X PUT \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "$REALM_SMTP_PAYLOAD" \
-    "$KEYCLOAK_URL/admin/realms/$REALM")
-  [[ "$SMTP_HTTP" =~ ^2 ]] \
-    && success "  SMTP du realm configuré." \
-    || warn    "  SMTP du realm : HTTP $SMTP_HTTP — $(cat /tmp/_kc_smtp.json)"
 else
   info "  SMTP non configuré (SMTP_FROM vide dans sso-lab/.env) — « mot de passe oublié » sans envoi d'email."
 fi
+
+info "  Réglages de login du realm (inscription: $REGISTRATION_VAL, vérification email: $VERIFY_EMAIL_VAL)..."
+LOGIN_HTTP=$(curl -s -o /tmp/_kc_login.json -w "%{http_code}" \
+  -X PUT \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$REALM_LOGIN_PAYLOAD" \
+  "$KEYCLOAK_URL/admin/realms/$REALM")
+[[ "$LOGIN_HTTP" =~ ^2 ]] \
+  && success "  Réglages de login du realm appliqués." \
+  || warn    "  Réglages de login du realm : HTTP $LOGIN_HTTP — $(cat /tmp/_kc_login.json)"
 
 # ── Fédération LDAP (vérifiée à chaque exécution) ─────────────────────────────
 info "  Vérification du provider LDAP..."
@@ -491,16 +540,22 @@ else
     || warn    "  Synchronisation utilisateurs : HTTP $SYNC_HTTP — $(cat /tmp/_kc_sync.json)"
 fi
 
-# ── Forcer editMode=WRITABLE sur le provider LDAP (idempotent) ────────────────
-#   Indispensable pour que « mot de passe oublié » puisse réécrire le mot de
-#   passe dans LDAP. Corrige le mode si le provider existait déjà en READ_ONLY.
+# ── Forcer editMode=WRITABLE + syncRegistrations sur le provider LDAP ─────────
+#   editMode=WRITABLE : indispensable pour que « mot de passe oublié » puisse
+#     réécrire le mot de passe dans LDAP. Corrige un provider resté en READ_ONLY.
+#   syncRegistrations  : sans lui, un compte auto-créé atterrit dans la base
+#     interne de Keycloak et non dans l'annuaire — invisible de phpLDAPadmin.
+#     Les mappers par défaut couvrent les attributs obligatoires d'inetOrgPerson
+#     (cn ← prénom, sn ← nom), que le formulaire d'inscription exige déjà.
 LDAP_COMPONENT=$(curl -sf \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   "$KEYCLOAK_URL/admin/realms/$REALM/components/$LDAP_PROVIDER_ID")
 CURRENT_EDIT_MODE=$(echo "$LDAP_COMPONENT" | jq -r '.config.editMode[0] // empty')
-if [[ "$CURRENT_EDIT_MODE" != "WRITABLE" ]]; then
-  info "  Passage du provider LDAP en editMode=WRITABLE (était: ${CURRENT_EDIT_MODE:-?})..."
-  LDAP_WRITABLE_PAYLOAD=$(echo "$LDAP_COMPONENT" | jq '.config.editMode = ["WRITABLE"]')
+CURRENT_SYNC_REG=$(echo "$LDAP_COMPONENT" | jq -r '.config.syncRegistrations[0] // empty')
+if [[ "$CURRENT_EDIT_MODE" != "WRITABLE" || "$CURRENT_SYNC_REG" != "true" ]]; then
+  info "  Provider LDAP → editMode=WRITABLE, syncRegistrations=true (était: ${CURRENT_EDIT_MODE:-?} / ${CURRENT_SYNC_REG:-?})..."
+  LDAP_WRITABLE_PAYLOAD=$(echo "$LDAP_COMPONENT" \
+    | jq '.config.editMode = ["WRITABLE"] | .config.syncRegistrations = ["true"]')
   EM_HTTP=$(curl -s -o /tmp/_kc_editmode.json -w "%{http_code}" \
     -X PUT \
     -H "Authorization: Bearer $ACCESS_TOKEN" \
@@ -508,10 +563,10 @@ if [[ "$CURRENT_EDIT_MODE" != "WRITABLE" ]]; then
     -d "$LDAP_WRITABLE_PAYLOAD" \
     "$KEYCLOAK_URL/admin/realms/$REALM/components/$LDAP_PROVIDER_ID")
   [[ "$EM_HTTP" =~ ^2 ]] \
-    && success "  Provider LDAP en WRITABLE." \
-    || warn    "  editMode WRITABLE : HTTP $EM_HTTP — $(cat /tmp/_kc_editmode.json)"
+    && success "  Provider LDAP en WRITABLE + syncRegistrations." \
+    || warn    "  Provider LDAP : HTTP $EM_HTTP — $(cat /tmp/_kc_editmode.json)"
 else
-  success "  Provider LDAP déjà en WRITABLE."
+  success "  Provider LDAP déjà en WRITABLE + syncRegistrations."
 fi
 
 # ── Group Mapper LDAP → Keycloak (vérifié à chaque exécution) ─────────────────
@@ -835,69 +890,226 @@ upsert_env "$APP_ENV" "PORT_KEYCLOAK"       "$KC_PORT"
 success "$APP_ENV mis à jour."
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 6/5 — Restriction d'accès à un groupe Keycloak (optionnel)
-#        Crée un rôle realm <groupe>-member et l'assigne au groupe LDAP.
-#        L'application (backend) vérifie ce groupe via le claim JWT 'groups'.
+# 6/5 — Restriction d'accès à un ou plusieurs groupes Keycloak (optionnel)
+#
+#   --require-group accepte une liste séparée par des virgules (g1,g2,...).
+#   Trois verrous complémentaires sont posés :
+#
+#     a) Rôle realm '<groupe>-member' par groupe (conservé : c'est l'ancien
+#        contrat, et google-agenda s'appuie encore sur ce nommage).
+#     b) Rôle realm '<client>-access', assigné à CHACUN des groupes listés. Un
+#        seul rôle assigné à N groupes donne le « OU » qu'on veut (les rôles
+#        composites, eux, propagent vers le bas et ne conviendraient pas).
+#     c) Override du flow navigateur du client : sous-flow CONDITIONAL qui
+#        refuse l'accès si l'utilisateur n'a PAS '<client>-access'.
+#
+#   Le flow ne garde que la porte du navigateur. La serrure de l'API, elle, est
+#   dans le backend (contrôle du claim 'groups' + de 'azp'), alimentée ici par
+#   KEYCLOAK_REQUIRED_GROUPS dans le .env de l'app. Sans ce contrôle backend, un
+#   token pris sur 'admin-cli' (public, password grant activé par défaut dans le
+#   realm) appellerait l'API sans jamais passer par ce flow.
 # ══════════════════════════════════════════════════════════════════════════════
 if [[ -n "$REQUIRE_GROUP" ]]; then
-  info "6/5 — Restriction d'accès au groupe '$REQUIRE_GROUP'..."
+  info "6/5 — Restriction d'accès aux groupes '$REQUIRE_GROUP'..."
 
-  ROLE_NAME="${REQUIRE_GROUP}-member"
+  IFS=',' read -r -a REQUIRE_GROUPS <<< "$REQUIRE_GROUP"
+  ACCESS_ROLE="${CLIENT_ID}-access"
 
-  # ── Créer le realm role si absent ───────────────────────────────────────────
-  ROLE_EXISTS=$(curl -sf \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
-    "$KEYCLOAK_URL/admin/realms/$REALM/roles/$ROLE_NAME" 2>/dev/null \
-    | jq -r '.name // empty')
-
-  if [[ -z "$ROLE_EXISTS" ]]; then
-    ROLE_HTTP=$(curl -s -o /tmp/_kc_role.json -w "%{http_code}" \
-      -X POST \
-      -H "Authorization: Bearer $ACCESS_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d "{\"name\": \"$ROLE_NAME\", \"description\": \"Membres du groupe $REQUIRE_GROUP — accès $CLIENT_ID\"}" \
+  # ── Créer un rôle realm s'il est absent ─────────────────────────────────────
+  _ensure_realm_role() {
+    local role="$1" desc="$2"
+    local exists
+    # Pas de -f : un 404 (rôle absent) est le cas nominal ici, et sous
+    # `set -euo pipefail` l'échec de curl ferait avorter le script.
+    exists=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/roles/$(_urlenc "$role")" | jq -r '.name // empty')
+    [[ -n "$exists" ]] && { success "  Rôle '$role' existant."; return 0; }
+    local http
+    http=$(curl -s -o /tmp/_kc_role.json -w "%{http_code}" -X POST \
+      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -d "$(jq -n --arg n "$role" --arg d "$desc" '{name: $n, description: $d}')" \
       "$KEYCLOAK_URL/admin/realms/$REALM/roles")
-    case "$ROLE_HTTP" in
-      201) success "  Rôle realm '$ROLE_NAME' créé." ;;
-      409) success "  Rôle realm '$ROLE_NAME' existant." ;;
-      *)   warn    "  Création du rôle : HTTP $ROLE_HTTP — $(cat /tmp/_kc_role.json)" ;;
+    case "$http" in
+      201|409) success "  Rôle '$role' créé." ;;
+      *)       warn    "  Création du rôle '$role' : HTTP $http — $(cat /tmp/_kc_role.json)" ;;
     esac
+  }
+
+  # ── Assigner un rôle realm à un groupe ──────────────────────────────────────
+  _assign_role_to_group() {
+    local role="$1" group="$2"
+    local role_id group_id http
+    role_id=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/roles/$(_urlenc "$role")" | jq -r '.id // empty')
+    [[ -n "$role_id" ]] || { warn "  Rôle '$role' introuvable — assignation ignorée."; return 1; }
+    group_id=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/groups?search=$(_urlenc "$group")" \
+      | jq -r --arg g "$group" '[.[] | select(.name == $g)] | .[0].id // empty')
+    if [[ -z "$group_id" ]]; then
+      warn "  Groupe '$group' introuvable dans Keycloak — synchronisez LDAP puis relancez."
+      return 1
+    fi
+    http=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -d "$(jq -n --arg i "$role_id" --arg n "$role" '[{id: $i, name: $n}]')" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/groups/$group_id/role-mappings/realm")
+    [[ "$http" =~ ^2 ]] \
+      && success "  Rôle '$role' assigné au groupe '$group'." \
+      || warn    "  Assignation '$role' → '$group' : HTTP $http"
+  }
+
+  # ── a) et b) : rôles + assignations ─────────────────────────────────────────
+  _ensure_realm_role "$ACCESS_ROLE" "Accès à l'application $CLIENT_ID"
+  for g in "${REQUIRE_GROUPS[@]}"; do
+    g="$(echo "$g" | xargs)"   # trim
+    [[ -n "$g" ]] || continue
+    _ensure_realm_role "${g}-member" "Membres du groupe $g"
+    _assign_role_to_group "${g}-member" "$g" || true
+    _assign_role_to_group "$ACCESS_ROLE"  "$g" || true
+  done
+
+  # ── c) Flow navigateur dédié : refuse qui n'a pas <client>-access ───────────
+  FLOW_ALIAS="require-${CLIENT_ID}"
+  SUBFLOW_ALIAS="${FLOW_ALIAS}-gate"
+
+  FLOW_ID=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows" \
+    | jq -r --arg a "$FLOW_ALIAS" '[.[] | select(.alias == $a)] | .[0].id // empty')
+
+  if [[ -n "$FLOW_ID" ]]; then
+    success "  Flow '$FLOW_ALIAS' existant."
   else
-    success "  Rôle realm '$ROLE_NAME' existant."
+    info "  Création du flow '$FLOW_ALIAS'..."
+
+    # ── Pourquoi ne PAS copier le flow 'browser' et y greffer la barrière ──────
+    #   • À la racine du flow 'browser', Cookie / Identity Provider Redirector /
+    #     forms sont ALTERNATIVE. Or Keycloak compte un sous-flow CONDITIONAL non
+    #     désactivé comme « required », et « REQUIRED and ALTERNATIVE at same
+    #     level » ⇒ il IGNORE les alternatives : le formulaire de login ne
+    #     s'affiche plus DU TOUT et plus personne ne peut se connecter.
+    #   • Greffer la barrière dans le sous-flow 'forms' évite ça, mais l'utilisateur
+    #     qui a déjà une session SSO passe par l'authentificateur Cookie, qui
+    #     court-circuite 'forms' : la barrière n'est jamais évaluée. Contournement
+    #     vérifié en pratique.
+    #
+    #   D'où cette structure : on encapsule l'authentification dans UN sous-flow
+    #   REQUIRED — plus aucune ALTERNATIVE à la racine — et la barrière devient un
+    #   frère CONDITIONAL, donc toujours évalué, cookie SSO ou pas.
+    #
+    #     <flow>                       (top level)
+    #       ├─ <flow>-auth             REQUIRED
+    #       │    ├─ Cookie             ALTERNATIVE
+    #       │    ├─ Identity Provider Redirector  ALTERNATIVE
+    #       │    └─ <flow>-forms       ALTERNATIVE
+    #       │         ├─ Username Password Form   REQUIRED
+    #       │         └─ <flow>-otp    CONDITIONAL
+    #       │              ├─ Condition - user configured  REQUIRED
+    #       │              └─ OTP Form                     REQUIRED
+    #       └─ <flow>-gate             CONDITIONAL
+    #            ├─ Condition - user role (negate)  REQUIRED
+    #            └─ Deny access                     REQUIRED
+    AUTH_ALIAS="${FLOW_ALIAS}-auth"
+    FORMS_ALIAS="${FLOW_ALIAS}-forms"
+    OTP_ALIAS="${FLOW_ALIAS}-otp"
+
+    _add_subflow() {   # <flow parent> <alias>
+      curl -sf -o /dev/null -X POST \
+        -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+        -d "$(jq -n --arg a "$2" '{alias: $a, type: "basic-flow", provider: "registration-page-form"}')" \
+        "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows/$(_urlenc "$1")/executions/flow" \
+        || die "  Création du sous-flow '$2' échouée."
+    }
+    _add_exec() {      # <flow parent> <provider>
+      curl -sf -o /dev/null -X POST \
+        -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+        -d "$(jq -n --arg p "$2" '{provider: $p}')" \
+        "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows/$(_urlenc "$1")/executions/execution" \
+        || die "  Ajout de l'exécution '$2' échoué."
+    }
+    _set_req() {       # <match displayName|providerId> <requirement>
+      local execs obj
+      execs=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+        "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows/$(_urlenc "$FLOW_ALIAS")/executions")
+      obj=$(echo "$execs" | jq -c --arg m "$1" \
+        '[.[] | select(.displayName == $m or .providerId == $m)] | .[0] // empty')
+      [[ -n "$obj" ]] || { warn "  Exécution '$1' introuvable."; return 1; }
+      curl -sf -o /dev/null -X PUT \
+        -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+        -d "$(echo "$obj" | jq -c --arg r "$2" '.requirement = $r')" \
+        "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows/$(_urlenc "$FLOW_ALIAS")/executions" \
+        || warn "  Requirement '$2' sur '$1' échoué."
+    }
+
+    curl -sf -o /dev/null -X POST \
+      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -d "$(jq -n --arg a "$FLOW_ALIAS" --arg c "$CLIENT_ID" \
+            '{alias: $a, providerId: "basic-flow", topLevel: true, builtIn: false,
+              description: ("Accès réservé — client " + $c)}')" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows" \
+      || die "  Création du flow '$FLOW_ALIAS' échouée."
+
+    _add_subflow "$FLOW_ALIAS"  "$AUTH_ALIAS"
+    _add_exec    "$AUTH_ALIAS"  "auth-cookie"
+    _add_exec    "$AUTH_ALIAS"  "identity-provider-redirector"
+    _add_subflow "$AUTH_ALIAS"  "$FORMS_ALIAS"
+    _add_exec    "$FORMS_ALIAS" "auth-username-password-form"
+    _add_subflow "$FORMS_ALIAS" "$OTP_ALIAS"
+    _add_exec    "$OTP_ALIAS"   "conditional-user-configured"
+    _add_exec    "$OTP_ALIAS"   "auth-otp-form"
+    _add_subflow "$FLOW_ALIAS"  "$SUBFLOW_ALIAS"
+    _add_exec    "$SUBFLOW_ALIAS" "conditional-user-role"
+    _add_exec    "$SUBFLOW_ALIAS" "deny-access-authenticator"
+
+    _set_req "$AUTH_ALIAS"                 "REQUIRED"
+    _set_req "auth-cookie"                 "ALTERNATIVE"
+    _set_req "identity-provider-redirector" "ALTERNATIVE"
+    _set_req "$FORMS_ALIAS"                "ALTERNATIVE"
+    _set_req "auth-username-password-form" "REQUIRED"
+    _set_req "$OTP_ALIAS"                  "CONDITIONAL"
+    _set_req "conditional-user-configured" "REQUIRED"
+    _set_req "auth-otp-form"               "REQUIRED"
+    _set_req "$SUBFLOW_ALIAS"              "CONDITIONAL"
+    _set_req "conditional-user-role"       "REQUIRED"
+    _set_req "deny-access-authenticator"   "REQUIRED"
+
+    # negate=true ⇒ la condition est vraie quand l'utilisateur N'A PAS le rôle,
+    # et c'est alors seulement que Deny Access s'exécute.
+    COND_EXEC_ID=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows/$(_urlenc "$FLOW_ALIAS")/executions" \
+      | jq -r '[.[] | select(.providerId == "conditional-user-role")] | .[0].id // empty')
+    if [[ -n "$COND_EXEC_ID" ]]; then
+      curl -sf -o /dev/null -X POST \
+        -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+        -d "$(jq -n --arg r "$ACCESS_ROLE" --arg a "cfg-${FLOW_ALIAS}" \
+              '{alias: $a, config: {condUserRole: $r, negate: "true"}}')" \
+        "$KEYCLOAK_URL/admin/realms/$REALM/authentication/executions/$COND_EXEC_ID/config" \
+        && success "  Condition « pas de rôle $ACCESS_ROLE » → Deny Access." \
+        || warn    "  Configuration de la condition échouée."
+    else
+      warn "  Exécution 'conditional-user-role' introuvable — condition non configurée."
+    fi
+
+    FLOW_ID=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows" \
+      | jq -r --arg a "$FLOW_ALIAS" '[.[] | select(.alias == $a)] | .[0].id // empty')
+    success "  Flow '$FLOW_ALIAS' créé."
   fi
 
-  # ── Récupérer l'ID du rôle ──────────────────────────────────────────────────
-  ROLE_ID=$(curl -sf \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
-    "$KEYCLOAK_URL/admin/realms/$REALM/roles/$ROLE_NAME" \
-    | jq -r '.id // empty')
-
-  if [[ -z "$ROLE_ID" ]]; then
-    warn "  Impossible de récupérer l'ID du rôle '$ROLE_NAME' — assignation ignorée."
-  else
-    # ── Trouver le groupe dans Keycloak (synchronisé depuis LDAP) ─────────────
-    GROUP_KC_ID=$(curl -sf \
-      -H "Authorization: Bearer $ACCESS_TOKEN" \
-      "$KEYCLOAK_URL/admin/realms/$REALM/groups?search=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$REQUIRE_GROUP'))" 2>/dev/null || echo "$REQUIRE_GROUP")" \
-      | jq -r --arg g "$REQUIRE_GROUP" '[.[] | select(.name == $g)] | .[0].id // empty')
-
-    if [[ -z "$GROUP_KC_ID" ]]; then
-      warn "  Groupe '$REQUIRE_GROUP' introuvable dans Keycloak."
-      warn "  Synchronisez les groupes LDAP puis relancez ce script."
-    else
-      # ── Assigner le rôle au groupe ────────────────────────────────────────────
-      ASSIGN_HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST \
-        -H "Authorization: Bearer $ACCESS_TOKEN" \
-        -H "Content-Type: application/json" \
-        -d "[{\"id\": \"$ROLE_ID\", \"name\": \"$ROLE_NAME\"}]" \
-        "$KEYCLOAK_URL/admin/realms/$REALM/groups/$GROUP_KC_ID/role-mappings/realm")
-      [[ "$ASSIGN_HTTP" =~ ^2 ]] \
-        && success "  Rôle '$ROLE_NAME' assigné au groupe '$REQUIRE_GROUP'." \
-        || warn    "  Assignation rôle→groupe : HTTP $ASSIGN_HTTP"
-    fi
+  # ── Lier le flow au client ──────────────────────────────────────────────────
+  if [[ -n "$FLOW_ID" ]]; then
+    BIND_HTTP=$(curl -s -o /tmp/_kc_bind.json -w "%{http_code}" -X PUT \
+      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -d "$(jq -n --arg f "$FLOW_ID" '{authenticationFlowBindingOverrides: {browser: $f}}')" \
+      "$KEYCLOAK_URL/admin/realms/$REALM/clients/$CLIENT_UUID")
+    [[ "$BIND_HTTP" =~ ^2 ]] \
+      && success "  Flow '$FLOW_ALIAS' lié au client '$CLIENT_ID'." \
+      || warn    "  Liaison flow → client : HTTP $BIND_HTTP — $(cat /tmp/_kc_bind.json)"
   fi
 fi
+
+# Propage le cloisonnement au backend, qui est la serrure réelle de l'API.
+# Vide si --require-group n'est pas passé ⇒ aucun filtre côté backend.
+upsert_env "$APP_ENV" "KEYCLOAK_REQUIRED_GROUPS" "$REQUIRE_GROUP"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Service account : client confidentiel compagnon "<app>-admin"

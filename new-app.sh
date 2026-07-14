@@ -124,6 +124,32 @@ echo ""
 read -rp "Scaffolder le projet (télécharge Django / Angular / Spring) ? [O/n] : " DO_SCAFFOLD
 DO_SCAFFOLD="${DO_SCAFFOLD:-O}"
 
+# ── Cloisonnement : groupe(s) autorisé(s) ─────────────────────────────────────
+# Le lab est exposé sur Internet. Sans groupe requis, l'app accepte TOUT compte
+# du realm — y compris un compte auto-inscrit par un inconnu. La question est
+# posée en dernier pour ne pas décaler les réponses des appels non-interactifs
+# existants (printf 'nom\n4\n8088\n4206\nO\n' | bash new-app.sh).
+echo ""
+echo "Groupe(s) Keycloak autorisé(s) à utiliser l'app (séparés par des virgules)."
+echo "Ex: developers  |  famille,amis  |  admins"
+# `|| true` : sous `set -e`, un read qui atteint EOF renvoie 1 et ferait avorter
+# le script. Or cette question est la dernière : un appel non-interactif qui ne
+# fournit pas de réponse (printf ... | bash new-app.sh) tomberait précisément ici.
+read -rp "Groupe(s) requis [laisser vide = AUCUNE restriction] : " REQUIRE_GROUP || true
+REQUIRE_GROUP="$(echo "${REQUIRE_GROUP:-}" | tr -d '[:space:]')"
+
+# Construit le fragment d'options réutilisé plus bas dans les .keycloak-client-opts
+KC_GROUP_OPT=""
+if [[ -n "$REQUIRE_GROUP" ]]; then
+  KC_GROUP_OPT=" --require-group ${REQUIRE_GROUP}"
+else
+  echo ""
+  echo -e "\033[1;33m⚠ Aucun groupe requis : cette app sera accessible à TOUT compte du realm ssolab,\033[0m"
+  echo -e "\033[1;33m  y compris à un inconnu qui se serait auto-inscrit. Le lab est exposé sur Internet.\033[0m"
+  echo -e "\033[1;33m  Pour corriger plus tard : ajouter --require-group <groupe> dans\033[0m"
+  echo -e "\033[1;33m  ${APP_NAME}/.keycloak-client-opts, puis relancer setup2.sh ${APP_NAME} --yes\033[0m"
+fi
+
 # ──────────────────────────────────────────────────────────────────────────────
 # FONCTIONS COMMUNES
 # ──────────────────────────────────────────────────────────────────────────────
@@ -864,6 +890,10 @@ case "$APP_TYPE" in
     write_env_files     "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "" "django" "/${APP_NAME}"
     add_schema          "$DB_SCHEMA"
     register_ports      "$APP_NAME" "$BACKEND_PORT" ""
+    # Sans ce fichier, create-app-client.sh n'aurait aucun --require-group à appliquer
+    # et KEYCLOAK_REQUIRED_GROUPS resterait vide : l'API accepterait tout compte du realm.
+    printf -- '--port %s --caddy-path %s%s\n' "$BACKEND_PORT" "$APP_NAME" "$KC_GROUP_OPT" > "${APP_DIR}/.keycloak-client-opts"
+    ok ".keycloak-client-opts créé (client Django, port ${BACKEND_PORT}, path /${APP_NAME}${KC_GROUP_OPT:+, groupe(s):${REQUIRE_GROUP}})"
     [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]] && scaffold_django "$APP_DIR" "$APP_NAME" "$DB_SCHEMA" "django-only"
     ;;
 
@@ -879,8 +909,8 @@ case "$APP_TYPE" in
     write_env_files          "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT" "django" "/${APP_NAME}-api"
     add_schema               "$DB_SCHEMA"
     register_ports           "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
-    printf -- '--public --port %s --caddy-path %s\n' "$ANGULAR_PORT" "$APP_NAME" > "${APP_DIR}/.keycloak-client-opts"
-    ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT}, path /${APP_NAME})"
+    printf -- '--public --port %s --caddy-path %s%s\n' "$ANGULAR_PORT" "$APP_NAME" "$KC_GROUP_OPT" > "${APP_DIR}/.keycloak-client-opts"
+    ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT}, path /${APP_NAME}${KC_GROUP_OPT:+, groupe(s):${REQUIRE_GROUP}})"
     if [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]]; then
       scaffold_django  "$APP_DIR/backend"  "$APP_NAME"            "$DB_SCHEMA"
       chown -R "$(id -u):$(id -g)" "$APP_DIR/backend" 2>/dev/null || true
@@ -898,8 +928,8 @@ case "$APP_TYPE" in
     write_env_files          "$APP_DIR" "$DB_SCHEMA" "false" "$APP_NAME" "" "$ANGULAR_PORT"
     # Pas de schéma BDD : Angular est un frontend, il ne se connecte pas à PostgreSQL
     register_ports           "$APP_NAME" "" "$ANGULAR_PORT"
-    printf -- '--public --port %s --caddy-path %s\n' "$ANGULAR_PORT" "$APP_NAME" > "${APP_DIR}/.keycloak-client-opts"
-    ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT}, path /${APP_NAME})"
+    printf -- '--public --port %s --caddy-path %s%s\n' "$ANGULAR_PORT" "$APP_NAME" "$KC_GROUP_OPT" > "${APP_DIR}/.keycloak-client-opts"
+    ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT}, path /${APP_NAME}${KC_GROUP_OPT:+, groupe(s):${REQUIRE_GROUP}})"
     [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]] && scaffold_angular "$APP_DIR" "$APP_NAME" "$ANGULAR_PORT" "" "angular-only" && {
       if [[ -n "${SUDO_UID-}" ]]; then
         chown -R "${SUDO_UID}:${SUDO_GID:-$(id -g)}" "$APP_DIR" 2>/dev/null || true
