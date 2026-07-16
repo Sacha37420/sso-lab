@@ -22,3 +22,6 @@
 [submodule "arbre-genealogique"]
 	path = arbre-genealogique
 	url = https://github.com/Sacha37420/arbre-genealogique.git
+[submodule "carto-lab"]
+	path = carto-lab
+	url = https://github.com/Sacha37420/carto-lab.git
