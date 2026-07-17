@@ -21,6 +21,7 @@ app-builder|App Builder|Générateur d'applications : modèles de données, endp
 restauration|Restauration|Gestion de restaurant : fournisseurs, recettes, commandes, paiements, planning et analyses de ventes.
 traitement-de-fichiers-compils|Traitement de fichiers|Dépôt de fichiers avec édition, suivi des modifications et historique.
 arbre-genealogique|Arbre généalogique|Affichage et édition d'arbres généalogiques : personnes, relations et périodes d'union.
+carto-lab|Carto Lab|Traitement cartographique : import de cartes, systèmes de coordonnées, calculs géo et cartographies climatiques Météo-France.
 
 # ── Bacs à sable et infra (décommenter pour les afficher publiquement)
 # sso-lab|Keycloak|Console d'administration de l'IdP du lab.|/auth/

@@ -25,16 +25,30 @@ Ce que fait `new-app.sh` :
 - Copie et adapte le template depuis `_templates/django-angular/`
 - Ajoute `<app>/` au `.gitignore` du dépôt parent (car ce sera un sous-module)
 - Enregistre les ports dans `.ports`
-- Ajoute le schéma SQL dans `infra/init/00_schemas.sql`
+- Ajoute le schéma SQL dans `infra/init/00_schemas.sql` (ou `infra/init-postgis/00_schemas.sql`
+  si l'instance PostGIS est choisie — voir section « Base de données » plus bas)
 - Crée `.keycloak-client-opts` (utilisé par `create-app-client.sh`)
 - **Ne crée pas** le client Keycloak ni le dépôt GitHub
 
-Le script demande enfin le **groupe requis** (cloisonnement). Le laisser vide rend l'app
+Le script demande ensuite le **groupe requis** (cloisonnement). Le laisser vide rend l'app
 accessible à tout compte du realm — le script le signale bruyamment.
 
-Pour une saisie non-interactive (automatisation) — noter la **dernière ligne**, le groupe :
+Enfin, pour une app avec base (Spring seul/+Angular, Django seul/+Angular), le script demande
+l'**instance PostgreSQL** : `postgres` (partagée, `devdb`, défaut) ou `postgis` (dédiée SIG,
+`gisdb` — extension PostGIS absente de l'instance partagée, voir la section dédiée plus bas).
+Cette question est posée en tout dernier, justement pour ne décaler aucune des questions
+précédentes : un appel non-interactif qui ne fournit pas de réponse pour cette dernière ligne
+obtient EOF → défaut `postgres`, exactement comme pour le groupe. L'exemple ci-dessous, déjà
+utilisé pour les apps existantes, continue donc de fonctionner sans modification et choisit
+`postgres` :
+
 ```bash
 printf 'mon-app\n4\n8088\n4206\nO\ndevelopers\n' | bash scripts/new-app.sh
+```
+
+Pour choisir explicitement l'instance `postgis`, ajouter une dernière ligne `2` :
+```bash
+printf 'carto-lab\n4\n8091\n4209\nO\ndevelopers\n2\n' | bash scripts/new-app.sh
 ```
 
 ---
@@ -107,6 +121,60 @@ bash scripts/setup2.sh mon-app --yes
 > ```bash
 > bash scripts/create-app-client.sh mon-app $(cat mon-app/.keycloak-client-opts)
 > ```
+
+---
+
+## Base de données — deux instances PostgreSQL
+
+`infra/docker-compose.yml` héberge **deux** instances PostgreSQL séparées, jamais une par app :
+
+| Instance | Container | Image | Base | Rôle | Pour qui |
+|---|---|---|---|---|---|
+| `postgres` | `dev-postgres` | `postgres:16-alpine` | `devdb` | `devuser` | La grande majorité des apps — un schéma par app |
+| `postgis` | `dev-postgis` | `postgis/postgis:16-3.5` | `gisdb` | `gisuser` | Apps SIG uniquement (ex. `carto-lab`) |
+
+**Pourquoi deux instances et pas juste l'extension PostGIS en plus sur `postgres`** :
+- L'image de `postgres` est **alpine (musl)** ; le paquet PostGIS d'Alpine dépend de `postgresql18`,
+  incompatible avec le PG16 de `devdb`.
+- Les images `postgis/postgis` officielles sont **Debian (glibc)**. Basculer le datadir existant de
+  `devdb` (collation `en_US.utf8` sur musl) vers glibc **corromprait silencieusement les index
+  texte**, et serait en plus un *downgrade* (16.14 → 16.9 au mieux sur les tags PostGIS stables).
+- Bénéfice annexe : une charge SIG lourde (import raster, calcul Voronoï national…) ne peut pas
+  dégrader les autres apps, et le rôle read-only d'un service comme `pg_featureserv` (accès QGIS,
+  cf. `carto-lab`) reste enfermé dans une base qui ne contient **que** du SIG.
+
+**Aucune des deux instances ne publie jamais le port 5432** sur l'hôte ni sur Internet — même
+règle que pour toute base du lab.
+
+### Convention de nommage des identifiants
+
+Les mots de passe vivent dans `infra/.env` sous des **clés distinctes** :
+`POSTGRES_PASSWORD` (instance `postgres`) et `POSTGIS_PASSWORD` (instance `postgis`).
+`reset_url.sh` propage chacun sous sa propre clé vers les `.env` des apps ; `upsert_env` est un
+no-op quand la clé cible est absente d'un `.env`, donc les deux jeux d'identifiants ne peuvent
+jamais se marcher dessus. Une app sur `postgres` déclare `DB_PASSWORD` dans son `.env` ; une app
+sur `postgis` déclare `POSTGIS_PASSWORD` (jamais `DB_PASSWORD`) — c'est ce nom de clé, pas
+`DB_HOST`, qui fait que `reset_url.sh` sait quoi propager où.
+
+### Choisir l'instance pour une nouvelle app
+
+`new-app.sh` pose la question (voir Étape 1) pour toute app avec base. Par défaut : `postgres`.
+Choisir `postgis` uniquement si l'app manipule réellement des données géospatiales (imports de
+cartes, calculs géo, rasters…) — pas par précaution.
+
+Schéma créé dans `infra/init/00_schemas.sql` (instance `postgres`) ou
+`infra/init-postgis/00_schemas.sql` (instance `postgis`) selon le choix. Comme ce fichier n'est
+rejoué qu'à l'initialisation du volume, `ensure-schemas.sh` (appelé par `setup2.sh` avant chaque
+déploiement) rattrape les schémas manquants à chaud — il lit `DB_HOST` de chaque app pour cibler
+le bon container, donc il n'y a rien à faire de spécial pour une app `postgis`.
+
+### Fichiers rasters / médias (apps avec upload)
+
+Si une app persiste des fichiers hors base (ex. rasters GeoTIFF de `carto-lab`), son volume doit
+être déclaré `external: true` dans son `docker-compose.yml`, avec un `name:` explicite. Sans ça,
+`clean2.sh <app>` (`docker compose down --volumes`) le supprime à chaque `setup2.sh <app> --yes`
+— `clean2.sh` protège les volumes de `infra` et `sso-lab`, mais pas ceux qu'une app se serait
+donnés elle-même. Voir `carto-lab/docker-compose.yml` (volume `carto-media`) pour l'exemple.
 
 ---
 

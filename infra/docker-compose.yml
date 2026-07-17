@@ -25,6 +25,7 @@ networks:
 # ─────────────────────────────────────────────
 volumes:
   postgres-data:
+  postgis-data:
   pgadmin-data:
 
 services:
@@ -53,6 +54,52 @@ services:
       - postgres-data:/var/lib/postgresql/data
       # Scripts exécutés au 1er démarrage (ordre alphanumérique)
       - ./init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - dev-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────
+  # PostGIS — seconde instance PostgreSQL, dédiée aux apps SIG
+  #
+  # POURQUOI UNE INSTANCE SÉPARÉE (et pas un schéma de plus sur 'postgres') :
+  #   - 'postgres' tourne en image alpine (musl), sans l'extension PostGIS.
+  #     Le paquet postgis d'Alpine dépend de postgresql18, incompatible avec
+  #     le PG16 de devdb.
+  #   - Les images postgis/postgis officielles sont Debian/glibc. Basculer le
+  #     datadir existant de devdb (collation en_US.utf8 sur musl) vers glibc
+  #     corromprait silencieusement les index texte — et serait en plus un
+  #     DOWNGRADE (16.14 → 16.9 au mieux sur les tags PostGIS stables).
+  #   - Bénéfice annexe : une charge SIG lourde (import raster, Voronoï sur
+  #     toute la France) ne peut pas dégrader les 6 autres apps qui partagent
+  #     'postgres', et le rôle read-only de pg_featureserv (accès QGIS, cf.
+  #     carto-lab) reste enfermé dans une base qui ne contient QUE du SIG.
+  #
+  # ISOLATION RÉSEAU : comme 'postgres', aucun port publié.
+  #
+  # Identifiants sous POSTGIS_DB/POSTGIS_USER/POSTGIS_PASSWORD (infra/.env) —
+  # noms distincts de POSTGRES_*, pour que reset_url.sh propage les deux jeux
+  # sans collision (upsert_env est un no-op quand la clé cible est absente).
+  #
+  # Scripts d'init montés UN PAR UN (pas tout le dossier) : l'image postgis
+  # embarque son propre /docker-entrypoint-initdb.d/10_postgis.sh (CREATE
+  # EXTENSION postgis) — monter le dossier entier l'écraserait.
+  # ──────────────────────────────────────────
+  postgis:
+    image: postgis/postgis:16-3.5
+    container_name: dev-postgis
+    restart: always
+    environment:
+      POSTGRES_DB: "${POSTGIS_DB}"
+      POSTGRES_USER: "${POSTGIS_USER}"
+      POSTGRES_PASSWORD: "${POSTGIS_PASSWORD}"
+    volumes:
+      - postgis-data:/var/lib/postgresql/data
+      - ./init-postgis/00_schemas.sql:/docker-entrypoint-initdb.d/00_schemas.sql:ro
+      - ./init-postgis/01_pg_hba_trust.sh:/docker-entrypoint-initdb.d/01_pg_hba_trust.sh:ro
     networks:
       - dev-net
     healthcheck:
@@ -91,8 +138,10 @@ services:
     ports:
       - "${PORT_PGADMIN}:80"
     networks:
-      - dev-net   # pour atteindre postgres:5432
+      - dev-net   # pour atteindre postgres:5432 et postgis:5432
       - sso-net   # pour atteindre keycloak:8080 (token endpoint)
     depends_on:
       postgres:
+        condition: service_healthy
+      postgis:
         condition: service_healthy

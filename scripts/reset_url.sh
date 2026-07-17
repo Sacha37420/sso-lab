@@ -56,9 +56,16 @@ SERVER_URL_WAN="$(_env_val "$BBOX_ENV" SERVER_URL_WAN)"
 # HPORT_POSTGRES : infra/.env    (port interne Postgres)
 # DB_PASSWORD    : infra/.env    (POSTGRES_PASSWORD — mot de passe partagé du rôle
 #                                 devuser ; source de vérité unique pour tout le lab)
-PORT_KEYCLOAK="$(_env_val  "$SCRIPT_DIR/sso-lab/.env" PORT_KEYCLOAK  "8080")"
-HPORT_POSTGRES="$(_env_val "$SCRIPT_DIR/infra/.env"   HPORT_POSTGRES "5432")"
-DB_PASSWORD="$(_env_val    "$SCRIPT_DIR/infra/.env"   POSTGRES_PASSWORD)"
+# POSTGIS_PASSWORD : infra/.env  (POSTGIS_PASSWORD — mot de passe de la seconde
+#                                 instance PostgreSQL/PostGIS, dédiée aux apps SIG.
+#                                 Clé DISTINCTE de DB_PASSWORD : upsert_env ne
+#                                 touche que les .env qui déclarent déjà
+#                                 POSTGIS_PASSWORD, donc aucune collision avec
+#                                 les apps sur l'instance 'postgres' partagée.
+PORT_KEYCLOAK="$(_env_val    "$SCRIPT_DIR/sso-lab/.env" PORT_KEYCLOAK  "8080")"
+HPORT_POSTGRES="$(_env_val   "$SCRIPT_DIR/infra/.env"   HPORT_POSTGRES "5432")"
+DB_PASSWORD="$(_env_val      "$SCRIPT_DIR/infra/.env"   POSTGRES_PASSWORD)"
+POSTGIS_PASSWORD="$(_env_val "$SCRIPT_DIR/infra/.env"   POSTGIS_PASSWORD)"
 
 REALM="ssolab"
 
@@ -224,6 +231,9 @@ while IFS= read -r envfile; do
   # no-op si la clé est absente, donc infra/.env et sso-lab/.env (sans DB_PASSWORD)
   # ne sont pas touchés. Vide ⇒ on ne propage pas (évite d'effacer une valeur).
   [[ -n "$DB_PASSWORD" ]] && upsert_env "$envfile" DB_PASSWORD "$DB_PASSWORD"
+  # Mot de passe de l'instance PostGIS (apps SIG uniquement) : clé distincte de
+  # DB_PASSWORD, donc no-op sur tous les .env qui ne la déclarent pas déjà.
+  [[ -n "$POSTGIS_PASSWORD" ]] && upsert_env "$envfile" POSTGIS_PASSWORD "$POSTGIS_PASSWORD"
   upsert_env "$envfile" DOMAIN               "$DOMAIN"
   upsert_env "$envfile" ACME_EMAIL           "$ACME_EMAIL"
 

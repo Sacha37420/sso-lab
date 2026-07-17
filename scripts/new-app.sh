@@ -26,6 +26,7 @@ info() { echo -e "  ${CYAN}→ $*${NC}"; }
 
 DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INFRA_SCHEMAS="$DEV_DIR/infra/init/00_schemas.sql"
+INFRA_SCHEMAS_POSTGIS="$DEV_DIR/infra/init-postgis/00_schemas.sql"
 DOCKER_UID="$(id -u):$(id -g)"
 PORTS_REGISTRY="$DEV_DIR/.ports"
 
@@ -150,32 +151,58 @@ else
   echo -e "\033[1;33m  ${APP_NAME}/.keycloak-client-opts, puis relancer setup2.sh ${APP_NAME} --yes\033[0m"
 fi
 
+# ── Choix de l'instance PostgreSQL (posé en DERNIER, uniquement si l'app a une
+#    base) : ne décale aucune des questions précédentes pour les appels
+#    non-interactifs existants (printf '...\n' | new-app.sh — cf. CLAUDE.md),
+#    qui n'en fournissant pas de réponse obtiennent "" → défaut "postgres".
+DB_INSTANCE="postgres"
+if [[ "$APP_TYPE" =~ ^[1234]$ ]]; then
+  echo ""
+  echo -e "  Instance PostgreSQL :"
+  echo -e "    ${BOLD}1${NC}) postgres — base partagée devdb (défaut, un schéma par app)"
+  echo -e "    ${BOLD}2${NC}) postgis  — base SIG gisdb (extension PostGIS ; apps géospatiales"
+  echo -e "                  uniquement — imports de cartes, calculs géo, rasters…)"
+  read -rp "Choix [1-2, défaut 1] : " _db_choice || true
+  if [[ "${_db_choice:-}" == "2" ]]; then
+    DB_INSTANCE="postgis"
+  fi
+fi
+
 # ──────────────────────────────────────────────────────────────────────────────
 # FONCTIONS COMMUNES
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Ajoute CREATE SCHEMA dans infra/init/00_schemas.sql, ET le crée dans la base
-# déjà en cours d'exécution.
+# Ajoute CREATE SCHEMA dans infra/init/00_schemas.sql (ou infra/init-postgis/00_schemas.sql
+# si $2 = "postgis"), ET le crée dans la base déjà en cours d'exécution.
 #
 # 00_schemas.sql n'est joué qu'à l'initialisation du volume Postgres : pour une app
-# créée alors que dev-postgres tourne, le schéma n'existerait jamais. Django, dont
+# créée alors que l'instance tourne déjà, le schéma n'existerait jamais. Django, dont
 # le search_path est « <schema>,public », se rabattrait alors sur public et y créerait
 # ses tables sans rien signaler (toutes les apps partagent l'app label « api », donc
 # il croit ses migrations déjà appliquées).
 add_schema() {
-  local schema="$1"
-  if grep -q "CREATE SCHEMA IF NOT EXISTS ${schema};" "$INFRA_SCHEMAS" 2>/dev/null; then
-    warn "Schéma '${schema}' déjà présent dans infra/init/00_schemas.sql"
+  local schema="$1" instance="${2:-postgres}"
+  local schemas_file container db_user db_name
+  if [[ "$instance" == "postgis" ]]; then
+    schemas_file="$INFRA_SCHEMAS_POSTGIS"; container="dev-postgis"
+    db_user="gisuser"; db_name="gisdb"
   else
-    printf '\nCREATE SCHEMA IF NOT EXISTS %s;\n' "${schema}" >> "$INFRA_SCHEMAS"
-    ok "Schéma '${schema}' ajouté dans infra/init/00_schemas.sql"
+    schemas_file="$INFRA_SCHEMAS"; container="${PG_CONTAINER:-dev-postgres}"
+    db_user="devuser"; db_name="devdb"
+  fi
+
+  if grep -q "CREATE SCHEMA IF NOT EXISTS ${schema};" "$schemas_file" 2>/dev/null; then
+    warn "Schéma '${schema}' déjà présent dans ${schemas_file#$DEV_DIR/}"
+  else
+    printf '\nCREATE SCHEMA IF NOT EXISTS %s;\n' "${schema}" >> "$schemas_file"
+    ok "Schéma '${schema}' ajouté dans ${schemas_file#$DEV_DIR/}"
   fi
 
   # Sans effet si le container n'est pas démarré : le schéma viendra du fichier d'init.
-  if docker ps --format '{{.Names}}' | grep -qx "${PG_CONTAINER:-dev-postgres}"; then
-    docker exec "${PG_CONTAINER:-dev-postgres}" psql -U devuser -d devdb -q \
-      -c "CREATE SCHEMA IF NOT EXISTS \"${schema}\" AUTHORIZATION devuser;" \
-      && ok "Schéma '${schema}' créé dans la base en cours d'exécution" \
+  if docker ps --format '{{.Names}}' | grep -qx "$container"; then
+    docker exec "$container" psql -U "$db_user" -d "$db_name" -q \
+      -c "CREATE SCHEMA IF NOT EXISTS \"${schema}\" AUTHORIZATION ${db_user};" \
+      && ok "Schéma '${schema}' créé dans la base en cours d'exécution (${container})" \
       || warn "Création du schéma '${schema}' à chaud impossible — lancez : bash ensure-schemas.sh"
   fi
 }
@@ -185,9 +212,11 @@ add_schema() {
 # $5 = port backend (optionnel), $6 = port frontend (optionnel)
 # $7 = framework : "django" | "spring" (défaut spring)
 # $8 = script_name : préfixe de chemin Caddy (ex: /mon-app-api) pour SCRIPT_NAME Django
+# $9 = instance DB : "postgres" (défaut, devdb) | "postgis" (gisdb, apps SIG)
 write_env_files() {
   local dir="$1" schema="$2" has_db="$3" client_id="$4"
   local bport="${5:-}" fport="${6:-}" framework="${7:-spring}" script_name="${8:-}"
+  local db_instance="${9:-postgres}"
   {
     echo "# ── Adresses ─────────────────────────────────────────────────────"
     [[ -n "$bport" ]] && echo "PORT_BACKEND=${bport}"
@@ -195,7 +224,23 @@ write_env_files() {
     [[ -n "$fport" ]] && echo "PORT_FRONTEND=${fport}"
     [[ -n "$fport" ]] && echo "FRONTEND_URL=http://localhost:${fport}"
     echo ""
-    if [[ "$has_db" == "true" ]]; then
+    if [[ "$has_db" == "true" && "$db_instance" == "postgis" ]]; then
+      # Instance PostGIS partagée (infra/docker-compose.yml — service 'postgis',
+      # dev-postgis) : PAS 'postgres' (pas l'extension PostGIS, image alpine).
+      echo "# ── Base de données (instance PostGIS partagée — apps SIG) ───────"
+      echo "DB_HOST=postgis"
+      echo "DB_PORT=5432"
+      echo "DB_NAME=gisdb"
+      echo "DB_SCHEMA=${schema}"
+      echo "DB_USER=gisuser"
+      # POSTGIS_PASSWORD (et non DB_PASSWORD) : clé distincte propagée par
+      # reset_url.sh depuis infra/.env, pour ne jamais interférer avec le
+      # DB_PASSWORD des apps sur l'instance 'postgres' partagée.
+      local _db_pass
+      _db_pass="$(grep -E '^POSTGIS_PASSWORD=' "$DEV_DIR/infra/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+      echo "POSTGIS_PASSWORD=${_db_pass:-devpassword}"
+      echo ""
+    elif [[ "$has_db" == "true" ]]; then
       echo "# ── Base de données ──────────────────────────────────────────────"
       echo "DB_HOST=postgres"
       echo "DB_PORT=5432"
@@ -855,8 +900,8 @@ case "$APP_TYPE" in
   1)
     dockerfile_spring  "$APP_DIR"
     dc_spring_only     "$APP_DIR" "$APP_NAME" "$BACKEND_PORT"
-    write_env_files    "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" ""
-    add_schema         "$DB_SCHEMA"
+    write_env_files    "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "" "" "" "$DB_INSTANCE"
+    add_schema         "$DB_SCHEMA" "$DB_INSTANCE"
     register_ports     "$APP_NAME" "$BACKEND_PORT" ""
     [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]] && scaffold_spring "$APP_DIR" "$APP_NAME" "$DB_SCHEMA"
     ;;
@@ -869,8 +914,8 @@ case "$APP_TYPE" in
     nginx_conf_angular       "$APP_DIR/frontend" "$APP_NAME"
     nginx_entrypoint_angular "$APP_DIR/frontend" "true" "$APP_NAME"
     dc_spring_angular        "$APP_DIR" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
-    write_env_files          "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
-    add_schema               "$DB_SCHEMA"
+    write_env_files          "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT" "" "" "$DB_INSTANCE"
+    add_schema               "$DB_SCHEMA" "$DB_INSTANCE"
     register_ports           "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
     if [[ "$DO_SCAFFOLD" =~ ^[Oo]$ ]]; then
       scaffold_spring  "$APP_DIR/backend"  "$APP_NAME"              "$DB_SCHEMA"
@@ -893,8 +938,8 @@ case "$APP_TYPE" in
     dockerfile_django   "$APP_DIR"
     requirements_django "$APP_DIR"
     dc_django_only      "$APP_DIR" "$APP_NAME" "$BACKEND_PORT"
-    write_env_files     "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "" "django" "/${APP_NAME}"
-    add_schema          "$DB_SCHEMA"
+    write_env_files     "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "" "django" "/${APP_NAME}" "$DB_INSTANCE"
+    add_schema          "$DB_SCHEMA" "$DB_INSTANCE"
     register_ports      "$APP_NAME" "$BACKEND_PORT" ""
     # Sans ce fichier, create-app-client.sh n'aurait aucun --require-group à appliquer
     # et KEYCLOAK_REQUIRED_GROUPS resterait vide : l'API accepterait tout compte du realm.
@@ -912,8 +957,8 @@ case "$APP_TYPE" in
     nginx_conf_angular       "$APP_DIR/frontend" "$APP_NAME"
     nginx_entrypoint_angular "$APP_DIR/frontend" "true" "$APP_NAME"
     dc_django_angular        "$APP_DIR" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
-    write_env_files          "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT" "django" "/${APP_NAME}-api"
-    add_schema               "$DB_SCHEMA"
+    write_env_files          "$APP_DIR" "$DB_SCHEMA" "true" "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT" "django" "/${APP_NAME}-api" "$DB_INSTANCE"
+    add_schema               "$DB_SCHEMA" "$DB_INSTANCE"
     register_ports           "$APP_NAME" "$BACKEND_PORT" "$ANGULAR_PORT"
     printf -- '--public --port %s --caddy-path %s%s\n' "$ANGULAR_PORT" "$APP_NAME" "$KC_GROUP_OPT" > "${APP_DIR}/.keycloak-client-opts"
     ok ".keycloak-client-opts créé (client public Angular, port ${ANGULAR_PORT}, path /${APP_NAME}${KC_GROUP_OPT:+, groupe(s):${REQUIRE_GROUP}})"
@@ -974,9 +1019,15 @@ else
   fi
 fi
 if [[ "$APP_TYPE" != "5" ]]; then
-  echo -e "  ${BOLD}3.${NC} Si le container postgres tourne déjà (schéma absent du volume) :"
-  echo -e "     ${CYAN}docker exec -it dev-postgres psql -U devuser -d devdb \\"
-  echo -e "       -c \"CREATE SCHEMA IF NOT EXISTS ${DB_SCHEMA};\"${NC}"
+  if [[ "$DB_INSTANCE" == "postgis" ]]; then
+    echo -e "  ${BOLD}3.${NC} Si le container postgis tourne déjà (schéma absent du volume) :"
+    echo -e "     ${CYAN}docker exec -it dev-postgis psql -U gisuser -d gisdb \\"
+    echo -e "       -c \"CREATE SCHEMA IF NOT EXISTS ${DB_SCHEMA};\"${NC}"
+  else
+    echo -e "  ${BOLD}3.${NC} Si le container postgres tourne déjà (schéma absent du volume) :"
+    echo -e "     ${CYAN}docker exec -it dev-postgres psql -U devuser -d devdb \\"
+    echo -e "       -c \"CREATE SCHEMA IF NOT EXISTS ${DB_SCHEMA};\"${NC}"
+  fi
 fi
 echo ""
 echo -e "  ${BOLD}Lancer :${NC} ${CYAN}bash setup2.sh ${APP_NAME} --yes${NC}"

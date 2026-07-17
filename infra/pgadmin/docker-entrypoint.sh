@@ -3,10 +3,13 @@ set -e
 
 # ── 1. pgpass (connexion PostgreSQL sans mot de passe côté libpq) ──
 mkdir -p /var/lib/pgadmin
-echo "postgres:5432:*:${POSTGRES_USER}:${POSTGRES_PASSWORD}" > /var/lib/pgadmin/.pgpass
+{
+  echo "postgres:5432:*:${POSTGRES_USER}:${POSTGRES_PASSWORD}"
+  echo "postgis:5432:*:${POSTGIS_USER}:${POSTGIS_PASSWORD}"
+} > /var/lib/pgadmin/.pgpass
 chmod 600 /var/lib/pgadmin/.pgpass
 
-# ── 2. servers.json (serveur pré-configuré, partagé entre tous les users) ──
+# ── 2. servers.json (serveurs pré-configurés, partagés entre tous les users) ──
 cat > /var/lib/pgadmin/servers.json << EOF
 {
   "Servers": {
@@ -18,6 +21,18 @@ cat > /var/lib/pgadmin/servers.json << EOF
       "MaintenanceDB": "${POSTGRES_DB}",
       "Username": "${POSTGRES_USER}",
       "SharedUsername": "${POSTGRES_USER}",
+      "SSLMode": "prefer",
+      "Shared": true,
+      "PassFile": "/var/lib/pgadmin/.pgpass"
+    },
+    "2": {
+      "Name": "dev-postgis",
+      "Group": "Servers",
+      "Host": "postgis",
+      "Port": 5432,
+      "MaintenanceDB": "${POSTGIS_DB}",
+      "Username": "${POSTGIS_USER}",
+      "SharedUsername": "${POSTGIS_USER}",
       "SSLMode": "prefer",
       "Shared": true,
       "PassFile": "/var/lib/pgadmin/.pgpass"
