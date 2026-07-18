@@ -15,13 +15,16 @@
 # page, qui est servie SANS authentification.
 # ─────────────────────────────────────────────────────────────────────────────
 
-front-cadriciel|Portail|Tableau de bord du lab : applications déployées, éditeur de code et création de projet.
+lab-admin|Administration|Portail du lab (réservé aux admins) : applications déployées, éditeur de code, création de projet et gestion des utilisateurs.
 analyse-lora|Analyse LoRa|Suivi de capteurs LoRa : relevés, mesures calculées et droits d'accès par capteur.
 app-builder|App Builder|Générateur d'applications : modèles de données, endpoints, pages et pipelines de déploiement.
 restauration|Restauration|Gestion de restaurant : fournisseurs, recettes, commandes, paiements, planning et analyses de ventes.
 traitement-de-fichiers-compils|Traitement de fichiers|Dépôt de fichiers avec édition, suivi des modifications et historique.
 arbre-genealogique|Arbre généalogique|Affichage et édition d'arbres généalogiques : personnes, relations et périodes d'union.
 carto-lab|Carto Lab|Traitement cartographique : import de cartes, systèmes de coordonnées, calculs géo et cartographies climatiques Météo-France.
+
+# ── Décommissionné (containers arrêtés — remplacé par lab-admin)
+# front-cadriciel|Portail|Tableau de bord du lab : applications déployées, éditeur de code et création de projet.
 
 # ── Bacs à sable et infra (décommenter pour les afficher publiquement)
 # sso-lab|Keycloak|Console d'administration de l'IdP du lab.|/auth/

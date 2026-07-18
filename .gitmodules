@@ -25,3 +25,6 @@
 [submodule "carto-lab"]
 	path = carto-lab
 	url = https://github.com/Sacha37420/carto-lab.git
+[submodule "lab-admin"]
+	path = lab-admin
+	url = https://github.com/Sacha37420/lab-admin.git
