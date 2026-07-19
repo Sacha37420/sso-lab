@@ -146,7 +146,19 @@ echo -e "\033[0;32m✓ Adresses réseau propagées.\033[0m"
 # Aussi déclenché par --restart-sso-lab même avec un nom d'app : les volumes
 # d'identité viennent d'être supprimés, il FAUT régénérer les secrets — sinon le
 # .env garderait des mots de passe qui ne correspondent plus à rien.
-if [[ -z "$APP_NAME" ]] || $RESTART_SSO_LAB; then
+#
+# ⚠ Sur tout le lab (sans nom d'app) et SANS --restart-sso-lab, ne le lancer que
+# si le volume d'identité sso-lab_keycloak-data n'existe pas encore (premier
+# setup). Sur un lab déjà initialisé, init-secrets.sh régénère quand même
+# LDAP_ADMIN_PASSWORD/LDAP_CONFIG_PASSWORD/KEYCLOAK_ADMIN_PASSWORD dans
+# sso-lab/.env — mais SANS jamais les appliquer à LDAP/Keycloak, dont les
+# volumes (donc les vraies valeurs) sont préservés par clean2.sh. Un simple
+# `setup2.sh --yes` répété désynchroniserait alors le .env des services réels
+# → Keycloak ne peut plus bind LDAP (« Invalid Credentials », page d'erreur
+# générique à la connexion). Vécu en prod — voir .debug/.
+_IS_FIRST_SETUP=false
+docker volume inspect sso-lab_keycloak-data > /dev/null 2>&1 || _IS_FIRST_SETUP=true
+if $RESTART_SSO_LAB || { [[ -z "$APP_NAME" ]] && $_IS_FIRST_SETUP; }; then
   echo -e "\033[0;36m══ 3/7  Génération des secrets\033[0m"
   SECRET_ARGS=()
   $FORCE           && SECRET_ARGS+=( --yes )
@@ -154,6 +166,8 @@ if [[ -z "$APP_NAME" ]] || $RESTART_SSO_LAB; then
   [[ -n "$KEEP_PASSWORD" ]] && SECRET_ARGS+=( --keep-password "$KEEP_PASSWORD" )
   bash "$SCRIPT_DIR/init-secrets.sh" "${SECRET_ARGS[@]+"${SECRET_ARGS[@]}"}"
   echo -e "\033[0;32m✓ Secrets générés.\033[0m"
+elif [[ -z "$APP_NAME" ]]; then
+  echo -e "\033[0;33m⚠ 3/7  Génération des secrets ignorée — sso-lab déjà initialisé (utiliser --restart-sso-lab pour en repartir).\033[0m"
 fi
 
 # ── 4. Démarrage de sso-lab ───────────────────────────────────────────
