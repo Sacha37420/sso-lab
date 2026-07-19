@@ -240,6 +240,34 @@ require-<client>                        (top level)
 
 ---
 
+## Rotation des secrets
+
+Trois niveaux, tous à chaud (aucun wipe de volume) — détail complet dans le README, section
+« Rotation des secrets » :
+
+- **Ciblée** : `setup2.sh <app> --rotate-secrets --yes` (`SECRET_KEY` d'une app) ou `setup2.sh
+  --rotate-secrets --yes` (`SECRET_KEY` de toutes les apps + mot de passe PostgreSQL partagé).
+  ⚠ La variante « tout le lab » arrête d'abord l'infra (volumes préservés) — si la rotation échoue
+  avec `Conteneur 'dev-postgres' non démarré`, relancer `recompose_docker.sh --app infra` puis
+  reprendre.
+- **Admin sso-lab** : `rotate-secrets.sh --yes` (LDAP admin/config, Keycloak admin).
+- **Complète** : `rotate-secrets-full.sh --yes` — roule tout ce qui est automatisable, y compris
+  le mot de passe de **chaque compte LDAP**, puis redémarre tous les services. Chaque utilisateur
+  ayant une adresse email réelle (pas `uid@ssolab.local`) reçoit automatiquement son nouveau mot
+  de passe par email (`notify-password-email.sh`, via le SMTP déjà configuré pour Keycloak dans
+  `sso-lab/.env` — best-effort, un échec d'envoi n'annule jamais la rotation).
+
+**Non automatisés, à roter manuellement** : `BBOX_ADMIN_PASSWORD` (risque de verrouiller l'admin
+du routeur en cas d'échec de script) et `SMTP_PASSWORD` (mot de passe d'application Gmail, action
+interactive côté compte Google).
+
+**Ne jamais enchaîner `rotate-secrets-full.sh` avec `setup2.sh`** : `setup2.sh` sans nom d'app
+régénère `sso-lab/.env` via `init-secrets.sh` (nouvelles valeurs `KEYCLOAK_ADMIN_PASSWORD`/`LDAP_*`
+non appliquées aux services), ce qui désynchroniserait le `.env` des secrets tout juste rotés à
+chaud. `rotate-secrets-full.sh` termine lui-même par `recompose_docker.sh --force`.
+
+---
+
 ## Sous-modules existants
 
 | Dossier | Dépôt | Type | Ports |
@@ -272,6 +300,11 @@ ci-dessous, lancé avec `bash sso-lab/…`).
 | `recompose_docker.sh --app <app>` | Rebuilder et redémarrer les containers d'une app |
 | `get-ports-list.sh` | Régénérer `ports.env` depuis `.ports` |
 | `open-bbox-ports2.sh` | Ouvrir les ports sur le routeur Bbox |
+| `rotate-secrets-full.sh --yes` | Rotation complète de tous les secrets automatisables + redémarrage (voir « Rotation des secrets ») |
+| `rotate-ldap-user-passwords.sh --yes` | Rotation à chaud du mot de passe de chaque compte LDAP, avec email au titulaire |
+| `rotate-secrets.sh --yes` | Rotation à chaud des secrets admin sso-lab |
+| `rotate-db-password.sh --yes` | Rotation à chaud du mot de passe PostgreSQL partagé |
+| `rotate-app-secret.sh <app>` | Régénère le `SECRET_KEY` Django d'une app |
 
 ---
 

@@ -207,7 +207,86 @@ add_schema() {
   fi
 }
 
-# Crée .env.example + .env (copie) dans $dir
+# Rendu du contenu d'un .env — factorisé pour être appelé deux fois par
+# write_env_files() : une fois avec des placeholders (→ .env.example, commité),
+# une fois avec les vraies valeurs (→ .env, gitignored). Ne JAMAIS appeler ceci
+# directement pour écrire .env.example avec de vraies valeurs — c'est exactement
+# le bug corrigé ici (SECRET_KEY/DB_PASSWORD réels commités dans .env.example,
+# cf. .debug/ — a fuité dans l'historique public de plusieurs apps).
+# $1 = valeur DB_PASSWORD/POSTGIS_PASSWORD à écrire, $2 = valeur SECRET_KEY à écrire
+_render_env_content() {
+  local schema="$1" has_db="$2" client_id="$3" bport="$4" fport="$5" \
+        framework="$6" script_name="$7" db_instance="$8" db_pass_val="$9" secret_val="${10}"
+  echo "# ── Adresses ─────────────────────────────────────────────────────"
+  [[ -n "$bport" ]] && echo "PORT_BACKEND=${bport}"
+  [[ -n "$bport" ]] && echo "BACKEND_URL=http://localhost:${bport}"
+  [[ -n "$fport" ]] && echo "PORT_FRONTEND=${fport}"
+  [[ -n "$fport" ]] && echo "FRONTEND_URL=http://localhost:${fport}"
+  echo ""
+  if [[ "$has_db" == "true" && "$db_instance" == "postgis" ]]; then
+    # Instance PostGIS partagée (infra/docker-compose.yml — service 'postgis',
+    # dev-postgis) : PAS 'postgres' (pas l'extension PostGIS, image alpine).
+    echo "# ── Base de données (instance PostGIS partagée — apps SIG) ───────"
+    echo "DB_HOST=postgis"
+    echo "DB_PORT=5432"
+    echo "DB_NAME=gisdb"
+    echo "DB_SCHEMA=${schema}"
+    echo "DB_USER=gisuser"
+    # POSTGIS_PASSWORD (et non DB_PASSWORD) : clé distincte propagée par
+    # reset_url.sh depuis infra/.env, pour ne jamais interférer avec le
+    # DB_PASSWORD des apps sur l'instance 'postgres' partagée.
+    echo "POSTGIS_PASSWORD=${db_pass_val}"
+    echo ""
+  elif [[ "$has_db" == "true" ]]; then
+    echo "# ── Base de données ──────────────────────────────────────────────"
+    echo "DB_HOST=postgres"
+    echo "DB_PORT=5432"
+    echo "DB_NAME=devdb"
+    echo "DB_SCHEMA=${schema}"
+    echo "DB_USER=devuser"
+    echo "DB_PASSWORD=${db_pass_val}"
+    echo ""
+  fi
+  if [[ "$framework" == "django" ]]; then
+    echo "# ── Django ───────────────────────────────────────────────────────"
+    echo "SECRET_KEY=${secret_val}"
+    echo "DEBUG=False"
+    echo "ALLOWED_HOSTS=*"
+    echo ""
+    echo "# ── Reverse proxy (Caddy) ────────────────────────────────────────"
+    echo "SCRIPT_NAME=${script_name}"
+    echo ""
+  fi
+  echo "# ── SSO Keycloak ─────────────────────────────────────────────────"
+  echo "KEYCLOAK_CLIENT_ID=${client_id}"
+  if [[ "$framework" != "django" ]]; then
+    echo "KEYCLOAK_CLIENT_SECRET=<secret-depuis-keycloak>"
+  fi
+  echo "KEYCLOAK_ISSUER_URI=http://keycloak:8080/realms/ssolab"
+  if [[ "$framework" == "django" && -n "$fport" ]]; then
+    echo "# Client public (SPA Angular) — Keycloak → Clients → ${client_id} → Access type : Public"
+    echo "# Valid redirect URIs : http://localhost:${fport}/*"
+  elif [[ -n "$bport" && "$framework" != "django" ]]; then
+    echo "# À configurer dans Keycloak → Clients → ${client_id} → Valid redirect URIs"
+    echo "# KEYCLOAK_REDIRECT_URI=http://localhost:${bport}/login/oauth2/code/keycloak"
+  elif [[ -n "$fport" ]]; then
+    echo "# À configurer dans Keycloak → Clients → ${client_id} → Valid redirect URIs"
+    echo "# KEYCLOAK_REDIRECT_URI=http://localhost:${fport}/*"
+  fi
+  echo ""
+  echo "# ── URLs (propagées automatiquement par reset_url.sh) ────────────"
+  echo "PORT_KEYCLOAK=8080"
+  echo "SERVER_URL_LAN=http://192.168.1.X"
+  echo "SERVER_URL_WAN=http://VOTRE_IP_WAN"
+  echo "KEYCLOAK_URL=http://192.168.1.X:8080"
+  echo "KEYCLOAK_PUBLIC_URL=http://VOTRE_IP_WAN:8080"
+  echo ""
+  echo "# ── HTTPS / Caddy ─────────────────────────────────────────────────────────────"
+  echo "DOMAIN=CHANGE_ME"
+}
+
+# Crée .env.example (placeholders, commité) + .env (vraies valeurs, gitignored)
+# dans $dir.
 # $3 = "true" si l'app se connecte à la BDD, "false" sinon
 # $5 = port backend (optionnel), $6 = port frontend (optionnel)
 # $7 = framework : "django" | "spring" (défaut spring)
@@ -217,85 +296,27 @@ write_env_files() {
   local dir="$1" schema="$2" has_db="$3" client_id="$4"
   local bport="${5:-}" fport="${6:-}" framework="${7:-spring}" script_name="${8:-}"
   local db_instance="${9:-postgres}"
-  {
-    echo "# ── Adresses ─────────────────────────────────────────────────────"
-    [[ -n "$bport" ]] && echo "PORT_BACKEND=${bport}"
-    [[ -n "$bport" ]] && echo "BACKEND_URL=http://localhost:${bport}"
-    [[ -n "$fport" ]] && echo "PORT_FRONTEND=${fport}"
-    [[ -n "$fport" ]] && echo "FRONTEND_URL=http://localhost:${fport}"
-    echo ""
-    if [[ "$has_db" == "true" && "$db_instance" == "postgis" ]]; then
-      # Instance PostGIS partagée (infra/docker-compose.yml — service 'postgis',
-      # dev-postgis) : PAS 'postgres' (pas l'extension PostGIS, image alpine).
-      echo "# ── Base de données (instance PostGIS partagée — apps SIG) ───────"
-      echo "DB_HOST=postgis"
-      echo "DB_PORT=5432"
-      echo "DB_NAME=gisdb"
-      echo "DB_SCHEMA=${schema}"
-      echo "DB_USER=gisuser"
-      # POSTGIS_PASSWORD (et non DB_PASSWORD) : clé distincte propagée par
-      # reset_url.sh depuis infra/.env, pour ne jamais interférer avec le
-      # DB_PASSWORD des apps sur l'instance 'postgres' partagée.
-      local _db_pass
-      _db_pass="$(grep -E '^POSTGIS_PASSWORD=' "$DEV_DIR/infra/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
-      echo "POSTGIS_PASSWORD=${_db_pass:-devpassword}"
-      echo ""
-    elif [[ "$has_db" == "true" ]]; then
-      echo "# ── Base de données ──────────────────────────────────────────────"
-      echo "DB_HOST=postgres"
-      echo "DB_PORT=5432"
-      echo "DB_NAME=devdb"
-      echo "DB_SCHEMA=${schema}"
-      echo "DB_USER=devuser"
-      # Source de vérité du mot de passe partagé : infra/.env (POSTGRES_PASSWORD).
-      # On l'y lit plutôt que de coder 'devpassword' en dur — sinon toute nouvelle
-      # app naîtrait avec l'ancienne valeur, et reset_url.sh devrait la corriger.
-      # Au pire (infra/.env absent au scaffold), reset_url.sh l'alignera au 1er setup2.
-      local _db_pass
-      _db_pass="$(grep -E '^POSTGRES_PASSWORD=' "$DEV_DIR/infra/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
-      echo "DB_PASSWORD=${_db_pass:-devpassword}"
-      echo ""
-    fi
-    if [[ "$framework" == "django" ]]; then
-      local _secret
-      _secret="$(python3 -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null || echo 'change-this-in-production')"
-      echo "# ── Django ───────────────────────────────────────────────────────"
-      echo "SECRET_KEY=${_secret}"
-      echo "DEBUG=False"
-      echo "ALLOWED_HOSTS=*"
-      echo ""
-      echo "# ── Reverse proxy (Caddy) ────────────────────────────────────────"
-      echo "SCRIPT_NAME=${script_name}"
-      echo ""
-    fi
-    echo "# ── SSO Keycloak ─────────────────────────────────────────────────"
-    echo "KEYCLOAK_CLIENT_ID=${client_id}"
-    if [[ "$framework" != "django" ]]; then
-      echo "KEYCLOAK_CLIENT_SECRET=<secret-depuis-keycloak>"
-    fi
-    echo "KEYCLOAK_ISSUER_URI=http://keycloak:8080/realms/ssolab"
-    if [[ "$framework" == "django" && -n "$fport" ]]; then
-      echo "# Client public (SPA Angular) — Keycloak → Clients → ${client_id} → Access type : Public"
-      echo "# Valid redirect URIs : http://localhost:${fport}/*"
-    elif [[ -n "$bport" && "$framework" != "django" ]]; then
-      echo "# À configurer dans Keycloak → Clients → ${client_id} → Valid redirect URIs"
-      echo "# KEYCLOAK_REDIRECT_URI=http://localhost:${bport}/login/oauth2/code/keycloak"
-    elif [[ -n "$fport" ]]; then
-      echo "# À configurer dans Keycloak → Clients → ${client_id} → Valid redirect URIs"
-      echo "# KEYCLOAK_REDIRECT_URI=http://localhost:${fport}/*"
-    fi
-    echo ""
-    echo "# ── URLs (propagées automatiquement par reset_url.sh) ────────────"
-    echo "PORT_KEYCLOAK=8080"
-    echo "SERVER_URL_LAN=http://192.168.1.X"
-    echo "SERVER_URL_WAN=http://VOTRE_IP_WAN"
-    echo "KEYCLOAK_URL=http://192.168.1.X:8080"
-    echo "KEYCLOAK_PUBLIC_URL=http://VOTRE_IP_WAN:8080"
-    echo ""
-    echo "# ── HTTPS / Caddy ─────────────────────────────────────────────────────────────"
-    echo "DOMAIN=CHANGE_ME"
-  } > "${dir}/.env.example"
-  cp "${dir}/.env.example" "${dir}/.env"
+
+  local _db_pass="" _secret=""
+  if [[ "$has_db" == "true" ]]; then
+    # Source de vérité du mot de passe partagé : infra/.env. On l'y lit plutôt
+    # que de coder 'devpassword' en dur — sinon toute nouvelle app naîtrait avec
+    # l'ancienne valeur, et reset_url.sh devrait la corriger. Au pire (infra/.env
+    # absent au scaffold), reset_url.sh l'alignera au 1er setup2.
+    local _pass_var="POSTGRES_PASSWORD"
+    [[ "$db_instance" == "postgis" ]] && _pass_var="POSTGIS_PASSWORD"
+    _db_pass="$(grep -E "^${_pass_var}=" "$DEV_DIR/infra/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+    _db_pass="${_db_pass:-devpassword}"
+  fi
+  if [[ "$framework" == "django" ]]; then
+    _secret="$(python3 -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null || echo 'change-this-in-production')"
+  fi
+
+  _render_env_content "$schema" "$has_db" "$client_id" "$bport" "$fport" \
+    "$framework" "$script_name" "$db_instance" "CHANGE_ME" "CHANGE_ME" > "${dir}/.env.example"
+  _render_env_content "$schema" "$has_db" "$client_id" "$bport" "$fport" \
+    "$framework" "$script_name" "$db_instance" "$_db_pass" "$_secret" > "${dir}/.env"
+
   ok ".env et .env.example créés"
 }
 

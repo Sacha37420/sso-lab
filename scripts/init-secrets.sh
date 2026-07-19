@@ -123,7 +123,7 @@ if $INIT_LDIF_PASSWORD; then
   [[ -n "$KEEP_PASSWORD" ]] && echo "   Préservés (--keep-password) : $KEEP_PASSWORD" && echo ""
   cp "$INIT_LDIF" "${INIT_LDIF}.bak"
   _new=0; _kept=0
-  while IFS=$'\t' read -r _status _kv; do
+  while IFS=$'\t' read -r _status _kv _uid _mail; do
     [[ -n "${_kv:-}" ]] || continue
     upsert_env "$SSO_ENV" "${_kv%%=*}" "${_kv#*=}"
     if [[ "$_status" == "keep" ]]; then
@@ -132,6 +132,12 @@ if $INIT_LDIF_PASSWORD; then
     else
       echo "✅  ${_kv%%=*}"
       _new=$(( _new + 1 ))
+      # Le nouveau mot de passe ne devient actif qu'après recréation du volume
+      # LDAP (bootstrap de init.ldif) — l'email annonce donc la valeur à venir,
+      # pas un changement déjà appliqué. Best-effort : ne bloque jamais le script.
+      if [[ -n "${_mail:-}" ]]; then
+        bash "$(dirname "$0")/notify-password-email.sh" "$_uid" "$_mail" "${_kv#*=}"
+      fi
     fi
   done < <(python3 - "$INIT_LDIF" "$KEEP_PASSWORD" <<'PY'
 import re, secrets, string, sys
@@ -141,7 +147,7 @@ keep = {u.strip().lower() for u in (sys.argv[2] if len(sys.argv) > 2 else '').sp
 alphabet = string.ascii_letters + string.digits
 lines = open(path, encoding='utf-8').read().split('\n')
 
-uid, creds, out = None, {}, []
+uid, creds, mails, out = None, {}, {}, []
 for line in lines:
     m = re.match(r'^dn: uid=([^,]+),', line)
     if m:
@@ -149,8 +155,11 @@ for line in lines:
         # None ⇒ à préserver : on lira la valeur existante sur la ligne userPassword.
         creds[uid] = None if uid.lower() in keep else ''.join(
             secrets.choice(alphabet) for _ in range(50))
+        mails[uid] = ''
     elif line.startswith('dn:'):
         uid = None          # entrée non-utilisateur (ou=, cn=groupe…)
+    if uid and line.startswith('mail:'):
+        mails[uid] = line.split(':', 1)[1].strip()
     if uid and line.startswith('userPassword:'):
         if creds[uid] is None:
             # Mot de passe préservé : ligne laissée telle quelle, valeur juste
@@ -163,7 +172,7 @@ for line in lines:
 open(path, 'w', encoding='utf-8').write('\n'.join(out))
 for u, p in creds.items():
     status = 'keep' if u.lower() in keep else 'new'
-    print(f"{status}\t{u.upper()}_PASSWORD={p}")
+    print(f"{status}\t{u.upper()}_PASSWORD={p}\t{u}\t{mails.get(u, '')}")
 PY
   )
   echo ""

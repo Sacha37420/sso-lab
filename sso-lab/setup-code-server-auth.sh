@@ -9,8 +9,22 @@
 #
 # Usage :
 #   bash sso-lab/setup-code-server-auth.sh
+#   bash sso-lab/setup-code-server-auth.sh --rotate   # force la rotation des
+#     deux secrets (CODE_SERVER_COOKIE_SECRET + CLIENT_SECRET) même s'ils sont
+#     déjà renseignés — utilisé par rotate-secrets-full.sh. Sans ce flag,
+#     comportement par défaut inchangé : ne génère que ce qui manque, jamais de
+#     rotation surprise au fil des `setup2.sh` habituels. Restart d'oauth2-proxy
+#     et code-server requis après (sinon "unauthorized_client" — cf. plus bas).
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
+
+ROTATE=false
+for a in "$@"; do
+  case "$a" in
+    --rotate) ROTATE=true ;;
+    *) echo "Argument inconnu : $a" >&2; exit 1 ;;
+  esac
+done
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "${CYAN}→${NC} $*"; }
@@ -29,7 +43,7 @@ CREATE_CLIENT="${ROOT_DIR}/scripts/create-app-client.sh"
 # ── Cookie secret ─────────────────────────────────────────────────────────────
 # oauth2-proxy exige exactement 16, 24 ou 32 octets (base64url).
 CURRENT_COOKIE=$(grep "^CODE_SERVER_COOKIE_SECRET=" "$ENV_FILE" | cut -d= -f2- || true)
-if [[ -z "$CURRENT_COOKIE" ]]; then
+if [[ -z "$CURRENT_COOKIE" || "$ROTATE" == "true" ]]; then
   COOKIE_SECRET=$(openssl rand -base64 32 | tr -d '\n=')
   # S'assurer que la longueur est correcte (32 bytes → 44 chars base64, on coupe à 32)
   COOKIE_SECRET="${COOKIE_SECRET:0:32}"
@@ -57,11 +71,12 @@ trap 'rm -rf "$TMP_APP"' EXIT
 # --no-rotate : le secret n'est généré qu'à la création du client. Sans ce flag,
 # chaque run rotationnerait le secret dans Keycloak alors que le container
 # oauth2-proxy garde l'ancien (Config.Env est figé à la création) → token
-# exchange en "unauthorized_client" et 500 sur /code/oauth2/callback.
-bash "$CREATE_CLIENT" "$TMP_NAME" \
-  --client-id code-server \
-  --redirect-path /oauth2/callback \
-  --no-rotate
+# exchange en "unauthorized_client" et 500 sur /code/oauth2/callback. Avec
+# --rotate (rotation volontaire), on l'omet exprès — c'est à l'appelant de
+# redémarrer oauth2-proxy et code-server juste après.
+CREATE_CLIENT_ARGS=( "$TMP_NAME" --client-id code-server --redirect-path /oauth2/callback )
+$ROTATE || CREATE_CLIENT_ARGS+=( --no-rotate )
+bash "$CREATE_CLIENT" "${CREATE_CLIENT_ARGS[@]}"
 
 # Récupérer le secret
 CLIENT_SECRET=$(grep "^KEYCLOAK_CLIENT_SECRET=" "${TMP_APP}/.env" | cut -d= -f2-)
