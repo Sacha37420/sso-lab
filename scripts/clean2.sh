@@ -56,7 +56,6 @@ if [[ -n "$APP_NAME" ]]; then
   fi
 else
   LOCAL_IMAGES=(
-    "front-cadriciel-front-cadriciel"
     "spring-app-spring-app"
   )
   for img in "${LOCAL_IMAGES[@]}"; do
@@ -101,16 +100,6 @@ else
   if [[ -d "$MAVEN_TARGET" ]]; then
     echo "■ Maven : suppression de spring-app/target/"
     rm -rf "$MAVEN_TARGET"
-  fi
-  ANGULAR_DIST="$SCRIPT_DIR/front-cadriciel/dist"
-  ANGULAR_CACHE="$SCRIPT_DIR/front-cadriciel/.angular"
-  if [[ -d "$ANGULAR_DIST" ]]; then
-    echo "■ Angular : suppression de front-cadriciel/dist/"
-    rm -rf "$ANGULAR_DIST"
-  fi
-  if [[ -d "$ANGULAR_CACHE" ]]; then
-    echo "■ Angular : suppression de front-cadriciel/.angular/ (cache)"
-    rm -rf "$ANGULAR_CACHE"
   fi
 fi
 

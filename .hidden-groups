@@ -1,0 +1,12 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .hidden-groups — groupes à ne jamais afficher dans les outils d'admin du lab
+#
+# Lu par lab-admin/backend/api/lab_groups.py et scripts/add-user.sh. Un groupe
+# listé ici existe réellement dans l'annuaire LDAP (voir sso-lab/ldap/init.ldif)
+# mais reste un usage strictement privé : il ne doit apparaître ni dans le
+# picker "Groupes à attribuer" de lab-admin, ni dans la liste interactive de
+# add-user.sh — même s'il est par ailleurs requis par une app.
+# ─────────────────────────────────────────────────────────────────────────────
+
+dom
+harem

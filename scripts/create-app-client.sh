@@ -144,7 +144,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# CLIENT_ID par défaut = nom du dossier (cas spring-app, front-cadriciel…)
+# CLIENT_ID par défaut = nom du dossier (cas spring-app, lab-admin…)
 # Surcharge via --client-id pour les cas où ils divergent (ex: infra → pgadmin)
 [[ -n "$CLIENT_ID" ]] || CLIENT_ID="$APP_NAME"
 [[ "$CLIENT_ID" =~ ^[a-zA-Z0-9_-]+$ ]] \

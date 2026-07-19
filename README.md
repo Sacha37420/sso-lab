@@ -13,12 +13,13 @@ dev/
 ├── sso-lab/            ← Keycloak 22 + OpenLDAP + phpLDAPadmin + Caddy + code-server
 ├── infra/              ← PostgreSQL 16 + pgAdmin 8
 ├── _templates/         ← templates Django+Angular (copiés par new-app.sh)
-├── analyse-lora/       ← Django + Angular  [submodule]
-├── app-builder/        ← Django + Angular  [submodule] — éditeur de specs d'apps
-├── front-cadriciel/    ← Angular seul      [submodule] — tableau de bord du lab
-├── restauration/       ← Django + Angular  [submodule]
-├── spring-app/         ← Spring Boot       [submodule]
-├── table-manager/      ← [submodule]
+├── analyse-lora/                    ← Django + Angular  [submodule]
+├── app-builder/                     ← Django + Angular  [submodule] — éditeur de specs d'apps
+├── arbre-genealogique/              ← Django + Angular  [submodule]
+├── carto-lab/                       ← Django + Angular  [submodule] — SIG (instance PostGIS dédiée)
+├── lab-admin/                       ← Django + Angular  [submodule] — portail du lab (admin, déploiement, utilisateurs)
+├── restauration/                    ← Django + Angular  [submodule]
+├── traitement-de-fichiers-compils/  ← Django + Angular  [submodule]
 ├── new-app.sh          ← scaffold interactif d'une nouvelle app
 ├── setup2.sh           ← déploiement complet d'une app (ou de tout le lab)
 ├── create-app-client.sh← crée/met à jour les clients Keycloak
@@ -50,11 +51,13 @@ dev/
 
 | Application | Port backend | URL API (HTTPS) | Port frontend | URL frontend (HTTPS) |
 |---|---|---|---|---|
-| front-cadriciel | — | — | 4200 | `https://DOMAIN/cadriciel/` |
-| app-builder | 8087 | `https://DOMAIN/app-builder-api/` | 4205 | `https://DOMAIN/app-builder/` |
+| lab-admin | 8083 | `https://DOMAIN/lab-admin-api/` | 4201 | `https://DOMAIN/lab-admin/` |
 | analyse-lora | 8086 | `https://DOMAIN/lora-api/` | 4204 | `https://DOMAIN/lora/` |
+| app-builder | 8087 | `https://DOMAIN/app-builder-api/` | 4205 | `https://DOMAIN/app-builder/` |
 | restauration | 8088 | `https://DOMAIN/restauration-api/` | 4206 | `https://DOMAIN/restauration/` |
-| spring-app | 8082 | direct LAN uniquement | — | — |
+| traitement-de-fichiers-compils | 8089 | `https://DOMAIN/traitement-de-fichiers-compils-api/` | 4207 | `https://DOMAIN/traitement-de-fichiers-compils/` |
+| arbre-genealogique | 8090 | `https://DOMAIN/arbre-genealogique-api/` | 4208 | `https://DOMAIN/arbre-genealogique/` |
+| carto-lab | 8091 | `https://DOMAIN/carto-lab-api/` | 4209 | `https://DOMAIN/carto-lab/` |
 
 ---
 
@@ -66,7 +69,7 @@ dev/
 |---|---|
 | `https://DOMAIN/auth/` | Keycloak (realm ssolab) |
 | `https://DOMAIN/code/` | code-server (VS Code navigateur) — restreint aux groupes `developers` et `admins` |
-| `https://DOMAIN/cadriciel/` | front-cadriciel (tableau de bord lab) |
+| `https://DOMAIN/lab-admin/` | lab-admin (portail du lab : admin, déploiement, utilisateurs) |
 
 `code-server` est protégé par **oauth2-proxy** : seuls les utilisateurs authentifiés Keycloak appartenant aux groupes `developers` ou `admins` y ont accès. Docker de l'hôte est accessible depuis son terminal.
 
@@ -105,14 +108,13 @@ Le flow ne voit jamais un appel direct à l'API. Le backend doit donc vérifier 
 
 | Application | Type | Groupe(s) requis | Barrière navigateur | Serrure API |
 |---|---|---|---|---|
-| `app-builder` | Django + Angular | `admins` | ✅ flow | ✅ `azp` + `groups` |
 | `analyse-lora` | Django + Angular | `developers` | ✅ flow | ✅ `azp` + `groups` |
+| `app-builder` | Django + Angular | tous les groupes du lab (accès volontairement ouvert à tout utilisateur) | ✅ flow | ✅ `azp` + `groups` |
 | `arbre-genealogique` | Django + Angular | `famille` | ✅ flow | ✅ `azp` + `groups` |
+| `carto-lab` | Django + Angular | `developers` | ✅ flow | ✅ `azp` + `groups` |
+| `lab-admin` | Django + Angular | `admins` | ✅ flow | ✅ `azp` + `groups` |
 | `restauration` | Django + Angular | `manager`, `cuisinier`, `serveur` | ✅ flow | ✅ `azp` + `groups` |
-| `test-django-angular` | Django + Angular | `developers` | ✅ flow | ✅ `azp` + `groups` |
 | `traitement-de-fichiers-compils` | Django + Angular | `developers` | ✅ flow | ✅ `azp` + `groups` |
-| `front-cadriciel` | Angular seul | `developers` | ✅ flow | — *(pas de backend)* |
-| `test-angular` | Angular seul | `developers` | ✅ flow | — *(pas de backend)* |
 | **`code-server`** | oauth2-proxy | `developers`, `admins` | ✅ **oauth2-proxy** | — *(pas d'API exposée)* |
 
 **Le cas `code-server`** est le seul qui n'utilise pas de flow Keycloak : il est protégé **en amont**
@@ -150,10 +152,12 @@ dans le `.env` de l'app pour armer la serrure backend.
 
 | Utilisateur | Groupes | code-server |
 |---|---|---|
-| sacha | developers, admins, famille, amis | ✓ |
+| sacha | developers, admins, famille, amis, manager, cuisinier, serveur | ✓ |
 | hassan | developers, amis | ✓ |
 | lea | famille, amis | ✗ |
-| elodie | famille | ✗ |
+| elodie | famille, manager | ✗ |
+| sabrina | manager | ✗ |
+| bruno | — | ✗ |
 
 > pgAdmin est restreint au groupe **developers** via OAuth2.
 
@@ -232,15 +236,15 @@ bash scripts/setup2.sh mon-app --yes
 
 ---
 
-## Créer une application — méthode IA avancée (app-builder + cadriciel)
+## Créer une application — méthode IA avancée (app-builder + lab-admin)
 
 Pour des applications plus complexes, le lab intègre un workflow de conception assistée par IA :
 
 ### Vue d'ensemble
 
 ```
-app-builder  →  front-cadriciel  →  code-server (Claude Code)  →  new-app.sh
-(specs)          (prompts)           (construction)                 (scaffold)
+app-builder  →  lab-admin  →  code-server (Claude Code)  →  new-app.sh
+(specs)          (prompts)     (construction)                 (scaffold)
 ```
 
 ### Étape 1 — Concevoir les specs dans app-builder
@@ -254,9 +258,9 @@ app-builder  →  front-cadriciel  →  code-server (Claude Code)  →  new-app.
 - **Interactions** — clics, formulaires, navigation, affichage
 - **Pipelines de données** — enchaînements d'appels service → transformation → mise à jour d'état
 
-### Étape 2 — Générer les prompts dans front-cadriciel
+### Étape 2 — Générer les prompts dans lab-admin
 
-**front-cadriciel** (`https://DOMAIN/cadriciel/`) est le tableau de bord central du lab. Sa page **"Prompts de déploiement"** lit les specs de app-builder et génère des **prompts Claude Code** prêts à l'emploi, couvrant :
+**lab-admin** (`https://DOMAIN/lab-admin/`) est le portail central du lab. Sa page **"Prompts de déploiement"** lit les specs de app-builder et génère des **prompts Claude Code** prêts à l'emploi, couvrant :
 
 - Le scaffold initial via `new-app.sh`
 - L'implémentation Django (models, serializers, views, permissions)
@@ -347,11 +351,13 @@ cp bbox.env.example       bbox.env
 | Dépôt | Contenu | Type |
 |---|---|---|
 | [sso-lab](https://github.com/Sacha37420/sso-lab) | Infra + scripts (dépôt parent) | — |
+| [lab-admin](https://github.com/Sacha37420/lab-admin) | Portail du lab (admin, déploiement, utilisateurs) | Django + Angular |
 | [app-builder](https://github.com/Sacha37420/app-builder) | Éditeur de specs d'apps | Django + Angular |
-| [front-cadriciel](https://github.com/Sacha37420/front-cadriciel) | Tableau de bord lab | Angular |
 | [analyse-lora](https://github.com/Sacha37420/analyse-lora) | Analyse LoRa | Django + Angular |
-| [spring-app](https://github.com/Sacha37420/spring-app) | Exemple Spring Boot | Spring Boot |
-| [table-manager](https://github.com/Sacha37420/table-manager) | Gestionnaire de tables | — |
+| [arbre-genealogique](https://github.com/Sacha37420/arbre-genealogique) | Arbre généalogique | Django + Angular |
+| [carto-lab](https://github.com/Sacha37420/carto-lab) | Traitement cartographique (SIG) | Django + Angular |
+| [restauration](https://github.com/Sacha37420/restauration) | Gestion de restaurant | Django + Angular |
+| [traitement-de-fichiers-compils](https://github.com/Sacha37420/traitement-de-fichiers-compils) | Dépôt de fichiers | Django + Angular |
 
 Mettre à jour les pointeurs de sous-modules :
 ```bash

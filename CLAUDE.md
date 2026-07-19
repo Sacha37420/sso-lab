@@ -246,9 +246,11 @@ require-<client>                        (top level)
 |---|---|---|---|
 | `analyse-lora` | `Sacha37420/analyse-lora` | Django + Angular | 8086 / 4204 |
 | `app-builder` | `Sacha37420/app-builder` | Django + Angular | 8087 / 4205 |
-| `front-cadriciel` | `Sacha37420/front-cadriciel` | Angular seul | 4200 |
-| `spring-app` | `Sacha37420/spring-app` | Spring Boot | 8082 |
-| `table-manager` | `Sacha37420/table-manager` | — | — |
+| `arbre-genealogique` | `Sacha37420/arbre-genealogique` | Django + Angular | 8090 / 4208 |
+| `carto-lab` | `Sacha37420/carto-lab` | Django + Angular | 8091 / 4209 |
+| `lab-admin` | `Sacha37420/lab-admin` | Django + Angular | 8083 / 4201 |
+| `restauration` | `Sacha37420/restauration` | Django + Angular | 8088 / 4206 |
+| `traitement-de-fichiers-compils` | `Sacha37420/traitement-de-fichiers-compils` | Django + Angular | 8089 / 4207 |
 
 ---
 

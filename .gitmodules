@@ -1,12 +1,3 @@
-[submodule "front-cadriciel"]
-	path = front-cadriciel
-	url = https://github.com/Sacha37420/front-cadriciel.git
-[submodule "spring-app"]
-	path = spring-app
-	url = https://github.com/Sacha37420/spring-app.git
-[submodule "table-manager"]
-	path = table-manager
-	url = https://github.com/Sacha37420/table-manager.git
 [submodule "analyse-lora"]
 	path = analyse-lora
 	url = https://github.com/Sacha37420/analyse-lora.git

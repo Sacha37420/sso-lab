@@ -23,9 +23,6 @@ traitement-de-fichiers-compils|Traitement de fichiers|Dépôt de fichiers avec �
 arbre-genealogique|Arbre généalogique|Affichage et édition d'arbres généalogiques : personnes, relations et périodes d'union.
 carto-lab|Carto Lab|Traitement cartographique : import de cartes, systèmes de coordonnées, calculs géo et cartographies climatiques Météo-France.
 
-# ── Décommissionné (containers arrêtés — remplacé par lab-admin)
-# front-cadriciel|Portail|Tableau de bord du lab : applications déployées, éditeur de code et création de projet.
-
 # ── Bacs à sable et infra (décommenter pour les afficher publiquement)
 # sso-lab|Keycloak|Console d'administration de l'IdP du lab.|/auth/
 # sso-lab|Code Server|VS Code dans le navigateur, protégé par le SSO.|/code/
