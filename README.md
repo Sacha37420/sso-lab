@@ -75,6 +75,84 @@ dev/
 
 ---
 
+## Caddy & HTTPS
+
+Caddy (dans `sso-lab`) **n'est pas configuré à la main** via un `Caddyfile` classique. Le fichier
+`sso-lab/caddy/Caddyfile` ne contient que la config globale (email ACME) :
+
+```
+{
+	email {$ACME_EMAIL}
+}
+```
+
+Le routage réel vient de [**caddy-docker-proxy**](https://github.com/lucaslorentz/caddy-docker-proxy)
+(image `lucaslorentz/caddy-docker-proxy`, service `caddy` dans `sso-lab/docker-compose.yml`) :
+chaque container porte des labels Docker que Caddy découvre dynamiquement via le socket Docker
+monté en lecture seule. Exemple (Keycloak) :
+
+```yaml
+labels:
+  caddy: "${DOMAIN}"
+  caddy.handle_path: "/auth/*"
+  caddy.handle_path.reverse_proxy: "{{upstreams 8080}}"
+```
+
+`new-app.sh` génère automatiquement ces labels pour toute nouvelle app (chemin `/<app>/` pour le
+frontend, `/<app>-api/` pour le backend) — **il n'y a jamais rien à éditer dans Caddy à la main**
+pour une app créée via le scaffold standard.
+
+Un service `fallback` (label `caddy.handle: "/*"`) capte tout ce qu'aucun préfixe d'app ne
+matche. Il doit rester un label et non un bloc écrit dans `Caddyfile` : caddy-docker-proxy ne
+fusionne pas les deux sources pour un même domaine, il les concatène — Caddy rejette alors le
+domaine en double (« ambiguous site definition ») et les routes de **toutes** les apps
+disparaissent.
+
+### Activation
+
+HTTPS ne s'active qu'en renseignant `DOMAIN` (un nom de domaine, pas une IP) dans `.env` **et**
+`sso-lab/.env` — les deux valeurs doivent être identiques. Tant que `DOMAIN=CHANGE_ME`, tout reste
+en HTTP avec accès direct par port.
+
+Les certificats Let's Encrypt sont obtenus automatiquement par Caddy via challenge HTTP-01 : le
+port 80 doit être joignable depuis Internet (redirection NAT vers le port 80 de l'hôte).
+
+### Effet sur l'ouverture des ports (Bbox)
+
+`open-bbox-ports2.sh` (appelé par `setup2.sh`) regarde `DOMAIN` :
+
+| Mode | Ports ouverts sur la Bbox |
+|---|---|
+| HTTP (`DOMAIN=CHANGE_ME`) | Tous les `PORT_*` de `ports.env` — un par service/app, accès direct |
+| HTTPS (`DOMAIN` configuré) | Seulement **80** (challenge ACME + redirect) et **443** — Caddy route en interne vers chaque app par chemin, les ports individuels ne sont plus exposés sur Internet |
+
+C'est une réduction volontaire de la surface exposée, pas un bug : en HTTPS,
+`https://DOMAIN/lab-admin/` par exemple passe entièrement par Caddy sur le port 443 ; le port 4201
+du container reste interne au réseau Docker `sso-net`.
+
+---
+
+## Nom de domaine (DDNS)
+
+Le lab n'automatise **aucune** partie du nommage DNS — c'est entièrement à la charge de
+l'opérateur, en dehors de ce dépôt :
+
+1. **Obtenir un nom de domaine** pointant vers l'IP WAN du serveur. Un service DDNS gratuit
+   convient (No-IP, DuckDNS…) puisque l'IP WAN d'une connexion résidentielle change.
+2. **Maintenir ce nom à jour** avec l'IP WAN courante : soit via le client officiel du
+   fournisseur (ex. No-IP DUC), soit via le client DynDNS intégré du routeur s'il en propose un.
+   Aucun script de ce dépôt ne fait cette mise à jour — `reset_url.sh` et `bbox.env` ne font que
+   *lire* l'IP WAN courante pour configurer les services locaux ; ils ne la poussent jamais vers
+   un fournisseur DNS.
+3. Une fois le domaine actif, le renseigner dans `.env` et `sso-lab/.env` (`DOMAIN=`) — voir
+   [Caddy & HTTPS](#caddy--https) ci-dessus.
+
+> **Vérification rapide** : `reset_url.sh` compare l'IP WAN détectée (`api.ipify.org`) à celle
+> configurée dans `bbox.env`. Un écart signalé peut venir d'un client DDNS arrêté ou d'un
+> changement pas encore propagé (TTL DNS).
+
+---
+
 ## Cloisonnement des accès
 
 Être authentifié dans le realm `ssolab` **ne donne accès à rien**. Chaque application est réservée
@@ -336,11 +414,15 @@ Les scripts internes à un service (ex: `sso-lab/`, `infra/`) restent dans leur 
 Tous les `.env` sont ignorés par git. Chaque dossier contient un `.env.example` à copier :
 
 ```bash
-cp sso-lab/.env.example   sso-lab/.env
-cp infra/.env.example     infra/.env
-cp mon-app/.env.example   mon-app/.env
-cp bbox.env.example       bbox.env
+cp .env.example            .env            # racine — DOMAIN, ACME_EMAIL, SERVER_URL_*
+cp sso-lab/.env.example    sso-lab/.env
+cp infra/.env.example      infra/.env
+cp mon-app/.env.example    mon-app/.env
+cp bbox.env.example        bbox.env
 ```
+
+> Le `.env` racine et `sso-lab/.env` doivent porter le **même** `DOMAIN`/`ACME_EMAIL` — voir
+> [Caddy & HTTPS](#caddy--https). Laisser `DOMAIN=CHANGE_ME` dans les deux pour rester en HTTP.
 
 `infra/init/00_schemas.sql` est la source de vérité pour les schémas PostgreSQL — `new-app.sh` y ajoute automatiquement la ligne `CREATE SCHEMA` de chaque nouvelle app.
 
@@ -373,6 +455,8 @@ dev/
 ├── README.md
 ├── .gitignore              ← ignore tous les .env et .debug/
 ├── .ports                  ← registre des ports (géré par new-app.sh)
+├── .env                    ← DOMAIN, ACME_EMAIL, SERVER_URL_* (non commité)
+├── .env.example
 ├── bbox.env                ← source de vérité réseau (non commité)
 ├── bbox.env.example
 ├── infra/                  ← PostgreSQL + pgAdmin  [restart: always]
@@ -407,8 +491,14 @@ dev/
 
 `infra/` et `sso-lab/` utilisent `restart: always` : une fois démarrés, ils redémarrent automatiquement avec Docker.
 
+> **Avant le tout premier lancement** : copier les `.env.example` (voir
+> [Secrets et fichiers .env](#secrets-et-fichiers-env)) et lancer `reset_url.sh`. `DOMAIN` peut
+> rester à `CHANGE_ME` pour démarrer en HTTP — voir [Caddy & HTTPS](#caddy--https) pour activer
+> HTTPS ensuite.
+
 ```bash
 # Premier lancement (ou après un reset complet)
+bash scripts/reset_url.sh      # propage bbox.env/.env vers tous les .env
 bash scripts/setup2.sh --yes   # démarre tout le lab
 ```
 

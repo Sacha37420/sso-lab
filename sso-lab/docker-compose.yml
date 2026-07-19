@@ -141,7 +141,7 @@ services:
       # Requis pour que les redirects et l'iss des JWT utilisent https.
       KC_PROXY: "edge"
       # KC_HOSTNAME_URL : fixe l'issuer JWT à une valeur stable.
-      # HTTP  → http://IP_WAN:8080  |  HTTPS → https://auth.DOMAINE
+      # HTTP  → http://IP_WAN:8080  |  HTTPS → https://DOMAINE/auth (path, pas sous-domaine)
       # Mis à jour par reset_url.sh via KEYCLOAK_HOSTNAME_URL dans .env
       KC_HOSTNAME_URL: "${KEYCLOAK_HOSTNAME_URL}"
       # KC_HOSTNAME_ADMIN_URL : fixe l'URL de la console admin indépendamment du
