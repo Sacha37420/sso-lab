@@ -526,8 +526,6 @@ services:
     networks:
       - sso-net
       - dev-net
-    volumes:
-      - .:/app   # hot-reload : les modifications du code sont prises en compte sans rebuild
     labels:
       caddy: "\${DOMAIN}"
       caddy.handle_path: "/${name}/*"
@@ -559,9 +557,6 @@ services:
       - "${port}:80"
     networks:
       - sso-net
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./nginx-entrypoint.sh:/docker-entrypoint.d/40-env-config.sh:ro
     labels:
       caddy: "\${DOMAIN}"
       caddy.handle_path: "/${name}/*"
@@ -609,9 +604,6 @@ services:
       - "${fport}:80"
     networks:
       - sso-net
-    volumes:
-      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./frontend/nginx-entrypoint.sh:/docker-entrypoint.d/40-env-config.sh:ro
     labels:
       caddy: "\${DOMAIN}"
       caddy.handle_path: "/${name}/*"
@@ -645,8 +637,6 @@ services:
     networks:
       - sso-net
       - dev-net
-    volumes:
-      - ./backend:/app
     labels:
       caddy: "\${DOMAIN}"
       caddy.handle_path: "/${name}-api/*"
@@ -661,9 +651,6 @@ services:
       - "${fport}:80"
     networks:
       - sso-net
-    volumes:
-      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./frontend/nginx-entrypoint.sh:/docker-entrypoint.d/40-env-config.sh:ro
     labels:
       caddy: "\${DOMAIN}"
       caddy.handle_path: "/${name}/*"
@@ -755,15 +742,22 @@ scaffold_django() {
   local dir="$1" name="$2" schema="$3" tmpl_name="${4:-django-angular/backend}"
   step "Django — scaffold via Docker (image python:3.12-slim)..."
 
-  # Exécution en root pour éviter les problèmes de permissions pip ; chown ensuite
-  if ! docker run --rm \
-      -v "${dir}:/app" -w /app \
+  # Le démon Docker de ce lab est distant (filesystem séparé de l'hôte code-server) :
+  # les bind mounts (-v) sont inertes, ils ne livrent aucun fichier. On génère dans un
+  # conteneur jetable puis on récupère via `docker cp` (le seul pont hôte<->conteneur ici).
+  local cname="scaffold-django-$$"
+  docker rm -f "$cname" >/dev/null 2>&1 || true
+  if ! docker run --name "$cname" \
       python:3.12-slim \
-      sh -c "pip install django -q 2>/dev/null && django-admin startproject config ."; then
+      sh -c "mkdir -p /app && cd /app && pip install django -q 2>/dev/null && django-admin startproject config ."; then
+    docker rm -f "$cname" >/dev/null 2>&1 || true
     warn "Échec du scaffold Django."
     return
   fi
 
+  docker cp "${cname}:/app/." "${dir}/"
+  docker rm -f "$cname" >/dev/null 2>&1 || true
+  sudo chown -R "$(id -u):$(id -g)" "${dir}"
 
   ok "Projet Django scaffoldé (config/ + manage.py)"
   _configure_django_project "${dir}" "${name}" "${schema}" "${tmpl_name}"
@@ -776,15 +770,16 @@ scaffold_angular() {
   local dir="$1" name="$2" port="$3" bport="${4:-}" tmpl_name="${5:-django-angular/frontend}"
   step "Angular — scaffold via Docker (~2-3 min selon la connexion, télécharge les packages npm)..."
 
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  chmod 777 "$tmpdir"
-
+  # Le démon Docker de ce lab est distant (filesystem séparé de l'hôte code-server) :
+  # les bind mounts (-v) sont inertes, ils ne livrent aucun fichier. On génère dans un
+  # conteneur jetable puis on récupère via `docker cp` (le seul pont hôte<->conteneur ici).
+  local cname="scaffold-angular-$$"
+  docker rm -f "$cname" >/dev/null 2>&1 || true
   # Exécution en root (sans --user) — npm install -g nécessite root dans Alpine
-  if ! docker run --rm \
-      -v "${tmpdir}:/workspace" \
+  if ! docker run --name "$cname" \
       node:20-alpine \
       sh -c "npm install -g @angular/cli --silent 2>/dev/null \
+             && mkdir -p /workspace \
              && ng new ${name} \
                   --directory /workspace/app \
                   --skip-git \
@@ -795,17 +790,15 @@ scaffold_angular() {
                   --defaults 2>/dev/null \
              && cd /workspace/app \
              && npm install keycloak-js@22.0.5 --save --silent 2>/dev/null"; then
-    docker run --rm -v "${tmpdir}:/target" alpine sh -c "rm -rf /target" 2>/dev/null || true
-    rm -rf "$tmpdir" 2>/dev/null || true
+    docker rm -f "$cname" >/dev/null 2>&1 || true
     warn "Échec du scaffold Angular."
     info  "Créer manuellement : ng new ${name}"
     return
   fi
 
-  cp -r "${tmpdir}/app/." "${dir}/"
-  # Suppression via Docker (fichiers créés root par node:20-alpine)
-  docker run --rm -v "${tmpdir}:/target" alpine sh -c "chmod -R 777 /target && rm -rf /target/app" 2>/dev/null || true
-  rm -rf "$tmpdir" 2>/dev/null || true
+  docker cp "${cname}:/workspace/app/." "${dir}/"
+  docker rm -f "$cname" >/dev/null 2>&1 || true
+  sudo chown -R "$(id -u):$(id -g)" "${dir}"
 
   ok "Projet Angular scaffoldé (ng new + keycloak-js@22.0.5)"
   _apply_angular_template "${dir}" "${name}" "${bport}" "${port}" "${tmpl_name}"
@@ -830,11 +823,8 @@ _configure_django_project() {
   title="$(echo "${name}" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2); print}')"
 
 
-  # Corrige les permissions AVANT la copie du template (sinon cp échoue si fichiers root)
-  docker run --rm -v "${dir}:/target" alpine sh -c "chmod -R 777 /target" 2>/dev/null || true
   # Copie du template par-dessus le scaffold (remplace config/, ajoute api/)
   cp -r "${tmpl}/." "${dir}/"
-  # Corrige à nouveau les permissions APRÈS la copie (au cas où le template contient des fichiers root)
 
   # Remplacement des placeholders dans tous les fichiers Python
   find "${dir}" -type f -name "*.py" | while IFS= read -r f; do
@@ -914,6 +904,38 @@ if ! grep -qxF "$APP_NAME/" "$DEV_DIR/.gitignore"; then
   echo "$APP_NAME/" >> "$DEV_DIR/.gitignore"
   ok "$APP_NAME/ ajouté à .gitignore"
 fi
+
+# .gitignore PROPRE À L'APP (pas celui du dépôt parent ci-dessus) : indispensable
+# avant `git init && git add .` à l'étape 2 du scaffold (README), sans quoi .env
+# (vrais secrets : DB_PASSWORD, SECRET_KEY…) partirait sur le dépôt GitHub public.
+cat > "${APP_DIR}/.gitignore" << 'EOF'
+# ── Secrets / config locale ──────────────────────────────────────────────────
+.env
+.keycloak-client-opts
+
+# ── Python / Django (racine si app Django seul, backend/ si Django+Angular) ───
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+db.sqlite3
+media/
+backend/media/
+
+# ── Angular / Node (racine si app Angular seul, frontend/ si +Angular) ────────
+node_modules/
+dist/
+.angular/
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+
+# ── Divers ───────────────────────────────────────────────────────────────────
+*.log
+.DS_Store
+EOF
+ok ".gitignore (propre à l'app)"
 
 case "$APP_TYPE" in
 
