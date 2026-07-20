@@ -22,3 +22,6 @@
 [submodule "conciergerie"]
 	path = conciergerie
 	url = https://github.com/Sacha37420/conciergerie.git
+[submodule "atelier-3d"]
+	path = atelier-3d
+	url = https://github.com/Sacha37420/atelier-3d.git
