@@ -19,3 +19,6 @@
 [submodule "lab-admin"]
 	path = lab-admin
 	url = https://github.com/Sacha37420/lab-admin.git
+[submodule "conciergerie"]
+	path = conciergerie
+	url = https://github.com/Sacha37420/conciergerie.git

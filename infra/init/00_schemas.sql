@@ -30,3 +30,5 @@ CREATE SCHEMA IF NOT EXISTS traitement_de_fichiers_compils;
 CREATE SCHEMA IF NOT EXISTS arbre_genealogique;
 
 CREATE SCHEMA IF NOT EXISTS lab_admin;
+
+CREATE SCHEMA IF NOT EXISTS conciergerie;
