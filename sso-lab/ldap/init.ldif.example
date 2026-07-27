@@ -15,7 +15,9 @@
 #       ├── uid=naty
 #       ├── uid=maria
 #       ├── uid=sabrina
-#       └── uid=bruno
+#       ├── uid=bruno
+#       ├── uid=e2e_member      ← compte de test E2E, membre de TOUS les groupes
+#       └── uid=e2e_outsider    ← compte de test E2E, membre d'AUCUN groupe
 #   └── ou=groups               ← groupes
 #       ├── cn=developers       ← sacha, hassan        (app : analyse-lora)
 #       ├── cn=admins           ← sacha
@@ -33,6 +35,14 @@
 #   - google-agenda : dom
 #   (app-builder, front-cadriciel, traitement-de-fichiers-compils, test-* :
 #    authentification seule, aucun groupe imposé)
+#
+# e2e_member / e2e_outsider (voir CLAUDE.md, section "Tests end-to-end") :
+# comptes synthétiques utilisés par runner/ pour automatiser la vérification
+# de cloisonnement de chaque app. e2e_member doit être membre de TOUS les
+# groupes ci-dessus (toujours le cas "membre" positif, quelle que soit l'app
+# testée) ; e2e_outsider d'aucun (toujours le cas "non-membre" négatif, sans
+# maintenance). Tout nouveau groupe créé ici DOIT ajouter e2e_member comme
+# membre, sinon les tests E2E des apps qui l'utilisent cassent en silence.
 #
 # Le fichier est chargé UNE SEULE FOIS au premier démarrage.
 # Pour le recharger : docker compose down --volumes  puis  up
@@ -150,6 +160,29 @@ givenName: Bruno
 mail: bruno@ssolab.local
 userPassword: CHANGE_ME
 
+# ── Utilisateur (synthétique) : e2e_member ─────────────────────────
+# Pas de mail réel : reste hors du chemin d'envoi d'email de
+# notify-password-email.sh (déjà best-effort — un compte sans adresse valide
+# n'y déclenche jamais d'erreur, cf. rotate-ldap-user-passwords.sh).
+dn: uid=e2e_member,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: e2e_member
+cn: E2E Member
+sn: Member
+givenName: E2E
+userPassword: CHANGE_ME
+
+# ── Utilisateur (synthétique) : e2e_outsider ───────────────────────
+dn: uid=e2e_outsider,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: e2e_outsider
+cn: E2E Outsider
+sn: Outsider
+givenName: E2E
+userPassword: CHANGE_ME
+
 # ── Groupe : developers ───────────────────────────────────────────
 # groupOfNames = groupe dont les membres sont des DN complets
 dn: cn=developers,ou=groups,dc=ssolab,dc=local
@@ -157,12 +190,14 @@ objectClass: groupOfNames
 cn: developers
 member: uid=sacha,ou=people,dc=ssolab,dc=local
 member: uid=hassan,ou=people,dc=ssolab,dc=local
+member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : admins ───────────────────────────────────────────────
 dn: cn=admins,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: admins
 member: uid=sacha,ou=people,dc=ssolab,dc=local
+member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : famille ──────────────────────────────────────────────
 dn: cn=famille,ou=groups,dc=ssolab,dc=local
@@ -171,6 +206,7 @@ cn: famille
 member: uid=sacha,ou=people,dc=ssolab,dc=local
 member: uid=lea,ou=people,dc=ssolab,dc=local
 member: uid=elodie,ou=people,dc=ssolab,dc=local
+member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : amis ─────────────────────────────────────────────────
 dn: cn=amis,ou=groups,dc=ssolab,dc=local
@@ -179,6 +215,7 @@ cn: amis
 member: uid=sacha,ou=people,dc=ssolab,dc=local
 member: uid=hassan,ou=people,dc=ssolab,dc=local
 member: uid=lea,ou=people,dc=ssolab,dc=local
+member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : dom ──────────────────────────────────────────────────
 dn: cn=dom,ou=groups,dc=ssolab,dc=local
@@ -186,6 +223,7 @@ objectClass: groupOfNames
 cn: dom
 member: uid=naty,ou=people,dc=ssolab,dc=local
 member: uid=maria,ou=people,dc=ssolab,dc=local
+member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : harem ────────────────────────────────────────────────
 dn: cn=harem,ou=groups,dc=ssolab,dc=local
@@ -193,6 +231,7 @@ objectClass: groupOfNames
 cn: harem
 member: uid=sacha,ou=people,dc=ssolab,dc=local
 member: uid=Carpeta,ou=people,dc=ssolab,dc=local
+member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : manager ──────────────────────────────────────────────
 # Utilisé par : restauration (rôle manager) + google-agenda
@@ -202,6 +241,7 @@ cn: manager
 member: uid=sacha,ou=people,dc=ssolab,dc=local
 member: uid=elodie,ou=people,dc=ssolab,dc=local
 member: uid=sabrina,ou=people,dc=ssolab,dc=local
+member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : cuisinier ────────────────────────────────────────────
 # Requis par : restauration (rôle cuisinier). Adapter les membres.
@@ -209,6 +249,7 @@ dn: cn=cuisinier,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: cuisinier
 member: uid=sacha,ou=people,dc=ssolab,dc=local
+member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : serveur ──────────────────────────────────────────────
 # Requis par : restauration (rôle serveur). Adapter les membres.
@@ -216,3 +257,4 @@ dn: cn=serveur,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: serveur
 member: uid=sacha,ou=people,dc=ssolab,dc=local
+member: uid=e2e_member,ou=people,dc=ssolab,dc=local
