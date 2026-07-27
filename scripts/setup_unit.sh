@@ -87,3 +87,51 @@ echo -e "\033[0;32m✓ $APP_NAME — schéma vérifié.\033[0m"
 echo -e "\033[0;36m══ $APP_NAME — démarrage des containers\033[0m"
 bash "$SCRIPT_DIR/recompose_docker.sh" --app "$APP_NAME" --force
 echo -e "\033[0;32m✓ $APP_NAME déployée.\033[0m"
+
+# ── Catalogue des tests E2E (voir CLAUDE.md, section "Tests end-to-end") ──────
+# Best-effort, jamais fatal : lab-runner et/ou lab-admin peuvent ne pas être
+# up (déploiement d'une app isolée, lab-admin down…) sans que ça doive
+# empêcher le déploiement de $APP_NAME lui-même. Ne fait que LISTER les tests
+# (--list, pas de navigateur) — jamais d'exécution réelle ici.
+if [[ "$APP_NAME" != "runner" && "$APP_NAME" != "lab-admin" && "$APP_NAME" != "infra" && "$APP_NAME" != "sso-lab" ]]; then
+  echo -e "\033[0;36m══ $APP_NAME — catalogue des tests E2E\033[0m"
+
+  LAB_ADMIN_ENV="$ROOT_DIR/lab-admin/.env"
+  if [[ -f "$LAB_ADMIN_ENV" ]]; then
+    # Auto-génère SETUP_CATALOG_KEY dans lab-admin/.env s'il est absent —
+    # jamais à saisir à la main (même logique que les autres secrets
+    # auto-générés du repo, ex. rotate-app-secret.sh).
+    if ! grep -qE '^SETUP_CATALOG_KEY=.+' "$LAB_ADMIN_ENV"; then
+      _new_key="$(openssl rand -hex 32)"
+      if grep -qE '^SETUP_CATALOG_KEY=' "$LAB_ADMIN_ENV"; then
+        sed -i "s|^SETUP_CATALOG_KEY=.*|SETUP_CATALOG_KEY=${_new_key}|" "$LAB_ADMIN_ENV"
+      else
+        echo "SETUP_CATALOG_KEY=${_new_key}" >> "$LAB_ADMIN_ENV"
+      fi
+      echo "   ■ SETUP_CATALOG_KEY généré dans lab-admin/.env (redéployer lab-admin pour l'appliquer)."
+    fi
+    SETUP_KEY="$(grep -E '^SETUP_CATALOG_KEY=' "$LAB_ADMIN_ENV" | cut -d= -f2- | tr -d '[:space:]')"
+
+    # Passe par `docker exec lab-runner curl ...` plutôt que localhost:<port
+    # publié> — les ports publiés le sont sur l'hôte du démon Docker, pas
+    # forcément sur celui d'où ce script est lancé (ex. code-server, dont le
+    # localhost ne voit pas les ports publiés du démon distant). lab-runner
+    # et lab-admin-backend partagent le réseau sso-net, donc le nom de
+    # conteneur + le port interne (8000) suffisent, où que ce script tourne.
+    LIST_JSON="$(docker exec lab-runner curl -sf "http://localhost:4300/list?app=${APP_NAME}" 2>/dev/null || true)"
+    if [[ -n "$LIST_JSON" && -n "$SETUP_KEY" ]]; then
+      if docker exec lab-runner curl -sf -X POST \
+           -H "X-Setup-Key: ${SETUP_KEY}" -H 'Content-Type: application/json' \
+           -d "{\"app\":\"${APP_NAME}\",\"tests\":${LIST_JSON}}" \
+           "http://lab-admin-backend:8000/api/debug/catalog-sync/" > /dev/null; then
+        echo -e "\033[0;32m✓ Catalogue E2E à jour.\033[0m"
+      else
+        echo -e "\033[1;33m⚠ Catalogue E2E non mis à jour (lab-admin injoignable) — déploiement non affecté.\033[0m"
+      fi
+    else
+      echo -e "\033[1;33m⚠ Catalogue E2E ignoré (lab-runner non démarré ou clé absente) — déploiement non affecté.\033[0m"
+    fi
+  else
+    echo -e "\033[1;33m⚠ Catalogue E2E ignoré (lab-admin non déployé) — déploiement non affecté.\033[0m"
+  fi
+fi

@@ -63,6 +63,13 @@ build_label() {
   local parts=()
   find "$dir" -maxdepth 2 -name "angular.json"                                       -print -quit 2>/dev/null | grep -q . && parts+=("Angular")
   find "$dir" -maxdepth 2 \( -name "manage.py" -o -name "requirements.txt" \)        -print -quit 2>/dev/null | grep -q . && parts+=("Django")
+  # Service partagé sans structure Django/Angular (ex. runner/) : un Dockerfile
+  # à la racine ou dans un sous-dossier direct suffit à déclencher --build,
+  # sinon `docker compose up -d` sans rebuild ne reprend jamais un changement
+  # de code — vérifié en déployant runner/ (aucun angular.json/manage.py).
+  if [[ ${#parts[@]} -eq 0 ]]; then
+    find "$dir" -maxdepth 2 -name "Dockerfile" -print -quit 2>/dev/null | grep -q . && parts+=("Docker")
+  fi
   [[ ${#parts[@]} -gt 0 ]] && printf " (%s → --build)" "$(IFS=+; echo "${parts[*]}")"
 }
 

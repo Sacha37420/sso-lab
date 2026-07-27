@@ -189,6 +189,20 @@ elif [[ -z "$APP_NAME" ]]; then
   echo -e "\033[0;33m⚠ 3/7  Génération des secrets ignorée — sso-lab déjà initialisé (utiliser --restart-sso-lab pour en repartir).\033[0m"
 fi
 
+# ── 3bis. Runner E2E partagé (runner/) ────────────────────────────────
+# Best-effort, jamais bloquant : catalogue les tests (étape de setup_unit.sh,
+# voir CLAUDE.md section "Tests end-to-end") a besoin de lab-runner up, mais
+# son absence ne doit jamais empêcher le déploiement d'une app. Placé ici
+# (avant le chemin rapide une-app ET le dispatch parallèle, qui délèguent
+# tous les deux à setup_unit.sh) pour être démarré une seule fois, dans les
+# deux cas.
+if ! docker inspect -f '{{.State.Running}}' lab-runner 2>/dev/null | grep -q true; then
+  echo -e "\033[0;36m══ Runner E2E (runner/)\033[0m"
+  bash "$SCRIPT_DIR/recompose_docker.sh" --app runner 2>&1 | sed 's/^/  /' \
+    && echo -e "\033[0;32m✓ Runner E2E démarré.\033[0m" \
+    || echo -e "\033[1;33m⚠ Runner E2E non démarré — le catalogue des tests sera ignoré (best-effort).\033[0m"
+fi
+
 # ── Chemin rapide : une app, aucune opération sur l'infra partagée ───────────
 # `setup_unit.sh` fait déjà tout ce que les étapes 4 à 7 font pour une app
 # (sso-lab si besoin, attente Keycloak, client, schéma, démarrage) — évite de
@@ -316,7 +330,9 @@ else
     while IFS= read -r _compose; do
       _dir="$(dirname "$_compose")"
       _name="$(basename "$_dir")"
-      [[ "$_name" == "infra" || "$_name" == "sso-lab" ]] && continue
+      # runner/ n'est pas une app (pas de client Keycloak, pas de schéma DB) —
+      # démarré séparément à l'étape 3bis, comme infra/sso-lab.
+      [[ "$_name" == "infra" || "$_name" == "sso-lab" || "$_name" == "runner" ]] && continue
       DISPATCH_APPS+=("$_name")
     done < <(find "$ROOT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort)
 
