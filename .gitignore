@@ -23,5 +23,11 @@ sso-lab/ldap/init.ldif*
 # Dossier de debug local
 .debug/
 
+# Spike Lot 0/5.0 d'atelier-3d (COLMAP/OpenMVS, FreeCAD AppImage, données de
+# test) — volontairement jamais suivi par git (voir to_do_3D.md, section
+# "Lot 5 — Conception CAO manuelle" et mémoire atelier-3d-lot0-spike-findings).
+# À nettoyer seulement une fois le Lot 5 entièrement coché, pas avant.
+atelier-3d-spike/
+
 # Config locale Claude Code (permissions personnelles, pas partagées)
 .claude/settings.local.json
