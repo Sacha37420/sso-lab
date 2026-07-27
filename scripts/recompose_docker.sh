@@ -72,6 +72,25 @@ compose_up() {
   local build_flag=""
   [[ -n "$(build_label "$dir")" ]] && build_flag="--build"
   docker compose -f "$dir/docker-compose.yml" up -d $build_flag 2>&1 | sed 's/^/  /'
+  local status=${PIPESTATUS[0]}
+  [[ $status -eq 0 ]] && _record_heavy_build_hash "$dir"
+  return $status
+}
+
+# Marque un build réussi comme "cache sûr" pour clean2.sh (cf. .heavy-build) :
+# écrit l'empreinte du Dockerfile actuel, pour que clean2.sh sache qu'il n'a
+# pas besoin de vider le cache de build tant que ce Dockerfile ne change pas.
+# N'écrit rien si le build a échoué (status != 0, vérifié par l'appelant) —
+# un Dockerfile qui n'a jamais buildé avec succès ne doit jamais être marqué sûr.
+_record_heavy_build_hash() {
+  local dir="$1"
+  local marker mdir dockerfile
+  while IFS= read -r marker; do
+    mdir="$(dirname "$marker")"
+    dockerfile="$mdir/Dockerfile"
+    [[ -f "$dockerfile" ]] || continue
+    sha256sum "$dockerfile" | cut -d' ' -f1 > "$mdir/.heavy-build.sha256"
+  done < <(find "$dir" -maxdepth 3 -name ".heavy-build" 2>/dev/null)
 }
 
 # Arrête la stack

@@ -57,6 +57,19 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# Calculés tôt (juste après le parsing des options) car ils conditionnent
+# l'étape 1 : quand `setup_unit.sh` va être délégué plus bas, il fait déjà son
+# propre `clean2.sh <app>` — inutile (et redondant) de nettoyer deux fois la
+# même app ici.
+USE_UNIT_DELEGATION=false
+if [[ -n "$APP_NAME" ]] && ! $RESTART_SSO_LAB && ! $ROTATE_SECRETS; then
+  USE_UNIT_DELEGATION=true
+fi
+USE_PARALLEL_DISPATCH=false
+if [[ -z "$APP_NAME" ]] && ! $RESTART_SSO_LAB && ! $ROTATE_SECRETS; then
+  USE_PARALLEL_DISPATCH=true
+fi
+
 # ── 0. Réinitialisation de sso-lab (--restart-sso-lab) ────────────────────────
 if $RESTART_SSO_LAB; then
   echo -e "\033[0;36m══ 0/7  Réinitialisation de sso-lab (identité vierge)\033[0m"
@@ -102,13 +115,19 @@ if [[ -n "$APP_NAME" ]] && ! grep -qE "^${APP_NAME}:" "$PORTS_REGISTRY" 2>/dev/n
 fi
 
 # ── 1. Nettoyage complet ──────────────────────────────────────────────
-echo -e "\033[0;36m══ 1/7  Nettoyage complet (clean2.sh)\033[0m"
-if [[ -n "$APP_NAME" ]]; then
+# Sauté si délégation à setup_unit.sh (chemin rapide, une app) : il fait déjà
+# son propre clean2.sh <app>, le lancer une deuxième fois ici serait redondant.
+if $USE_UNIT_DELEGATION; then
+  echo -e "\033[0;36m══ 1/7  Nettoyage complet — délégué à setup_unit.sh ci-dessous\033[0m"
+elif [[ -n "$APP_NAME" ]]; then
+  echo -e "\033[0;36m══ 1/7  Nettoyage complet (clean2.sh)\033[0m"
   bash "$SCRIPT_DIR/clean2.sh" "$APP_NAME"
+  echo -e "\033[0;32m✓ Projet remis à zéro.\033[0m"
 else
+  echo -e "\033[0;36m══ 1/7  Nettoyage complet (clean2.sh)\033[0m"
   bash "$SCRIPT_DIR/clean2.sh"
+  echo -e "\033[0;32m✓ Projet remis à zéro.\033[0m"
 fi
-echo -e "\033[0;32m✓ Projet remis à zéro.\033[0m"
 
 # ── 1bis. Rotation des secrets applicatifs (--rotate-secrets) ─────────────────
 # Placée ICI, entre le nettoyage et reset_url : la rotation DB écrit le nouveau
@@ -170,88 +189,194 @@ elif [[ -z "$APP_NAME" ]]; then
   echo -e "\033[0;33m⚠ 3/7  Génération des secrets ignorée — sso-lab déjà initialisé (utiliser --restart-sso-lab pour en repartir).\033[0m"
 fi
 
-# ── 4. Démarrage de sso-lab ───────────────────────────────────────────
-echo -e "\033[0;36m══ 4/7  Démarrage de sso-lab (Keycloak + LDAP)\033[0m"
-_KC_PORT_PROBE=$(grep -E '^PORT_KEYCLOAK=' "$ROOT_DIR/sso-lab/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
-_KC_PORT_PROBE="${_KC_PORT_PROBE:-8080}"
-if [[ -n "$APP_NAME" ]] && curl -sf "http://localhost:${_KC_PORT_PROBE}/realms/master" > /dev/null 2>&1; then
-  echo -e "\033[0;33m⚠ sso-lab déjà actif — redémarrage ignoré.\033[0m"
+# ── Chemin rapide : une app, aucune opération sur l'infra partagée ───────────
+# `setup_unit.sh` fait déjà tout ce que les étapes 4 à 7 font pour une app
+# (sso-lab si besoin, attente Keycloak, client, schéma, démarrage) — évite de
+# dupliquer cette logique ici. Seuls --restart-sso-lab/--rotate-secrets sortent
+# de ce chemin : ce sont des opérations sur l'infra partagée (mot de passe
+# Postgres, identité sso-lab), donc gardées sur le chemin séquentiel d'origine
+# ci-dessous plutôt que déléguées à un script pensé pour tourner en parallèle.
+# Dispatch parallèle (mode tout le lab) : remplace les anciennes boucles
+# séquentielles (create-app-client/ensure-schemas/recompose_docker appelés sans
+# argument, qui traitent les apps une par une) par un lancement en parallèle de
+# `setup_unit.sh <app>` par app, borné par priorité et budget RAM
+# (scripts/app-priorities.conf) — le vrai goulot CPU/RAM du lab (2 vCPU, 16 Go)
+# est le `docker compose up --build` de chaque app, pas les appels réseau
+# légers vers Keycloak/Postgres qui restaient jusqu'ici le seul critère de
+# séquencement. (USE_UNIT_DELEGATION/USE_PARALLEL_DISPATCH calculés plus haut.)
+if $USE_UNIT_DELEGATION; then
+  echo -e "\033[0;36m══ 4-7/7  Déploiement de $APP_NAME (setup_unit.sh)\033[0m"
+  bash "$SCRIPT_DIR/setup_unit.sh" "$APP_NAME" --yes
+  echo -e "\033[0;32m✓ $APP_NAME déployée.\033[0m"
 else
-  bash "$SCRIPT_DIR/recompose_docker.sh" --app sso-lab
-  echo -e "\033[0;32m✓ sso-lab démarré.\033[0m"
-fi
-
-# ── 5. Attente Keycloak ───────────────────────────────────────────────
-echo -e "\033[0;36m══ 5/7  Attente de Keycloak\033[0m"
-KC_PORT=$(grep -E '^PORT_KEYCLOAK=' "$ROOT_DIR/sso-lab/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
-KC_PORT="${KC_PORT:-8080}"
-# Depuis un container Docker (ex: code-server), utiliser le hostname keycloak
-if [ -f /.dockerenv ]; then
-  KC_HEALTH="http://keycloak:${KC_PORT}/realms/master"
-else
-  KC_HEALTH="http://localhost:${KC_PORT}/realms/master"
-fi
-TIMEOUT=300
-ELAPSED=0
-echo "   Sonde : $KC_HEALTH"
-until curl -sf "$KC_HEALTH" > /dev/null 2>&1; do
-  if [[ $ELAPSED -ge $TIMEOUT ]]; then
-    echo -e "\033[0;31m✗ Erreur : Keycloak n'a pas répondu après ${TIMEOUT}s.\033[0m" >&2; exit 1
+  # ── 4. Démarrage de sso-lab ───────────────────────────────────────────
+  echo -e "\033[0;36m══ 4/7  Démarrage de sso-lab (Keycloak + LDAP)\033[0m"
+  _KC_PORT_PROBE=$(grep -E '^PORT_KEYCLOAK=' "$ROOT_DIR/sso-lab/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
+  _KC_PORT_PROBE="${_KC_PORT_PROBE:-8080}"
+  if [[ -n "$APP_NAME" ]] && curl -sf "http://localhost:${_KC_PORT_PROBE}/realms/master" > /dev/null 2>&1; then
+    echo -e "\033[0;33m⚠ sso-lab déjà actif — redémarrage ignoré.\033[0m"
+  else
+    bash "$SCRIPT_DIR/recompose_docker.sh" --app sso-lab
+    echo -e "\033[0;32m✓ sso-lab démarré.\033[0m"
   fi
-  printf "   Keycloak pas encore prêt (%ds)…\r" "$ELAPSED"
-  sleep 3
-  ELAPSED=$((ELAPSED + 3))
-done
-echo ""
-echo -e "\033[0;32m✓ Keycloak prêt (${ELAPSED}s).\033[0m"
-if [[ $ELAPSED -gt 3 ]]; then
-  echo "   Attente de 20s pour laisser Keycloak finaliser son initialisation…"
-  sleep 20
-else
-  echo "   Keycloak était déjà prêt, pas d'attente."
-fi
 
-# ── 6. Realm + LDAP + clients Keycloak ───────────────────────────────
-echo -e "\033[0;36m══ 6/7  Configuration Keycloak (realm, LDAP, clients)\033[0m"
-if [[ -n "$APP_NAME" ]]; then
-  bash "$SCRIPT_DIR/create-app-client.sh" "$APP_NAME"
-else
-  bash "$SCRIPT_DIR/create-app-client.sh"
-fi
-# Client code-server (oauth2-proxy) : recréé si absent (idempotent)
-bash "$ROOT_DIR/sso-lab/setup-code-server-auth.sh"
-echo -e "\033[0;32m✓ Clients Keycloak configurés.\033[0m"
+  # ── 5. Attente Keycloak ───────────────────────────────────────────────
+  echo -e "\033[0;36m══ 5/7  Attente de Keycloak\033[0m"
+  KC_PORT=$(grep -E '^PORT_KEYCLOAK=' "$ROOT_DIR/sso-lab/.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
+  KC_PORT="${KC_PORT:-8080}"
+  # Depuis un container Docker (ex: code-server), utiliser le hostname keycloak
+  if [ -f /.dockerenv ]; then
+    KC_HEALTH="http://keycloak:${KC_PORT}/realms/master"
+  else
+    KC_HEALTH="http://localhost:${KC_PORT}/realms/master"
+  fi
+  TIMEOUT=300
+  ELAPSED=0
+  echo "   Sonde : $KC_HEALTH"
+  until curl -sf "$KC_HEALTH" > /dev/null 2>&1; do
+    if [[ $ELAPSED -ge $TIMEOUT ]]; then
+      echo -e "\033[0;31m✗ Erreur : Keycloak n'a pas répondu après ${TIMEOUT}s.\033[0m" >&2; exit 1
+    fi
+    printf "   Keycloak pas encore prêt (%ds)…\r" "$ELAPSED"
+    sleep 3
+    ELAPSED=$((ELAPSED + 3))
+  done
+  echo ""
+  echo -e "\033[0;32m✓ Keycloak prêt (${ELAPSED}s).\033[0m"
+  if [[ $ELAPSED -gt 3 ]]; then
+    echo "   Attente de 20s pour laisser Keycloak finaliser son initialisation…"
+    sleep 20
+  else
+    echo "   Keycloak était déjà prêt, pas d'attente."
+  fi
 
-# ── 6ter. Emails des comptes existants (après un realm neuf) ─────────────────
-# Le realm vient d'être recréé : tous les comptes importés de LDAP repartent à
-# emailVerified=false. Si VERIFY_EMAIL est activé un jour, ceux dont l'adresse est
-# factice (hassan@ssolab.local, maria@ssolab.local) ne pourraient plus se connecter.
-if $RESTART_SSO_LAB; then
-  echo -e "\033[0;36m══ Validation des emails des comptes existants\033[0m"
-  bash "$ROOT_DIR/sso-lab/verify-existing-emails.sh" || true
-fi
+  # ── 6. Realm + LDAP + clients Keycloak ───────────────────────────────
+  echo -e "\033[0;36m══ 6/7  Configuration Keycloak (realm, LDAP, clients)\033[0m"
+  if $USE_PARALLEL_DISPATCH; then
+    echo "   Ignoré ici — géré par app dans le dispatch parallèle de l'étape 7."
+  elif [[ -n "$APP_NAME" ]]; then
+    bash "$SCRIPT_DIR/create-app-client.sh" "$APP_NAME"
+  else
+    bash "$SCRIPT_DIR/create-app-client.sh"
+  fi
+  # Client code-server (oauth2-proxy) : recréé si absent (idempotent)
+  bash "$ROOT_DIR/sso-lab/setup-code-server-auth.sh"
+  echo -e "\033[0;32m✓ Clients Keycloak configurés.\033[0m"
 
-# ── 6bis. Schémas Postgres ───────────────────────────────────────────
-# Impérativement avant le démarrage des containers : c'est à son lancement que le
-# backend Django exécute `migrate`. Si le schéma n'existe pas encore (00_schemas.sql
-# n'est joué qu'à l'initialisation du volume), Django écrit dans public et croit ses
-# migrations déjà appliquées — backend up, logs propres, base vide.
-echo -e "\033[0;36m══ Vérification des schémas Postgres (ensure-schemas.sh)\033[0m"
-if [[ -n "$APP_NAME" ]]; then
-  bash "$SCRIPT_DIR/ensure-schemas.sh" "$APP_NAME"
-else
-  bash "$SCRIPT_DIR/ensure-schemas.sh"
-fi
-echo -e "\033[0;32m✓ Schémas vérifiés.\033[0m"
+  # ── 6ter. Emails des comptes existants (après un realm neuf) ─────────────────
+  # Le realm vient d'être recréé : tous les comptes importés de LDAP repartent à
+  # emailVerified=false. Si VERIFY_EMAIL est activé un jour, ceux dont l'adresse est
+  # factice (hassan@ssolab.local, maria@ssolab.local) ne pourraient plus se connecter.
+  if $RESTART_SSO_LAB; then
+    echo -e "\033[0;36m══ Validation des emails des comptes existants\033[0m"
+    bash "$ROOT_DIR/sso-lab/verify-existing-emails.sh" || true
+  fi
 
-# ── 7. Démarrage des stacks ──────────────────────────────────────────
-echo -e "\033[0;36m══ 7/7  Démarrage des stacks\033[0m"
-if [[ -n "$APP_NAME" ]]; then
-  bash "$SCRIPT_DIR/recompose_docker.sh" --app "$APP_NAME" --force
-else
-  bash "$SCRIPT_DIR/recompose_docker.sh" --force
+  # ── 6bis. Schémas Postgres ───────────────────────────────────────────
+  # Impérativement avant le démarrage des containers : c'est à son lancement que le
+  # backend Django exécute `migrate`. Si le schéma n'existe pas encore (00_schemas.sql
+  # n'est joué qu'à l'initialisation du volume), Django écrit dans public et croit ses
+  # migrations déjà appliquées — backend up, logs propres, base vide.
+  echo -e "\033[0;36m══ Vérification des schémas Postgres (ensure-schemas.sh)\033[0m"
+  if $USE_PARALLEL_DISPATCH; then
+    echo "   Ignoré ici — géré par app dans le dispatch parallèle de l'étape 7."
+  elif [[ -n "$APP_NAME" ]]; then
+    bash "$SCRIPT_DIR/ensure-schemas.sh" "$APP_NAME"
+  else
+    bash "$SCRIPT_DIR/ensure-schemas.sh"
+  fi
+  echo -e "\033[0;32m✓ Schémas vérifiés.\033[0m"
+
+  # ── 7. Démarrage des stacks ──────────────────────────────────────────
+  echo -e "\033[0;36m══ 7/7  Démarrage des stacks\033[0m"
+  if $USE_PARALLEL_DISPATCH; then
+    # Priorité/poids RAM : scripts/app-priorities.conf (défauts ci-dessous pour
+    # toute app absente du fichier). Budget et concurrence dimensionnés pour ce
+    # serveur (2 vCPU, 16 Go) — infra/sso-lab/apps déjà up tournent déjà à
+    # plusieurs Go à vide, d'où la marge sous le total plutôt qu'un budget à 16 Go.
+    RAM_BUDGET_MB=8500
+    MAX_CONCURRENT=2
+    DEFAULT_PRIORITY=50
+    DEFAULT_RAM_MB=1500
+    PRIORITIES_FILE="$SCRIPT_DIR/app-priorities.conf"
+
+    declare -A APP_PRIORITY
+    declare -A APP_RAM
+    if [[ -f "$PRIORITIES_FILE" ]]; then
+      while IFS=: read -r _pa _pp _pr; do
+        [[ -z "$_pa" || "$_pa" == \#* ]] && continue
+        APP_PRIORITY["$_pa"]="$_pp"
+        APP_RAM["$_pa"]="$_pr"
+      done < "$PRIORITIES_FILE"
+    fi
+    _priority_of() { echo "${APP_PRIORITY[$1]:-$DEFAULT_PRIORITY}"; }
+    _ram_of()      { echo "${APP_RAM[$1]:-$DEFAULT_RAM_MB}"; }
+
+    DISPATCH_APPS=()
+    while IFS= read -r _compose; do
+      _dir="$(dirname "$_compose")"
+      _name="$(basename "$_dir")"
+      [[ "$_name" == "infra" || "$_name" == "sso-lab" ]] && continue
+      DISPATCH_APPS+=("$_name")
+    done < <(find "$ROOT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort)
+
+    SORTED_APPS=()
+    while IFS='|' read -r _ _app; do
+      SORTED_APPS+=("$_app")
+    done < <(
+      for _app in "${DISPATCH_APPS[@]}"; do
+        printf '%s|%s\n' "$(_priority_of "$_app")" "$_app"
+      done | sort -t'|' -k1,1n
+    )
+
+    # Répertoire de réservation RAM : un fichier par app en cours de build,
+    # contenant son poids — la somme des fichiers présents = RAM réservée.
+    # L'attribution d'un créneau (vérification + réservation) est décidée
+    # UNIQUEMENT par la boucle ci-dessous, dans le process principal, jamais
+    # par les sous-shells en tâche de fond : sinon toutes les apps se
+    # disputeraient un créneau libre en parallèle dès le lancement de la
+    # boucle, et l'ordre de priorité ne serait plus respecté (vérifié : sans
+    # cette contrainte, une app de faible priorité peut gagner la course et
+    # démarrer avant une app plus prioritaire). Les sous-shells ne font que
+    # lancer `setup_unit.sh` et libérer leur réservation à la fin.
+    RESERVED_DIR="$(mktemp -d)"
+    trap 'rm -rf "$RESERVED_DIR"' EXIT
+
+    _reserved_total() {
+      local total=0 f
+      for f in "$RESERVED_DIR"/*; do
+        [[ -f "$f" ]] && total=$(( total + $(cat "$f" 2>/dev/null || echo 0) ))
+      done
+      echo "$total"
+    }
+    _running_count() { find "$RESERVED_DIR" -type f 2>/dev/null | wc -l; }
+
+    echo "   Budget : ${RAM_BUDGET_MB} Mo, ${MAX_CONCURRENT} builds simultanés max (scripts/app-priorities.conf)."
+    for _app in "${SORTED_APPS[@]}"; do
+      _ram="$(_ram_of "$_app")"
+      while true; do
+        _reserved="$(_reserved_total)"
+        _running="$(_running_count)"
+        if (( _running < MAX_CONCURRENT && _reserved + _ram <= RAM_BUDGET_MB )); then
+          break
+        fi
+        sleep 5
+      done
+      echo "$_ram" > "$RESERVED_DIR/$_app"
+      echo "▶ $_app — démarrage (priorité $(_priority_of "$_app"), ~${_ram} Mo)…"
+      (
+        bash "$SCRIPT_DIR/setup_unit.sh" "$_app" --yes || echo -e "\033[0;31m✗ $_app — échec (voir logs ci-dessus), les autres apps continuent.\033[0m"
+        rm -f "$RESERVED_DIR/$_app"
+      ) &
+    done
+    wait
+  elif [[ -n "$APP_NAME" ]]; then
+    bash "$SCRIPT_DIR/recompose_docker.sh" --app "$APP_NAME" --force
+  else
+    bash "$SCRIPT_DIR/recompose_docker.sh" --force
+  fi
+  echo -e "\033[0;32m✓ Stacks démarrées.\033[0m"
 fi
-echo -e "\033[0;32m✓ Stacks démarrées.\033[0m"
 
 # ── 8. Génération de ports.env ───────────────────────────────────────
 echo -e "\033[0;36m══ Génération de ports.env (get-ports-list.sh)\033[0m"

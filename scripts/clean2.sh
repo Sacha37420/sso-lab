@@ -70,8 +70,37 @@ fi
 echo ""
 
 # ── 3. Cache de build Docker ─────────────────────────────────────────
+# Ignoré si tous les Dockerfiles marqués "lourds" (.heavy-build, cf.
+# atelier-3d/backend/) dans le périmètre nettoyé sont inchangés depuis leur
+# dernier build réussi (.heavy-build.sha256, écrit par recompose_docker.sh) —
+# évite de redéclencher une compilation de plusieurs dizaines de minutes
+# (COLMAP/OpenMVS, FreeCAD) à chaque nettoyage alors que rien n'a changé. Un
+# seul Dockerfile marqué modifié (ou jamais buildé avec succès) suffit à
+# redéclencher le nettoyage normalement — et une app sans aucun marqueur
+# `.heavy-build` dans le périmètre a toujours son cache nettoyé comme avant.
 echo "=== 3/4  Nettoyage du cache de build Docker ==="
-docker builder prune -f 2>&1 | sed 's/^/  /'
+_PRUNE_SEARCH_ROOT="$SCRIPT_DIR"
+[[ -n "$APP_NAME" ]] && _PRUNE_SEARCH_ROOT="$SCRIPT_DIR/$APP_NAME"
+_HEAVY_FOUND=false
+_HEAVY_CHANGED=false
+while IFS= read -r _marker; do
+  _HEAVY_FOUND=true
+  _mdir="$(dirname "$_marker")"
+  _dockerfile="$_mdir/Dockerfile"
+  if [[ ! -f "$_dockerfile" ]]; then
+    _HEAVY_CHANGED=true
+    continue
+  fi
+  _current_hash="$(sha256sum "$_dockerfile" | cut -d' ' -f1)"
+  _stored_hash="$(cat "$_mdir/.heavy-build.sha256" 2>/dev/null || true)"
+  [[ "$_current_hash" != "$_stored_hash" ]] && _HEAVY_CHANGED=true
+done < <(find "$_PRUNE_SEARCH_ROOT" -maxdepth 4 -name ".heavy-build" 2>/dev/null)
+
+if $_HEAVY_FOUND && ! $_HEAVY_CHANGED; then
+  echo "■ Dockerfile(s) lourd(s) inchangé(s) depuis le dernier build réussi — nettoyage du cache ignoré."
+else
+  docker builder prune -f 2>&1 | sed 's/^/  /'
+fi
 echo ""
 
 # ── 4. Artefacts de build applicatifs ───────────────────────────────
