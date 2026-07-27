@@ -77,6 +77,17 @@ if [[ -f "$ROOT_ENV" ]]; then
   ACME_EMAIL="$(_env_val "$ROOT_ENV" ACME_EMAIL "CHANGE_ME")"
 fi
 
+# ── Chemin hôte du dépôt vu par le démon Docker ────────────────────────────
+# Par défaut : $SCRIPT_DIR (correct si ce script tourne sur la même machine que
+# le démon Docker). À renseigner dans .env UNIQUEMENT si ce dépôt est édité
+# depuis un conteneur (ex. code-server) séparé du démon Docker — voir le
+# commentaire de HOST_DEV_ROOT dans .env.example. Consommé par les services qui
+# montent tout le dépôt en lecture seule (lab-admin, runner/) : ils déclarent
+# déjà HOST_DEV_ROOT dans leur .env, donc upsert_env (no-op si absente) ne
+# touche que ceux-là.
+HOST_DEV_ROOT="$(_env_val "$ROOT_ENV" HOST_DEV_ROOT "")"
+[[ -z "$HOST_DEV_ROOT" ]] && HOST_DEV_ROOT="$SCRIPT_DIR"
+
 # ── Validation de SERVER_URL_WAN ─────────────────────────────────────────
 if [[ -z "$SERVER_URL_WAN" ]]; then
   echo "❌  SERVER_URL_WAN manquant dans bbox.env" >&2; exit 1
@@ -201,6 +212,7 @@ echo "  Keycloak public   : ${KC_PUBLIC_URL}"
 echo "  Keycloak issuer   : ${KC_ISSUER_URI}"
 echo "  PORT_KEYCLOAK     : ${PORT_KEYCLOAK}"
 echo "  HPORT_POSTGRES    : ${HPORT_POSTGRES}"
+echo "  HOST_DEV_ROOT     : ${HOST_DEV_ROOT}"
 echo ""
 
 # ── Parcours de tous les .env des sous-projets ────────────────────────────
@@ -236,6 +248,7 @@ while IFS= read -r envfile; do
   [[ -n "$POSTGIS_PASSWORD" ]] && upsert_env "$envfile" POSTGIS_PASSWORD "$POSTGIS_PASSWORD"
   upsert_env "$envfile" DOMAIN               "$DOMAIN"
   upsert_env "$envfile" ACME_EMAIL           "$ACME_EMAIL"
+  upsert_env "$envfile" HOST_DEV_ROOT        "$HOST_DEV_ROOT"
 
   after=$(md5sum "$envfile" 2>/dev/null | cut -d' ' -f1)
 
