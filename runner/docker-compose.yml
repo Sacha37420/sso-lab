@@ -1,0 +1,33 @@
+version: "3.9"
+
+# Service partagé du lab (comme infra/ et sso-lab/ — pas une app, pas de
+# sous-module). Porte Playwright + Chromium une seule fois pour tout le lab :
+# voir CLAUDE.md, section "Tests end-to-end (Playwright)".
+#
+# Jamais exposé : ni port publié, ni label Caddy. Atteint uniquement depuis le
+# réseau sso-net, par nom de conteneur (lab-runner) — lab-admin (worker) et
+# setup_unit.sh (via `docker exec lab-runner`) sont les deux seuls appelants.
+
+networks:
+  sso-net:
+    external: true
+    name: sso-lab_sso-net
+
+services:
+
+  runner:
+    build: .
+    container_name: lab-runner
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - sso-net
+    volumes:
+      # Lecture seule de tout le dépôt : chaque app expose son
+      # frontend/e2e/*.spec.ts, son docker-compose.yml (labels Caddy) et son
+      # .env (DOMAIN) ; sso-lab/.env fournit les mots de passe courants de
+      # e2e_member/e2e_outsider. ${HOST_DEV_ROOT} et non un chemin relatif :
+      # voir le commentaire de HOST_DEV_ROOT dans le .env.example racine —
+      # un chemin relatif se résoudrait différemment selon l'endroit d'où
+      # `docker compose` est invoqué et casserait ce montage en silence.
+      - ${HOST_DEV_ROOT}:/mnt/dev:ro
