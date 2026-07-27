@@ -22,3 +22,6 @@ sso-lab/ldap/init.ldif*
 
 # Dossier de debug local
 .debug/
+
+# Config locale Claude Code (permissions personnelles, pas partagées)
+.claude/settings.local.json
