@@ -98,6 +98,11 @@ Le lab est **exposé sur Internet**. Être authentifié dans le realm `ssolab` n
 `create-app-client.sh` en déduit tout, de façon idempotente : rôle `<client>-access` assigné à chaque
 groupe, flow `require-<client>` lié au client, et `KEYCLOAK_REQUIRED_GROUPS` écrit dans `<app>/.env`.
 
+> ⚠ Tout nouveau groupe LDAP créé ici (dans `sso-lab/ldap/init.ldif`) **doit** ajouter `e2e_member`
+> comme membre — voir section « Tests end-to-end » plus bas. Sans ça, le test de cloisonnement
+> automatisé de toute app qui utilise ce groupe considère `e2e_member` comme non-membre et casse
+> en silence (faux négatif : le test échoue alors que le cloisonnement réel est correct).
+
 ---
 
 ### Étape 4 — Déploiement complet : `setup2.sh`
@@ -237,6 +242,70 @@ require-<client>                        (top level)
   (`OAUTH2_PROXY_ALLOWED_GROUPS`). Il tourne en `--auth=none` et n'a **aucune protection propre**.
 - Après tout changement de cloisonnement, **tester dans les deux sens** : un membre du groupe passe,
   un non-membre est refusé — et vérifier qu'un non-membre avec une session SSO active est aussi refusé.
+  Ce test est maintenant automatisable — voir section « Tests end-to-end » ci-dessous.
+
+---
+
+## Tests end-to-end (Playwright)
+
+Chaque app a **un seul fichier** de test Playwright, à cet emplacement fixe et ce nom :
+`<app>/frontend/e2e/cloisonnement.spec.ts`. Le formalisme complet (variables d'environnement
+attendues, structure des tests) vit dans le template, à copier tel quel dans toute nouvelle app :
+`_templates/django-angular/frontend/e2e/cloisonnement.spec.ts`. Ce fichier ne doit dépendre
+d'aucun contenu spécifique à l'app (pas de sélecteur/texte propre à une page) — il doit rester
+copiable sans adaptation.
+
+**Pourquoi ce format précis** : il automatise le test manuel documenté juste au-dessus (section
+« Règles ») — membre du groupe requis passe, non-membre refusé, non-membre avec session SSO déjà
+active refusé aussi (le contournement historique : un authentificateur `Cookie` court-circuite un
+flow mal structuré, cf. section « Verrou 1 » plus haut). **N'ajoutez pas d'autre fichier de test
+E2E** dans une app sans d'abord mettre à jour cette section — le pipeline (catalogue + exécution
+ci-dessous) suppose un seul fichier, ce nom précis.
+
+### Architecture
+
+- **`runner/`** (racine du dépôt, comme `infra/`/`sso-lab/` — pas un sous-module) : conteneur
+  unique portant Playwright + Chromium pour tout le lab. Jamais dans l'image d'une app (contrainte
+  2 vCPU/16 Go — voir `to_do_3D.md` pour le même principe côté atelier-3d). Réseau `sso-net`
+  uniquement, monte tout le dépôt en lecture seule (`${HOST_DEV_ROOT}`, voir ci-dessous), **jamais
+  exposé** (pas de port publié, pas de label Caddy) — atteint uniquement par nom de conteneur
+  (`lab-runner`) depuis `lab-admin` (worker Celery) ou via `docker exec` depuis `setup_unit.sh`.
+- **Deux comptes LDAP synthétiques** (`sso-lab/ldap/init.ldif`) : `e2e_member`, membre de **tous**
+  les groupes existants (toujours le cas « membre » positif, quelle que soit l'app testée), et
+  `e2e_outsider`, membre d'**aucun** groupe (toujours le cas « non-membre » négatif — aucune
+  maintenance requise). Leurs mots de passe rotent normalement avec `rotate-ldap-user-passwords.sh`
+  — le runner relit toujours la valeur courante dans `sso-lab/.env`, jamais de cache.
+- **Catalogue vs exécution**, deux choses bien distinctes :
+  - *Catalogue* (`GET /list` sur le runner, **pas de navigateur**) : à chaque déploiement d'une app
+    (`scripts/setup_unit.sh`, étape best-effort en toute fin), liste les tests du fichier
+    `cloisonnement.spec.ts` de l'app et les enregistre dans `lab-admin` (table `DebugTest`). Ne
+    lance jamais de navigateur — reste rapide, compatible avec le dispatch parallèle tout-le-lab
+    de `setup2.sh`.
+  - *Exécution* (`POST /run` sur le runner, navigateur réel) : jamais automatique. Déclenchée à la
+    main depuis la page **Debug** de `lab-admin` (une app, ou toutes), via
+    `POST /api/debug/run/` → tâche Celery (`lab-admin` a son propre `redis`+`worker`, comme
+    carto-lab) → runner → résultats stockés dans `DebugTest`, visibles dans le tableau.
+- Un seul run à la fois, lab-wide : mutex en mémoire côté runner (409 si déjà occupé) **et**
+  `--concurrency=1` sur le worker Celery de `lab-admin` — même principe que le verrou global
+  d'atelier-3d, pour la même raison (2 vCPU/16 Go partagés).
+- `CatalogSyncView` (`POST /api/debug/catalog-sync/`) est le seul endpoint de `lab-admin` en
+  dehors de l'auth Keycloak par défaut : appelé par un script (`setup_unit.sh`), pas un navigateur,
+  authentifié par secret partagé (header `X-Setup-Key` / `SETUP_CATALOG_KEY` dans
+  `lab-admin/.env`, auto-généré si absent) — même famille de pattern que `X-Meteo-Key` de
+  carto-lab.
+
+### `HOST_DEV_ROOT` — piège à connaître avant de toucher au montage `/mnt/dev`
+
+`lab-admin` et `runner/` montent tout le dépôt en lecture seule (`${HOST_DEV_ROOT}:/mnt/dev:ro`).
+Si ce dépôt est édité depuis un conteneur (ex. `code-server`) **séparé** de la machine qui héberge
+le démon Docker, un chemin relatif (`../`) se résout différemment selon l'endroit d'où
+`docker compose` est invoqué et peut monter un dossier **vide** côté démon, en silence (pas
+d'erreur — juste `/mnt/dev` vide). `HOST_DEV_ROOT` (`.env` racine, propagé par `reset_url.sh`)
+fixe ça : vide par défaut (= pas de traduction nécessaire, cas courant d'une install classique),
+à renseigner uniquement dans ce cas précis — voir le commentaire dans `.env.example`. Concerne
+aussi `lab-admin/docker-compose.yml` : son ancien bind mount `./backend:/app` (code source, pas
+juste `/mnt/dev`) a été retiré pour la même raison — le code de l'app est baké dans l'image
+(comme carto-lab/atelier-3d), jamais monté en live.
 
 ---
 
