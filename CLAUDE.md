@@ -194,12 +194,22 @@ toute autre app y accède exclusivement via l'API de `storage` (`KEYCLOAK_TRUSTE
 plus haut), jamais en montant le volume directement : un montage direct court-circuiterait les
 contrôles de permission par namespace/partage de l'API.
 
-`atelier-3d`, `carto-lab` et `conciergerie` ont chacune encore leur propre volume média privé —
-candidates à une migration vers `storage` au fil de l'eau, app par app (pas fait automatiquement :
-implique de réécrire leur code de gestion de fichiers pour appeler l'API `storage`, de migrer les
-fichiers déjà présents, et de revérifier chaque fonctionnalité upload/visualisation/suppression).
-Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit appeler l'API
-`storage` directement plutôt que de se donner son propre volume média.
+`atelier-3d` et `carto-lab` ont encore chacune leur propre volume média privé — candidates à une
+migration vers `storage` au fil de l'eau (pas fait automatiquement : implique de réécrire leur
+code de gestion de fichiers pour appeler l'API `storage`, de migrer les fichiers déjà présents, et
+de revérifier chaque fonctionnalité upload/visualisation/suppression). Toute **nouvelle** app qui a
+besoin de stocker des fichiers utilisateur doit appeler l'API `storage` directement plutôt que de
+se donner son propre volume média.
+
+**`conciergerie` est migrée** (`Frais.facture` → `Frais.facture_path`, un partage `storage` par
+bien nommé `conciergerie-bien-<id>`, créé automatiquement au premier upload). C'est l'exemple de
+référence pour le cas « plusieurs partages dynamiques, autorisation déjà décidée par l'app
+appelante » : voir `conciergerie/backend/api/storage_client.py` (miroir de
+`keycloak_admin.py` — même compte de service `<app>-admin`, réutilisé ici pour appeler `storage`
+au lieu de l'API Admin Keycloak) et `FraisViewSet` (`conciergerie/backend/api/views.py`). Au
+passage, la migration a corrigé un trou de sécurité préexistant : le téléchargement d'une facture
+n'était pas authentifié (`django.views.static.serve` monté sans permission) — le nouvel endpoint
+réapplique le cloisonnement manager/co-propriétaire déjà en place pour le reste de l'API.
 
 ---
 
