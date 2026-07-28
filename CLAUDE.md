@@ -244,6 +244,34 @@ require-<client>                        (top level)
   un non-membre est refusé — et vérifier qu'un non-membre avec une session SSO active est aussi refusé.
   Ce test est maintenant automatisable — voir section « Tests end-to-end » ci-dessous.
 
+### Verrou 2 généralisé — API appelable par d'autres apps du lab (`KEYCLOAK_TRUSTED_CLIENTS`)
+
+Le contrôle `azp` du Verrou 2 ci-dessus suppose un client unique (`azp == settings.KEYCLOAK_CLIENT_ID`).
+Ça bloque toute app tierce : le frontend d'une autre app obtient un token dont `azp` est **son propre**
+client_id, jamais celui de l'API appelée — et toutes les apps du lab partagent le même `DOMAIN` (seul le
+chemin Caddy change), donc un tel appel est **same-origin**, aucun CORS à gérer, seul `azp` bloque.
+
+Pour une API qui doit être appelable par d'autres apps au nom de leurs utilisateurs (ex. `storage`),
+remplacer l'égalité stricte par une **liste blanche explicite** :
+
+```python
+KEYCLOAK_TRUSTED_CLIENTS = {
+    c.strip()
+    for c in config('KEYCLOAK_TRUSTED_CLIENTS', default=KEYCLOAK_CLIENT_ID).split(',')
+    if c.strip()
+}
+# ...
+if claims.get('azp') not in settings.KEYCLOAK_TRUSTED_CLIENTS:
+    raise AuthenticationFailed(...)
+```
+
+Défaut : uniquement le client de l'app elle-même — même périmètre que le pattern habituel. Pour
+autoriser une app tierce, ajouter son `client_id` à `KEYCLOAK_TRUSTED_CLIENTS` dans le `.env` de l'API
+appelée — **aucun changement côté Keycloak**. La propriété de sécurité est préservée à l'identique :
+`admin-cli` n'est jamais dans la liste. Le contrôle de groupe reste inchangé et continue de s'appliquer
+normalement (chaque client du realm porte le même claim `groups`). Voir `storage/backend/api/authentication.py`
+pour l'implémentation de référence.
+
 ---
 
 ## Tests end-to-end (Playwright)
@@ -347,6 +375,7 @@ chaud. `rotate-secrets-full.sh` termine lui-même par `recompose_docker.sh --for
 | `carto-lab` | `Sacha37420/carto-lab` | Django + Angular | 8091 / 4209 |
 | `lab-admin` | `Sacha37420/lab-admin` | Django + Angular | 8083 / 4201 |
 | `restauration` | `Sacha37420/restauration` | Django + Angular | 8088 / 4206 |
+| `storage` | `Sacha37420/storage` | Django + Angular | 8093 / 4211 |
 | `traitement-de-fichiers-compils` | `Sacha37420/traitement-de-fichiers-compils` | Django + Angular | 8089 / 4207 |
 
 ---

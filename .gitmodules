@@ -25,3 +25,6 @@
 [submodule "atelier-3d"]
 	path = atelier-3d
 	url = https://github.com/Sacha37420/atelier-3d.git
+[submodule "storage"]
+	path = storage
+	url = https://github.com/Sacha37420/storage.git
