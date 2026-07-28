@@ -194,22 +194,37 @@ toute autre app y accède exclusivement via l'API de `storage` (`KEYCLOAK_TRUSTE
 plus haut), jamais en montant le volume directement : un montage direct court-circuiterait les
 contrôles de permission par namespace/partage de l'API.
 
-`atelier-3d` et `carto-lab` ont encore chacune leur propre volume média privé — candidates à une
-migration vers `storage` au fil de l'eau (pas fait automatiquement : implique de réécrire leur
-code de gestion de fichiers pour appeler l'API `storage`, de migrer les fichiers déjà présents, et
-de revérifier chaque fonctionnalité upload/visualisation/suppression). Toute **nouvelle** app qui a
-besoin de stocker des fichiers utilisateur doit appeler l'API `storage` directement plutôt que de
-se donner son propre volume média.
+`atelier-3d` a encore son propre volume média privé — candidate à une migration vers `storage` au
+fil de l'eau (pas fait automatiquement : implique de réécrire son code de gestion de fichiers pour
+appeler l'API `storage`, de migrer les fichiers déjà présents, et de revérifier chaque
+fonctionnalité upload/visualisation/suppression). Toute **nouvelle** app qui a besoin de stocker
+des fichiers utilisateur doit appeler l'API `storage` directement plutôt que de se donner son
+propre volume média.
 
-**`conciergerie` est migrée** (`Frais.facture` → `Frais.facture_path`, un partage `storage` par
-bien nommé `conciergerie-bien-<id>`, créé automatiquement au premier upload). C'est l'exemple de
-référence pour le cas « plusieurs partages dynamiques, autorisation déjà décidée par l'app
-appelante » : voir `conciergerie/backend/api/storage_client.py` (miroir de
-`keycloak_admin.py` — même compte de service `<app>-admin`, réutilisé ici pour appeler `storage`
-au lieu de l'API Admin Keycloak) et `FraisViewSet` (`conciergerie/backend/api/views.py`). Au
-passage, la migration a corrigé un trou de sécurité préexistant : le téléchargement d'une facture
-n'était pas authentifié (`django.views.static.serve` monté sans permission) — le nouvel endpoint
-réapplique le cloisonnement manager/co-propriétaire déjà en place pour le reste de l'API.
+**`conciergerie` et `carto-lab` sont migrées.**
+
+- `conciergerie` (`Frais.facture` → `Frais.facture_path`, un partage `storage` par bien nommé
+  `conciergerie-bien-<id>`, créé automatiquement au premier upload) est l'exemple de référence pour
+  le cas « plusieurs partages dynamiques, autorisation déjà décidée par l'app appelante » : voir
+  `conciergerie/backend/api/storage_client.py` (miroir de `keycloak_admin.py` — même compte de
+  service `<app>-admin`, réutilisé ici pour appeler `storage` au lieu de l'API Admin Keycloak) et
+  `FraisViewSet` (`conciergerie/backend/api/views.py`).
+- `carto-lab` (`Layer.raster_file` → `Layer.raster_path`, un unique partage `carto-lab` avec
+  `required_groups='developers'`, provisionné via `create_group_share`) est l'exemple de référence
+  pour le cas « carte commune, tout le groupe lit/écrit tout » : voir
+  `carto-lab/backend/api/storage_client.py` (variante **sans** compte de service — le token de
+  l'utilisateur courant est simplement forwardé, `azp=carto-lab` ajouté à
+  `KEYCLOAK_TRUSTED_CLIENTS` côté `storage`, aucune tâche Celery ne touchant de fichier). Piège
+  évité au passage, à garder en tête pour toute future opération de traitement qui aurait besoin du
+  token : ne **jamais** faire transiter un `Authorization` par un dict de paramètres persisté en
+  base (`Layer.metadata`/`Recipe.steps` sont exposés publiquement par l'API) — un `contextvars.ContextVar`
+  module-level (`api/processing.py`) porte le token le temps de l'opération, jamais stocké.
+
+Les deux migrations ont aussi corrigé un trou de sécurité préexistant, de la même famille : le
+téléchargement du fichier (facture / raster) n'était pas authentifié
+(`django.views.static.serve` monté sur `config/urls.py`, hors DRF, sans permission) — le nouvel
+endpoint proxy réapplique le cloisonnement de l'app (manager/co-propriétaire pour `conciergerie`,
+groupe `developers` pour `carto-lab`).
 
 ---
 
@@ -326,20 +341,20 @@ deux fois). Voir `api.authentication.KeycloakServiceUser` et `api.permissions.re
 
 #### Partage lié à un groupe Keycloak (`Share.required_groups`)
 
-Pensé pour une app dont **tout le groupe autorisé** doit lire/écrire les mêmes données (ex.
-`atelier-3d`, `carto-lab` : aucun cloisonnement individuel aujourd'hui, n'importe quel membre du
-groupe requis lit/modifie/supprime les données de n'importe qui). Plutôt que de dupliquer la
-composition du groupe dans une liste de `ShareMember` à maintenir à la main (risque de dérive
-silencieuse — même piège que documenté pour `e2e_member` plus haut), `Share.required_groups`
-(CSV, même convention que `KEYCLOAK_REQUIRED_GROUPS`) lie dynamiquement l'accès lecture/écriture
-au(x) groupe(s) LDAP : un nouveau membre du groupe a accès immédiatement, un membre retiré perd
-l'accès immédiatement, rien à synchroniser côté `storage`.
+Pensé pour une app dont **tout le groupe autorisé** doit lire/écrire les mêmes données — cas
+d'`atelier-3d` (encore à migrer) et de `carto-lab` (migré, cf. plus haut) : aucun cloisonnement
+individuel, n'importe quel membre du groupe requis lit/modifie/supprime les données de n'importe
+qui. Plutôt que de dupliquer la composition du groupe dans une liste de `ShareMember` à maintenir à
+la main (risque de dérive silencieuse — même piège que documenté pour `e2e_member` plus haut),
+`Share.required_groups` (CSV, même convention que `KEYCLOAK_REQUIRED_GROUPS`) lie dynamiquement
+l'accès lecture/écriture au(x) groupe(s) LDAP : un nouveau membre du groupe a accès immédiatement,
+un membre retiré perd l'accès immédiatement, rien à synchroniser côté `storage`.
 
 Hors self-service à dessein : `POST /api/shares/` ne permet pas de le renseigner (un partage
 lié à un groupe reste une décision d'infrastructure, pas quelque chose qu'un compte peut
-s'attribuer). Provisionné via une commande de gestion :
+s'attribuer). Provisionné via une commande de gestion — exemple réel (`carto-lab`) :
 ```
-python manage.py create_group_share atelier-3d --owner sacha --required-groups developers,famille,amis
+python manage.py create_group_share carto-lab --owner sacha --required-groups developers
 ```
 `ShareMember.role` (`read`/`write`, défaut `read`) reste disponible en complément pour des membres
 nommés individuellement (ex. `conciergerie` : accès par bien, ensembles de co-propriétaires
