@@ -27,6 +27,19 @@ volumes:
   postgres-data:
   postgis-data:
   pgadmin-data:
+  # Stockage de fichiers partagé du lab — backing de l'app storage/, désignée
+  # point d'entrée unique (API + frontend) pour tout fichier utilisateur.
+  # Possédé ici (comme les volumes Postgres ci-dessus), pas dans
+  # storage/docker-compose.yml, pour deux raisons :
+  #   - créé automatiquement au premier `docker compose up` de infra, comme
+  #     postgres-data/postgis-data — plus de `docker volume create` manuel ;
+  #   - regroupé avec les autres ressources partagées du lab, jamais recréé/
+  #     supprimé par le cycle de vie d'une seule app (clean2.sh storage).
+  # Seul le container storage-backend le monte (référencé en external: true
+  # depuis storage/docker-compose.yml, même pattern que dev-net ci-dessous) :
+  # aucune autre app n'accède au filesystem directement, tout passe par l'API
+  # de storage (KEYCLOAK_TRUSTED_CLIENTS, cf. CLAUDE.md).
+  storage-media:
 
 services:
 

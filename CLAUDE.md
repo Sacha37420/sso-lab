@@ -179,7 +179,27 @@ Si une app persiste des fichiers hors base (ex. rasters GeoTIFF de `carto-lab`),
 être déclaré `external: true` dans son `docker-compose.yml`, avec un `name:` explicite. Sans ça,
 `clean2.sh <app>` (`docker compose down --volumes`) le supprime à chaque `setup2.sh <app> --yes`
 — `clean2.sh` protège les volumes de `infra` et `sso-lab`, mais pas ceux qu'une app se serait
-donnés elle-même. Voir `carto-lab/docker-compose.yml` (volume `carto-media`) pour l'exemple.
+donnés elle-même. Voir `carto-lab/docker-compose.yml` (volume `carto-media`) pour l'exemple —
+c'est le défaut pour tout fichier **propre à une app** (rasters SIG, exports…).
+
+**Stockage de fichiers partagé du lab — `storage`** : contrairement au cas général ci-dessus,
+l'app `storage/` (voir sa description dans le tableau des sous-modules) est le point d'entrée
+unique désigné pour tout fichier **utilisateur** du lab — au même titre que `postgres`/`postgis`
+pour les données structurées. Son volume (`storage-media`) est donc **possédé par
+`infra/docker-compose.yml`**, pas par `storage/docker-compose.yml`, exactement comme `dev-net` :
+créé automatiquement au premier `docker compose up` de `infra` (pas de `docker volume create`
+manuel), et jamais touché par le cycle de vie d'une seule app. `storage/docker-compose.yml` le
+référence en `external: true` (nom `infra_storage-media`). Seul `storage-backend` le monte —
+toute autre app y accède exclusivement via l'API de `storage` (`KEYCLOAK_TRUSTED_CLIENTS`, voir
+plus haut), jamais en montant le volume directement : un montage direct court-circuiterait les
+contrôles de permission par namespace/partage de l'API.
+
+`atelier-3d`, `carto-lab` et `conciergerie` ont chacune encore leur propre volume média privé —
+candidates à une migration vers `storage` au fil de l'eau, app par app (pas fait automatiquement :
+implique de réécrire leur code de gestion de fichiers pour appeler l'API `storage`, de migrer les
+fichiers déjà présents, et de revérifier chaque fonctionnalité upload/visualisation/suppression).
+Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit appeler l'API
+`storage` directement plutôt que de se donner son propre volume média.
 
 ---
 
