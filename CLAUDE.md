@@ -292,6 +292,50 @@ appelée — **aucun changement côté Keycloak**. La propriété de sécurité 
 normalement (chaque client du realm porte le même claim `groups`). Voir `storage/backend/api/authentication.py`
 pour l'implémentation de référence.
 
+#### Écriture sans utilisateur connecté — comptes de service (`KEYCLOAK_SERVICE_WRITE_SHARES`)
+
+`KEYCLOAK_TRUSTED_CLIENTS` suppose toujours un utilisateur humain derrière le token (son propre
+token, forwardé par l'app appelante). Un **worker asynchrone** (Celery, tâche planifiée…) n'a
+aucun utilisateur connecté à cet instant-là — rien à forwarder. Pour ce cas, `storage` réutilise le
+mécanisme de **compte de service** déjà en place pour `lab-admin`/`restauration`
+(`scripts/create-app-client.sh`, section "Service account" — client compagnon confidentiel
+`<app>-admin`, `serviceAccountsEnabled: true`, activé par la présence de
+`<app>/.keycloak-service-account-roles`, flux `client_credentials`, voir
+`lab-admin/backend/api/keycloak_admin.py` pour l'implémentation de référence du côté obtention de
+token). Ce fichier ne sert habituellement qu'à assigner des rôles `realm-management` (administrer
+Keycloak) — mais le client `<app>-admin` qu'il fait créer est un client OAuth2 générique, rien
+n'empêche de l'utiliser *aussi* pour appeler `storage`. Une app qui veut uniquement un accès de
+service à `storage` (pas d'administration Keycloak) crée ce fichier **vide** : le client compagnon
+et son secret sont créés tout aussi bien, avec zéro rôle `realm-management` assigné.
+
+Côté `storage` : `KEYCLOAK_SERVICE_WRITE_SHARES` (`.env`, format `client_id:partage,...`) mappe
+chaque client de confiance vers **le seul partage** sur lequel il a un accès lecture/écriture — pas
+de claim `email`/`groups` requis pour ce chemin (un compte de service n'en porte pas). Les clients
+qui y figurent sont automatiquement inclus dans `KEYCLOAK_TRUSTED_CLIENTS` (pas besoin de les lister
+deux fois). Voir `api.authentication.KeycloakServiceUser` et `api.permissions.resolve_namespace`.
+
+#### Partage lié à un groupe Keycloak (`Share.required_groups`)
+
+Pensé pour une app dont **tout le groupe autorisé** doit lire/écrire les mêmes données (ex.
+`atelier-3d`, `carto-lab` : aucun cloisonnement individuel aujourd'hui, n'importe quel membre du
+groupe requis lit/modifie/supprime les données de n'importe qui). Plutôt que de dupliquer la
+composition du groupe dans une liste de `ShareMember` à maintenir à la main (risque de dérive
+silencieuse — même piège que documenté pour `e2e_member` plus haut), `Share.required_groups`
+(CSV, même convention que `KEYCLOAK_REQUIRED_GROUPS`) lie dynamiquement l'accès lecture/écriture
+au(x) groupe(s) LDAP : un nouveau membre du groupe a accès immédiatement, un membre retiré perd
+l'accès immédiatement, rien à synchroniser côté `storage`.
+
+Hors self-service à dessein : `POST /api/shares/` ne permet pas de le renseigner (un partage
+lié à un groupe reste une décision d'infrastructure, pas quelque chose qu'un compte peut
+s'attribuer). Provisionné via une commande de gestion :
+```
+python manage.py create_group_share atelier-3d --owner sacha --required-groups developers,famille,amis
+```
+`ShareMember.role` (`read`/`write`, défaut `read`) reste disponible en complément pour des membres
+nommés individuellement (ex. `conciergerie` : accès par bien, ensembles de co-propriétaires
+différents d'un bien à l'autre — ni un partage global par groupe, ni des espaces personnels ne
+conviennent, une liste de membres explicite avec droit d'écriture reste nécessaire).
+
 ---
 
 ## Tests end-to-end (Playwright)
