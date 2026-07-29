@@ -194,14 +194,27 @@ toute autre app y accède exclusivement via l'API de `storage` (`KEYCLOAK_TRUSTE
 plus haut), jamais en montant le volume directement : un montage direct court-circuiterait les
 contrôles de permission par namespace/partage de l'API.
 
-`atelier-3d` a encore son propre volume média privé — candidate à une migration vers `storage` au
-fil de l'eau (pas fait automatiquement : implique de réécrire son code de gestion de fichiers pour
-appeler l'API `storage`, de migrer les fichiers déjà présents, et de revérifier chaque
-fonctionnalité upload/visualisation/suppression). Toute **nouvelle** app qui a besoin de stocker
-des fichiers utilisateur doit appeler l'API `storage` directement plutôt que de se donner son
-propre volume média.
+**Reste à migrer** (état au 2026-07-30, revue complète des 11 sous-modules — volumes déclarés,
+champs fichier des modèles, `MEDIA_ROOT`, code recevant des uploads) :
 
-**`conciergerie` et `carto-lab` sont migrées.**
+- `atelier-3d` — le **seul volume média privé** restant (`atelier3d-media`, monté par `backend`
+  *et* `worker`). La plus lourde des migrations : le worker Celery écrit plusieurs Go par projet
+  (photos → nuages de points → maillages) sans utilisateur connecté, et tout le pipeline de
+  reconstruction est à revérifier de bout en bout. Pas de trou de sécurité en attendant : le
+  serving passe déjà par une `MediaView` authentifiée.
+- `traitement-de-fichiers-compils` et `arbre-genealogique` — pas de volume, mais des **blobs de
+  fichiers utilisateur dans `devdb`** (`Fichier.fichier_binaire`, `MediaObject.data`, tous deux
+  `BinaryField`), ce qui gonfle la base et ses sauvegardes. Le premier est une réimplémentation
+  quasi complète de `storage` (propriétaire par email + partages) : sa migration supprime plus de
+  code qu'elle n'en ajoute.
+
+Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit appeler l'API
+`storage` directement plutôt que de se donner son propre volume média ou de mettre des blobs en base.
+
+> `robot-lab` n'est **pas** concernée : son volume `downloads` est non-`external` à dessein
+> (contenu transitoire, `engine` écrit / `backend` sert puis supprime).
+
+**`conciergerie`, `carto-lab` et `restauration` sont migrées.**
 
 - `conciergerie` (`Frais.facture` → `Frais.facture_path`, un partage `storage` par bien nommé
   `conciergerie-bien-<id>`, créé automatiquement au premier upload) est l'exemple de référence pour
@@ -219,12 +232,31 @@ propre volume média.
   token : ne **jamais** faire transiter un `Authorization` par un dict de paramètres persisté en
   base (`Layer.metadata`/`Recipe.steps` sont exposés publiquement par l'API) — un `contextvars.ContextVar`
   module-level (`api/processing.py`) porte le token le temps de l'opération, jamais stocké.
+- `restauration` (`Plat.photo` → `Plat.photo_path`, un unique partage `restauration` provisionné via
+  `create_group_share`, compte de service `restauration-admin` autorisé par
+  `KEYCLOAK_SERVICE_WRITE_SHARES=restauration-admin:restauration`) est l'exemple de référence pour
+  le cas **« la lecture doit être anonyme »** : la carte du restaurant (page « commander », sans
+  authentification) affiche les photos des plats, donc il n'existe aucun token à forwarder sur le
+  chemin de lecture. `storage` n'a — et ne doit avoir — aucun chemin de lecture anonyme : c'est
+  l'app qui **republie** délibérément les octets via un endpoint proxy `AllowAny`
+  (`views_public.public_plat_photo`), le compte de service restant le seul à parler à `storage`.
+  La décision d'exposer publiquement vit ainsi dans l'app qui porte la règle métier. Voir
+  `restauration/backend/api/storage_client.py` et `PlatViewSet` (`api/views.py`).
 
-Les deux migrations ont aussi corrigé un trou de sécurité préexistant, de la même famille : le
-téléchargement du fichier (facture / raster) n'était pas authentifié
-(`django.views.static.serve` monté sur `config/urls.py`, hors DRF, sans permission) — le nouvel
-endpoint proxy réapplique le cloisonnement de l'app (manager/co-propriétaire pour `conciergerie`,
-groupe `developers` pour `carto-lab`).
+Les trois migrations ont aussi corrigé un défaut préexistant, de la même famille. Pour
+`conciergerie` et `carto-lab`, un trou de sécurité : le téléchargement du fichier (facture /
+raster) n'était pas authentifié (`django.views.static.serve` monté sur `config/urls.py`, hors DRF,
+sans permission) — le nouvel endpoint proxy réapplique le cloisonnement de l'app
+(manager/co-propriétaire pour `conciergerie`, groupe `developers` pour `carto-lab`). Pour
+`restauration`, une fonctionnalité **cassée** : les photos étaient écrites dans `MEDIA_ROOT`
+(= `BASE_DIR/media`, donc dans le bind mount `./backend:/app`, hors de tout volume) et servies par
+`static(settings.MEDIA_URL, …)`, qui retourne une liste vide quand `DEBUG=False` — c'est-à-dire
+toujours, en déploiement. Toute photo uploadée donnait un 404.
+
+> ⚠ `restauration` n'a **pas** d'interface d'upload de photo côté Angular : le champ n'est
+> renseignable que par l'API (`photo_file`, multipart). C'est pourquoi la colonne était vide en base
+> et que la migration n'a eu aucune donnée à reprendre. Si une interface est ajoutée un jour, elle
+> poste `photo_file` sur `POST/PATCH /api/plats/` — rien d'autre à changer côté backend.
 
 ---
 
