@@ -8,6 +8,11 @@ version: "3.9"
 networks:
   sso-net:
     driver: bridge
+  # Réseau du répartiteur partagé (~/edge-router/) — Phase C. Rejoint
+  # uniquement par caddy, en plus de sso-net qu'il garde pour atteindre
+  # Keycloak/openldap/oauth2-proxy/code-server.
+  edge-net:
+    external: true
 
 # ─────────────────────────────────────────────
 # Volumes nommés : les données survivent à
@@ -32,9 +37,9 @@ services:
     image: lucaslorentz/caddy-docker-proxy:ci-alpine
     container_name: caddy
     restart: unless-stopped
-    ports:
-      - "${PORT_HTTP:-80}:80"
-      - "${PORT_HTTPS:-443}:443"
+    # Plus de ports: — exposé uniquement via edge-net (répartiteur partagé,
+    # Phase C). Rollback : réajouter ce bloc ports: et relancer
+    # `docker compose up -d` suffit à revenir à l'exposition directe.
     environment:
       CADDY_INGRESS_NETWORKS: "sso-lab_sso-net"
       CADDY_DOCKER_CADDYFILE_PATH: /etc/caddy/Caddyfile
@@ -45,6 +50,7 @@ services:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     networks:
       - sso-net
+      - edge-net
 
   # ──────────────────────────────────────────
   # Fallback — route par défaut du lab
@@ -237,6 +243,9 @@ services:
       - GIT_COMMITTER_EMAIL=${GIT_AUTHOR_EMAIL:-dev@localhost}
     volumes:
       - /home/sacha/dev:/home/coder/dev:rw
+      # Second cadriciel isolé (dev2/), vrai sibling de dev/ sur l'hôte — voir
+      # le plan "Second cadriciel isolé (dev2/)" dans .claude/plans/.
+      - /home/sacha/dev2:/home/coder/dev2:rw
       - /home/sacha/.claude:/home/coder/.claude:rw
       - /home/sacha/.ssh:/home/coder/.ssh:ro
       - code-server-data:/home/coder/.local
