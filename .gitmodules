@@ -28,3 +28,6 @@
 [submodule "storage"]
 	path = storage
 	url = https://github.com/Sacha37420/storage.git
+[submodule "robot-lab"]
+	path = robot-lab
+	url = https://github.com/Sacha37420/robot-lab.git

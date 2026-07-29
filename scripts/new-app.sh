@@ -757,7 +757,13 @@ scaffold_django() {
 
   docker cp "${cname}:/app/." "${dir}/"
   docker rm -f "$cname" >/dev/null 2>&1 || true
-  sudo chown -R "$(id -u):$(id -g)" "${dir}"
+  # sudo peut être indisponible sans TTY (ex. exécution non interactive) : les fichiers
+  # copiés par `docker cp` appartiennent déjà à l'utilisateur courant dans la plupart des
+  # environnements (rootless docker / remap userns) — ce chown est défensif, pas requis.
+  # Cf. la même tolérance appliquée par le bloc de correction finale plus bas.
+  if command -v sudo >/dev/null; then
+    sudo chown -R "$(id -u):$(id -g)" "${dir}" 2>/dev/null || true
+  fi
 
   ok "Projet Django scaffoldé (config/ + manage.py)"
   _configure_django_project "${dir}" "${name}" "${schema}" "${tmpl_name}"
@@ -798,7 +804,13 @@ scaffold_angular() {
 
   docker cp "${cname}:/workspace/app/." "${dir}/"
   docker rm -f "$cname" >/dev/null 2>&1 || true
-  sudo chown -R "$(id -u):$(id -g)" "${dir}"
+  # sudo peut être indisponible sans TTY (ex. exécution non interactive) : les fichiers
+  # copiés par `docker cp` appartiennent déjà à l'utilisateur courant dans la plupart des
+  # environnements (rootless docker / remap userns) — ce chown est défensif, pas requis.
+  # Cf. la même tolérance appliquée par le bloc de correction finale plus bas.
+  if command -v sudo >/dev/null; then
+    sudo chown -R "$(id -u):$(id -g)" "${dir}" 2>/dev/null || true
+  fi
 
   ok "Projet Angular scaffoldé (ng new + keycloak-js@22.0.5)"
   _apply_angular_template "${dir}" "${name}" "${bport}" "${port}" "${tmpl_name}"
