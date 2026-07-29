@@ -10,7 +10,6 @@ ports.env
 
 # Registre des ports — géré localement par new-app.sh
 .ports
-google-agenda/
 
 # Fichier LDAP — contient des mots de passe hashés, géré localement.
 # Le motif couvre aussi les sauvegardes (init.ldif.bak, init.ldif.bak-<uid>)

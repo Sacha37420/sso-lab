@@ -128,26 +128,19 @@ EXISTING_EMAIL=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
 [[ -z "$EXISTING_EMAIL" ]] || err "Cet email est déjà utilisé par le compte '$EXISTING_EMAIL'."
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Apps affichées / groupes masqués — mêmes fichiers de curation que la page 404
-# (scripts/complete_404.sh) et lab-admin (backend/api/lab_groups.py) : seule
-# une app listée dans .app-descriptions apparaît ici, et un groupe listé dans
-# .hidden-groups n'est jamais montré, même s'il existe réellement dans LDAP.
+# Groupes et apps affichés — plus aucun masquage.
+#
+# Ce script listait autrefois les groupes en excluant ceux de .hidden-groups.
+# Ce fichier a été retiré le 2026-07-30 : il n'existait que pour cacher
+# dom/harem du temps où ils ne servaient qu'à google-agenda (app déplacée vers
+# dev2/). Ces deux groupes sont maintenant requis par app-builder et storage —
+# les masquer ici donnait une vue fausse des droits à attribuer à un nouveau
+# compte, ce qui est exactement l'inverse du but de ce script.
+#
+# Les apps, elles, sont toutes affichées : c'est un outil d'administration, il
+# doit montrer l'état réel du lab. (.app-descriptions ne sert plus qu'à la
+# vitrine publique de la page 404 — cf. scripts/complete_404.sh.)
 # ══════════════════════════════════════════════════════════════════════════════
-declare -A LISTED_APPS
-while IFS='|' read -r _app _rest; do
-  _app="$(echo "$_app" | xargs)"
-  [[ -z "$_app" || "$_app" == \#* ]] && continue
-  LISTED_APPS["$_app"]=1
-done < "$SCRIPT_DIR/.app-descriptions"
-
-declare -A HIDDEN_GROUPS
-if [[ -f "$SCRIPT_DIR/.hidden-groups" ]]; then
-  while IFS= read -r _g; do
-    _g="$(echo "$_g" | xargs)"
-    [[ -z "$_g" || "$_g" == \#* ]] && continue
-    HIDDEN_GROUPS["$_g"]=1
-  done < "$SCRIPT_DIR/.hidden-groups"
-fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Groupes requis/utiles par application
@@ -157,7 +150,6 @@ step "Groupes requis ou utiles par application"
 declare -A APP_GROUPS   # app -> "g1,g2,..." (peut être vide)
 while IFS= read -r _compose; do
   _app="$(basename "$(dirname "$_compose")")"
-  [[ -n "${LISTED_APPS[$_app]:-}" ]] || continue
   _app_env="$(dirname "$_compose")/.env"
   _groups=""
   if [[ -f "$_app_env" ]]; then
@@ -170,14 +162,6 @@ while IFS= read -r _compose; do
     if [[ -f "$_opts_file" ]]; then
       _groups=$(grep -oE -- '--require-group[[:space:]]+[^[:space:]]+' "$_opts_file" | awk '{print $2}')
     fi
-  fi
-  if [[ -n "$_groups" ]]; then
-    IFS=',' read -r -a _gl <<< "$_groups"
-    _filtered=()
-    for _gg in "${_gl[@]}"; do
-      [[ -n "${HIDDEN_GROUPS[$_gg]:-}" ]] || _filtered+=("$_gg")
-    done
-    _groups="$(IFS=,; echo "${_filtered[*]}")"
   fi
   APP_GROUPS["$_app"]="$_groups"
 done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort)
@@ -196,11 +180,7 @@ step "Groupes disponibles"
 
 ALL_GROUPS_JSON=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
   "$KEYCLOAK_URL/admin/realms/$REALM/groups?max=200")
-mapfile -t _ALL_GROUP_NAMES < <(echo "$ALL_GROUPS_JSON" | jq -r '.[].name' | sort)
-GROUP_NAMES=()
-for _g in "${_ALL_GROUP_NAMES[@]}"; do
-  [[ -n "${HIDDEN_GROUPS[$_g]:-}" ]] || GROUP_NAMES+=("$_g")
-done
+mapfile -t GROUP_NAMES < <(echo "$ALL_GROUPS_JSON" | jq -r '.[].name' | sort)
 
 [[ ${#GROUP_NAMES[@]} -gt 0 ]] || err "Aucun groupe trouvé dans Keycloak — l'annuaire LDAP est-il peuplé ?"
 

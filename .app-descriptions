@@ -13,6 +13,12 @@
 # Seules les apps listées ici apparaissent sur la page. Les lignes commentées
 # sont ignorées : c'est ainsi qu'on garde les bacs à sable et l'infra hors de la
 # page, qui est servie SANS authentification.
+#
+# Ce fichier ne pilote QUE cette vitrine publique. lab-admin (page « Apps du
+# lab », catalogue des tests E2E) et add-user.sh affichent, eux, toutes les apps
+# réellement déployées : ce sont des outils d'administration, un oubli ici ne
+# doit pas les rendre aveugles. Il sert quand même à lab-admin pour habiller
+# chaque app d'un nom lisible et d'une description quand elle y figure.
 # ─────────────────────────────────────────────────────────────────────────────
 
 lab-admin|Administration|Portail du lab (réservé aux admins) : applications déployées, éditeur de code, création de projet et gestion des utilisateurs.
@@ -23,6 +29,9 @@ traitement-de-fichiers-compils|Traitement de fichiers|Dépôt de fichiers avec �
 arbre-genealogique|Arbre généalogique|Affichage et édition d'arbres généalogiques : personnes, relations et périodes d'union.
 carto-lab|Carto Lab|Traitement cartographique : import de cartes, systèmes de coordonnées, calculs géo et cartographies climatiques Météo-France.
 atelier-3d|Atelier 3D|Reconstruction 3D à partir de photos ou vidéo (COLMAP+OpenMVS, CPU-only), impression 3D, mouvements et sémantique de bâtiment.
+conciergerie|Conciergerie|Gestion locative : biens, frais, co-propriétaires, synchronisation des réservations et bilan de capital.
+storage|Stockage|Stockage de fichiers du lab : espaces personnels, partages par groupe et accès depuis les autres applications.
+robot-lab|Robot Lab|Robots de navigation web : enregistrement d'un parcours, assistant IA pour le modifier, exécution avec récupération des fichiers téléchargés.
 
 # ── Bacs à sable et infra (décommenter pour les afficher publiquement)
 # sso-lab|Keycloak|Console d'administration de l'IdP du lab.|/auth/

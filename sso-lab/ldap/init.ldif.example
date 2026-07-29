@@ -23,18 +23,21 @@
 #       ├── cn=admins           ← sacha
 #       ├── cn=famille          ← sacha, lea, elodie
 #       ├── cn=amis             ← sacha, hassan, lea
-#       ├── cn=dom              ← naty, maria          (app : google-agenda)
-#       ├── cn=harem            ← sacha, Carpeta
+#       ├── cn=dom              ← naty, maria          (apps : app-builder, storage)
+#       ├── cn=harem            ← sacha, Carpeta       (apps : app-builder, storage)
 #       ├── cn=manager          ← sacha, elodie, sabrina (app : restauration)
 #       ├── cn=cuisinier        ← sacha                (app : restauration)
 #       └── cn=serveur          ← sacha                (app : restauration)
 #
-# Groupes requis par les applications (autorisation via le claim JWT "groups") :
-#   - analyse-lora  : developers
+# Groupes requis par les applications (autorisation via le claim JWT "groups").
+# Source de vérité : `<app>/.keycloak-client-opts` (--require-group) de chaque
+# app — la liste ci-dessous n'est qu'un repère et peut dater.
+#   - analyse-lora / carto-lab / robot-lab / traitement-de-fichiers-compils : developers
 #   - restauration  : manager, cuisinier, serveur
-#   - google-agenda : dom
-#   (app-builder, front-cadriciel, traitement-de-fichiers-compils, test-* :
-#    authentification seule, aucun groupe imposé)
+#   - lab-admin     : admins
+#   - conciergerie  : proprietaires, admins
+#   - atelier-3d    : developers, famille, amis
+#   - app-builder / storage : la plupart des groupes du realm (dom et harem inclus)
 #
 # e2e_member / e2e_outsider (voir CLAUDE.md, section "Tests end-to-end") :
 # comptes synthétiques utilisés par runner/ pour automatiser la vérification

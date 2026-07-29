@@ -896,7 +896,7 @@ success "$APP_ENV mis à jour."
 #   Trois verrous complémentaires sont posés :
 #
 #     a) Rôle realm '<groupe>-member' par groupe (conservé : c'est l'ancien
-#        contrat, et google-agenda s'appuie encore sur ce nommage).
+#        contrat, des apps déployées s'appuient encore sur ce nommage).
 #     b) Rôle realm '<client>-access', assigné à CHACUN des groupes listés. Un
 #        seul rôle assigné à N groupes donne le « OU » qu'on veut (les rôles
 #        composites, eux, propagent vers le bas et ne conviendraient pas).

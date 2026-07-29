@@ -461,11 +461,43 @@ chaud. `rotate-secrets-full.sh` termine lui-même par `recompose_docker.sh --for
 | `analyse-lora` | `Sacha37420/analyse-lora` | Django + Angular | 8086 / 4204 |
 | `app-builder` | `Sacha37420/app-builder` | Django + Angular | 8087 / 4205 |
 | `arbre-genealogique` | `Sacha37420/arbre-genealogique` | Django + Angular | 8090 / 4208 |
+| `atelier-3d` | `Sacha37420/atelier-3d` | Django + Angular | 8092 / 4210 |
 | `carto-lab` | `Sacha37420/carto-lab` | Django + Angular | 8091 / 4209 |
+| `conciergerie` | `Sacha37420/conciergerie` | Django + Angular | 8084 / 4202 |
 | `lab-admin` | `Sacha37420/lab-admin` | Django + Angular | 8083 / 4201 |
 | `restauration` | `Sacha37420/restauration` | Django + Angular | 8088 / 4206 |
+| `robot-lab` | `Sacha37420/robot-lab` | Django + Angular (+ `engine/` Playwright) | 8094 / 4212 |
 | `storage` | `Sacha37420/storage` | Django + Angular | 8093 / 4211 |
 | `traitement-de-fichiers-compils` | `Sacha37420/traitement-de-fichiers-compils` | Django + Angular | 8089 / 4207 |
+
+> `robot-lab` a un **troisième service**, `engine/` (Node + Playwright + `ws`, port 8095) : le
+> navigateur qu'il pilote est isolé là, jamais dans l'image Django — même règle que `runner/`.
+> Il n'écrit jamais en base et ne voit jamais les clés API des utilisateurs (c'est Django qui
+> appelle les fournisseurs IA et lui renvoie l'action à exécuter).
+
+### Vitrine publique vs outils d'administration
+
+`.app-descriptions` (racine) pilote **uniquement** la page 404 publique, servie **sans
+authentification** : y ajouter une app publie son nom et sa description à tout visiteur. Les lignes
+commentées gardent les bacs à sable et l'infra hors de cette page. Après toute modification :
+
+```bash
+bash scripts/complete_404.sh     # régénère sso-lab/fallback/html/404.html
+```
+
+Les **outils d'administration** (page « Apps du lab » de lab-admin, catalogue des tests E2E,
+`add-user.sh`) affichent en revanche **toutes** les apps réellement déployées — une entrée de
+`.ports` dont le dossier contient un `docker-compose.yml`. Ils étaient auparavant limités à
+`.app-descriptions`, ce qui rendait invisible en silence toute app absente de ce fichier : trois
+apps déployées (`conciergerie`, `storage`, `robot-lab`) n'apparaissaient nulle part et **n'étaient
+jamais testées**. Découplé le 2026-07-30. Une app hors vitrine est signalée par une étiquette
+« hors vitrine » dans lab-admin, pas masquée.
+
+> Il n'y a **plus** de fichier `.hidden-groups`. Il n'existait que pour cacher `dom`/`harem` du temps
+> où ils ne servaient qu'à `google-agenda` (app déplacée vers `dev2/` le 2026-07-29). Ces deux
+> groupes sont désormais requis par `app-builder` et `storage` : les masquer donnait une vue fausse
+> des droits à attribuer à un nouveau compte. Ne pas réintroduire ce mécanisme — si un groupe ne doit
+> pas apparaître, c'est qu'il ne doit pas exister dans le realm.
 
 ---
 
