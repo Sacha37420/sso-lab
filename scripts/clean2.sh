@@ -136,10 +136,37 @@ if [[ -z "$APP_NAME" ]]; then
   echo "=== Nettoyage des conteneurs et images orphelins ==="
   # Liste tous les conteneurs dont le dossier n'existe plus
   docker ps -a --format '{{.ID}} {{.Names}}' | while read -r id name; do
-    # On suppose que le nom du conteneur commence par le nom du dossier (convention new-app.sh)
-    base="${name%%-*}"
-    if [[ ! -d "$SCRIPT_DIR/$base" && "$base" != "sso-lab" && "$base" != "infra" ]]; then
-      echo "■ Suppression conteneur orphelin : $name ($id)"
+    # Ignore tout conteneur qui n'appartient PAS à cet arbre (ex. un second
+    # cadriciel sibling comme dev2/, sur le même démon Docker) : sans ce filtre,
+    # `docker ps -a` étant global, un conteneur dont le nom ne matche aucun
+    # dossier d'app ICI (parce qu'il appartient à l'AUTRE arbre) serait traité
+    # comme orphelin et détruit — vécu en incident réel (setup2.sh d'un second
+    # cadriciel vide a supprimé tous les conteneurs de celui-ci). Comparaison
+    # sur le working_dir du projet Compose, jamais sur le nom du conteneur.
+    wd="$(docker inspect "$id" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)"
+
+    # Conteneur qui n'a pas été créé par docker compose : ce script gère des
+    # projets Compose de CET arbre, rien d'autre. Sans étiquette, impossible de
+    # savoir à qui il appartient — on n'y touche pas.
+    [[ -n "$wd" ]] || continue
+
+    # Hors de cet arbre (ex. dev2/) : pas notre affaire.
+    if [[ "$wd" != "$SCRIPT_DIR" && "$wd" != "$SCRIPT_DIR"/* ]]; then
+      continue
+    fi
+
+    # Dossier d'origine du projet, déduit du working_dir Compose — et NON du nom
+    # du conteneur. L'ancienne heuristique prenait le préfixe avant le premier
+    # tiret (`${name%%-*}`), donc « robot-lab-backend » → « robot » : aucun
+    # dossier de ce nom, le conteneur était déclaré orphelin et détruit. Vérifié
+    # à blanc : 41 des 45 conteneurs du lab y passaient, dont dev-postgres,
+    # caddy, keycloak et lab-runner — toute app dont le dossier contient un
+    # tiret. L'étiquette Compose, elle, donne le dossier exact.
+    rel="${wd#"$SCRIPT_DIR"/}"
+    base="${rel%%/*}"
+
+    if [[ -n "$base" && ! -d "$SCRIPT_DIR/$base" ]]; then
+      echo "■ Suppression conteneur orphelin : $name ($id) — dossier $base/ absent"
       docker rm -f "$id" 2>&1 | sed 's/^/  /' || true
     fi
   done
