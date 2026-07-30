@@ -31,3 +31,6 @@
 [submodule "robot-lab"]
 	path = robot-lab
 	url = https://github.com/Sacha37420/robot-lab.git
+[submodule "code-route"]
+	path = code-route
+	url = https://github.com/Sacha37420/code-route.git
