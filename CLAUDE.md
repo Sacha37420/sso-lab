@@ -194,14 +194,9 @@ toute autre app y accède exclusivement via l'API de `storage` (`KEYCLOAK_TRUSTE
 plus haut), jamais en montant le volume directement : un montage direct court-circuiterait les
 contrôles de permission par namespace/partage de l'API.
 
-**Reste à migrer** (état au 2026-07-30, revue complète des 11 sous-modules — volumes déclarés,
-champs fichier des modèles, `MEDIA_ROOT`, code recevant des uploads) — il n'en reste **qu'une** :
-
-- `atelier-3d` — le **seul volume média privé** restant (`atelier3d-media`, monté par `backend`
-  *et* `worker`). La plus lourde des migrations : le worker Celery écrit plusieurs Go par projet
-  (photos → nuages de points → maillages) sans utilisateur connecté, et tout le pipeline de
-  reconstruction est à revérifier de bout en bout. Pas de trou de sécurité en attendant : le
-  serving passe déjà par une `MediaView` authentifiée.
+**Migration terminée** (revue complète des 11 sous-modules le 2026-07-30 : volumes déclarés,
+champs fichier des modèles, `MEDIA_ROOT`, code recevant des uploads) — plus aucune app n'a de
+volume média privé ni de blob de fichier utilisateur en base.
 
 Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit appeler l'API
 `storage` directement plutôt que de se donner son propre volume média ou de mettre des blobs en base.
@@ -209,8 +204,8 @@ Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit app
 > `robot-lab` n'est **pas** concernée : son volume `downloads` est non-`external` à dessein
 > (contenu transitoire, `engine` écrit / `backend` sert puis supprime).
 
-**Sont migrées : `conciergerie`, `carto-lab`, `restauration`, `traitement-de-fichiers-compils` et
-`arbre-genealogique`.**
+**Sont migrées : `conciergerie`, `carto-lab`, `restauration`, `traitement-de-fichiers-compils`,
+`arbre-genealogique` et `atelier-3d`.**
 
 - `conciergerie` (`Frais.facture` → `Frais.facture_path`, un partage `storage` par bien nommé
   `conciergerie-bien-<id>`, créé automatiquement au premier upload) est l'exemple de référence pour
@@ -270,6 +265,45 @@ Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit app
   unique `storage_client.upload_bytes()`, pour que le nommage des chemins reste défini à un seul
   endroit. Le test de « média hébergé ici » vs « média externe » est partout `storage_path` non vide
   (sérialiseurs, `graph.py`, action `file`) — c'était `data` non vide auparavant.
+
+- `atelier-3d` (volume Docker privé `atelier3d-media`, 2,9 Go dont 2,4 Go de scratch de calcul
+  jamais nettoyé) est l'exemple de référence pour **la migration d'un volume média vers un backend
+  de fichiers Django adossé à `storage`**, plutôt qu'une réécriture champ par champ comme pour les
+  quatre migrations précédentes. `FileField.name` (`Photo.file`, `Project.region_map`/
+  `region_overlay`, `Mesh.file`/`gltf_file`/`step_file`) contenait déjà un chemin logique
+  (`projects/<id>/photos/<nom>`) qui est exactement un `relative_path` `storage` valide : brancher
+  `STORAGES['default'] = {'BACKEND': 'api.storage_backend.LabStorage'}` (`config/settings.py`)
+  suffit, **sans migration de schéma ni de données en base** — seuls les octets changent de place,
+  au même chemin logique. Voir `api/storage_backend.py` (`LabStorage`, `local_copy()`,
+  `download_to()`, `scratch_dir()`).
+  - `FileField.path` lève désormais `NotImplementedError` (comportement voulu, pas un oubli) : un
+    stockage distant n'a pas de chemin local, et ça rend visible chaque endroit qui passait un vrai
+    fichier à un outil natif (COLMAP, trimesh, FreeCAD, build123d, pymeshlab) — dix sites au total
+    dans `tasks.py`/`views.py`/`facade.py`/`cad_assemble.py`. `local_copy(fieldfile)` (context
+    manager, télécharge vers un temp, le supprime en sortie de bloc) remplace un `Path(champ.path)`
+    ponctuel ; `download_to(fieldfile, dest)` la variante persistante quand plusieurs fichiers
+    doivent survivre ensemble le temps d'un sous-processus (`cad_assemble.py` : chaque STEP d'un
+    assemblage doit exister en local avant de lancer `freecadcmd`, qui tourne dans un process séparé
+    sans aucun accès à `storage`). Quand la bibliothèque accepte un objet fichier plutôt qu'un
+    chemin (`PIL.Image.open`, `np.load` sur un `.npz`), lire directement `champ.open('rb')` sans
+    passer par un temporaire — vérifié dans cette migration que `np.load` fonctionne tel quel sur un
+    `django.core.files.base.ContentFile`.
+  - Le répertoire de travail des jobs (bases COLMAP, nuages de points denses, images
+    redimensionnées — plusieurs Go par job) reste un volume Docker **local, non-`external`**
+    (`atelier3d-scratch`, même raisonnement que `downloads` de `robot-lab`) : jamais dans `storage`,
+    ces fichiers n'ont aucune valeur une fois le job terminé et les faire transiter par HTTP serait
+    absurde. `clean2.sh` peut le vider sans rien perdre.
+  - Compte de service `atelier-3d-admin` : c'est le **worker Celery** qui en a besoin (écrit
+    maillages/glTF/STEP longtemps après la fin de la requête HTTP qui a lancé le job, sans
+    utilisateur connecté), pas seulement le backend — `worker` a donc gagné `sso-net` (pour obtenir
+    un token du compte de service), en plus de `dev-net` (déjà là pour Postgres, et qui suffit pour
+    atteindre `storage-backend`).
+  - Migration de données réelles (118 fichiers, 384 Mo) faite via une commande de gestion à usage
+    unique (`transferer_vers_storage`, supprimée après coup — inutile en production une fois
+    vérifiée), avec vérification par checksum immédiate à chaque fichier transféré, montage
+    temporaire en lecture seule de l'ancien volume (`atelier3d-media:/oldmedia:ro`, retiré du
+    `docker-compose.yml` une fois la migration terminée) et double vérification indépendante côté
+    base (`storage.stored_files`).
 
 > ⚠ Sortir des blobs de `devdb` ne rend pas l'espace disque tout seul : `DROP COLUMN` ne fait que
 > marquer la colonne supprimée, les données TOAST restent jusqu'à une réécriture de table. Après
