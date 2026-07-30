@@ -1,14 +1,23 @@
 # Orchestration — accès direct frontend → storage, partage hiérarchique, synchronisation par app
 
-Version corrigée : la V1 de ce document sous-estimait la portée du besoin en le
-réduisant à de la « défense en profondeur » côté storage. La vraie intention
-(reformulée par l'utilisateur) a 4 objectifs, listés ci-dessous, qui impliquent
-un vrai changement d'architecture — pas seulement une synchronisation
-optionnelle.
+Ce document est un brief autonome : tout ce qui est nécessaire pour l'exécuter
+y est décrit, sans supposer de conversation ou de contexte préalable. Il est
+destiné à être exécuté par une instance de Claude Code disposant du Agent
+tool, à la racine `dev/` (dépôt parent du lab, voir `dev/CLAUDE.md` — à lire
+en entier avant de commencer, c'est le guide de travail de ce dépôt).
 
-Ce prompt est destiné à être exécuté par une instance de Claude Code disposant
-du Agent tool, à la racine `dev/`. Il orchestre un chantier fondation (unique,
-sur `storage/`) et un chantier par app (parallèle, un sous-agent chacun).
+Toutes les apps du lab qui stockent des fichiers utilisateur (`conciergerie`,
+`carto-lab`, `restauration`, `traitement-de-fichiers-compils`,
+`arbre-genealogique`, `atelier-3d`) ont déjà été migrées vers l'app `storage`
+(point d'entrée unique du lab pour les fichiers utilisateur — voir
+`CLAUDE.md`, section « Fichiers rasters / médias », et le git log de
+`<app>/backend/api/` pour chacune, qui détaille comment). Cette migration a
+éliminé les volumes/blobs privés, mais a conservé un schéma d'accès simple :
+un seul `Share` global par app dans `storage`, et chaque app **proxie**
+systématiquement l'accès fichier via son propre backend authentifié. Ce
+document orchestre l'étape suivante : un chantier fondation (unique, sur
+`storage/`) et un chantier par app (parallèle, un sous-agent chacun) pour
+répondre aux 4 objectifs ci-dessous.
 
 ## Les 4 objectifs (formulation d'origine, à respecter à la lettre)
 
@@ -38,12 +47,15 @@ sur `storage/`) et un chantier par app (parallèle, un sous-agent chacun).
    dossiers/fichiers et tous les partages qui nous sont accessibles** —
    remonter les ancêtres d'un partage profond auquel on a accès (sans exposer
    leur contenu si on n'y a pas droit), pour pouvoir naviguer jusqu'à ce qui
-   nous est réellement partagé, exactement comme décrit dans le PS de la
-   session précédente (partage donné sur un sous-dossier → il doit apparaître
-   dans la liste de qui le reçoit, même si le reste de l'arborescence lui est
-   invisible).
+   nous est réellement partagé. Scénario concret à satisfaire : le
+   propriétaire d'un dossier personnel dans `storage` en partage un
+   sous-dossier à un utilisateur qui n'avait initialement accès à rien de ce
+   dossier — cet utilisateur doit voir apparaître le partage racine (comme
+   conteneur, pour pouvoir naviguer jusqu'à ce qui lui est accessible), mais
+   en l'ouvrant, il ne doit voir **que** ce qui lui est effectivement partagé
+   (pas les fichiers/dossiers/partages voisins auxquels il n'a pas droit).
 
-## Constat vérifié dans cette session (ne pas re-découvrir)
+## Constat de départ — vérifié à la rédaction de ce document, à revérifier rapidement
 
 **Aucune app du lab ne fait aujourd'hui de requête directe frontend → storage.**
 Vérifié explicitement sur `carto-lab`, qui semblait le candidat le plus
@@ -154,9 +166,9 @@ l'utilisateur courant :
   profond (visible comme conteneur, **sans** exposer les fichiers/sous-partages
   de cet ancêtre auxquels il n'a pas droit).
 - Réfléchis à l'implication de sécurité : afficher l'**existence** et le
-  **nom** d'un ancêtre auquel on n'a pas accès direct est-il acceptable ? (Le
-  PS de l'utilisateur dit explicitement que oui — le but est justement de
-  pouvoir remonter jusqu'à ce qui nous est partagé.) Documente ce choix
+  **nom** d'un ancêtre auquel on n'a pas accès direct est-il acceptable ?
+  D'après le scénario de l'objectif 4 ci-dessus, oui — le but est justement
+  de pouvoir remonter jusqu'à ce qui nous est partagé. Documente ce choix
   explicitement, comme le fait `CLAUDE.md` pour les décisions de sécurité
   similaires.
 - Adapter `storage/frontend/` pour naviguer cette hiérarchie (arborescence
@@ -179,10 +191,12 @@ Même barre que les chantiers App : si un point (ex. l'unicité du nom sous
 hiérarchie, ou la profondeur de récursion acceptable pour la découverte) a
 une réponse ambiguë ou risquée en termes de sécurité, arrête-toi et rapporte
 les options plutôt que de trancher seul — c'est l'app la plus sensible du
-lab. Teste en réel (comptes réels, `force_authenticate` ou tokens réels,
-comme le reste de cette session) : au minimum, un propriétaire, un membre
-direct d'un partage profond sans accès au parent, et un compte sans aucun
-accès.
+lab. Teste en réel — sur de vrais comptes, avec `force_authenticate` (DRF) ou
+des tokens Keycloak réels, jamais de mock de `storage_client` : c'est la
+méthode utilisée pour toutes les migrations passées vers `storage`,
+vérifiable dans le git log de chaque app déjà migrée. Au minimum : un
+propriétaire, un membre direct d'un partage profond sans accès au parent, et
+un compte sans aucun accès.
 
 ## Chantiers App — instructions communes à tous les sous-agents
 
@@ -217,10 +231,12 @@ Contexte et instructions communes à donner à chaque sous-agent :
 > `KEYCLOAK_SERVICE_WRITE_PREFIXES` (le compte de service existe déjà, voir
 > `.keycloak-service-account-roles` et l'entrée déjà présente dans
 > `storage/.env`) avec un préfixe qui reste compatible avec une hiérarchie
-> future (ex. `<app>-<owner_username>-<type>-<id>`, à ajuster selon l'app —
-> coordonne le choix exact avec ce que documentera le chantier fondation dans
-> son rapport si tu peux le consulter, sinon choisis un nommage clair et
-> documente-le). Ajoute/retire les `ShareMember` correspondants via
+> future (ex. `<app>-<owner_username>-<type>-<id>`, à ajuster selon l'app).
+> Tu tournes en parallèle d'autres sous-agents (dont celui du chantier
+> fondation sur `storage/`) sans visibilité sur leurs rapports — choisis un
+> nommage clair, documente ton raisonnement, la coordination avec le modèle
+> de hiérarchie final se fera après coup, par l'orchestrateur, une fois tous
+> les rapports reçus. Ajoute/retire les `ShareMember` correspondants via
 > `POST/DELETE /api/shares/<name>/members/` à chaque changement du modèle de
 > partage propre à l'app — c'est ce qui rend l'étape 2 sûre.
 >
@@ -247,15 +263,18 @@ Contexte et instructions communes à donner à chaque sous-agent :
 > Implémente si le design est clair et sans ambiguïté ; si tu as un doute
 > réel sur la sémantique attendue, arrête-toi et rapporte les options.
 >
-> Teste en réel (comme le reste de cette session, pas de mocks de `storage`) :
-> partage créé, accès direct qui fonctionne pour un membre, refusé pour un
-> non-membre, retrait d'un partage qui coupe l'accès direct immédiatement.
+> Teste en réel — vrais comptes, `force_authenticate` ou tokens réels, jamais
+> de mock de `storage` (méthode déjà utilisée pour toutes les migrations
+> passées, vérifiable dans le git log de l'app) : partage créé, accès direct
+> qui fonctionne pour un membre, refusé pour un non-membre, retrait d'un
+> partage qui coupe l'accès direct immédiatement.
 >
 > Termine par : ce qui a été fait, les lignes à ajouter à `storage/.env`, les
 > commandes de provisionnement (`create_group_share`/prefix) à lancer, et tout
 > redéploiement nécessaire (`setup2.sh <app> --yes`) — **ne lance pas
 > toi-même `setup2.sh`** si un autre agent est susceptible de tourner en même
-> temps (contention CPU déjà observée sur cette machine à 2 vCPU) : rapporte
+> temps (cette machine n'a que 2 vCPU : deux builds Docker lourds en parallèle
+> se ralentissent mutuellement au point de sembler bloqués) : rapporte
 > la commande, l'orchestrateur séquencera les déploiements.
 
 ### Précisions par app
@@ -265,11 +284,11 @@ Contexte et instructions communes à donner à chaque sous-agent :
   L'objectif 1 (accès direct) peut donc être fait **sans même créer de
   partage par ressource** : storage autorise déjà n'importe quel développeur
   directement sur le namespace `carto-lab` via son propre token forwardé.
-  Vérifie juste que `azp=carto-lab` est bien dans `KEYCLOAK_TRUSTED_CLIENTS`
-  (déjà le cas d'après `storage/.env` vérifié dans cette session) et adapte
-  le frontend pour appeler storage directement au lieu de
-  `LayerRasterView`. Bon candidat pour valider le pattern avant les apps plus
-  complexes.
+  Vérifie que `azp=carto-lab` est bien dans `KEYCLOAK_TRUSTED_CLIENTS`
+  (`grep KEYCLOAK_TRUSTED_CLIENTS storage/.env` — déjà le cas au moment de la
+  rédaction de ce document, mais reconfirme) et adapte le frontend pour
+  appeler storage directement au lieu de `LayerRasterView`. Bon candidat pour
+  valider le pattern avant les apps plus complexes.
 - **`conciergerie`** : le modèle par Bien existe déjà (`conciergerie-bien-<id>`)
   mais **sans** `ShareMember` réels — le compte de service a une confiance
   totale sur tout le préfixe, l'app fait 100 % du contrôle elle-même
