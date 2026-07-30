@@ -195,15 +195,13 @@ plus haut), jamais en montant le volume directement : un montage direct court-ci
 contrôles de permission par namespace/partage de l'API.
 
 **Reste à migrer** (état au 2026-07-30, revue complète des 11 sous-modules — volumes déclarés,
-champs fichier des modèles, `MEDIA_ROOT`, code recevant des uploads) :
+champs fichier des modèles, `MEDIA_ROOT`, code recevant des uploads) — il n'en reste **qu'une** :
 
 - `atelier-3d` — le **seul volume média privé** restant (`atelier3d-media`, monté par `backend`
   *et* `worker`). La plus lourde des migrations : le worker Celery écrit plusieurs Go par projet
   (photos → nuages de points → maillages) sans utilisateur connecté, et tout le pipeline de
   reconstruction est à revérifier de bout en bout. Pas de trou de sécurité en attendant : le
   serving passe déjà par une `MediaView` authentifiée.
-- `arbre-genealogique` — pas de volume, mais des **blobs de fichiers utilisateur dans `devdb`**
-  (`MediaObject.data`, un `BinaryField`), ce qui gonfle la base et ses sauvegardes.
 
 Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit appeler l'API
 `storage` directement plutôt que de se donner son propre volume média ou de mettre des blobs en base.
@@ -211,7 +209,8 @@ Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit app
 > `robot-lab` n'est **pas** concernée : son volume `downloads` est non-`external` à dessein
 > (contenu transitoire, `engine` écrit / `backend` sert puis supprime).
 
-**`conciergerie`, `carto-lab`, `restauration` et `traitement-de-fichiers-compils` sont migrées.**
+**Sont migrées : `conciergerie`, `carto-lab`, `restauration`, `traitement-de-fichiers-compils` et
+`arbre-genealogique`.**
 
 - `conciergerie` (`Frais.facture` → `Frais.facture_path`, un partage `storage` par bien nommé
   `conciergerie-bien-<id>`, créé automatiquement au premier upload) est l'exemple de référence pour
@@ -257,10 +256,27 @@ Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit app
     les uploads courants : une reprise après échec partiel réécrit au même chemin au lieu de
     dupliquer des blobs orphelins.
 
+- `arbre-genealogique` (`MediaObject.data` → `MediaObject.storage_path`, un unique partage
+  `arbre-genealogique`, compte de service homonyme `-admin`) reprend le même cas que
+  `traitement-de-fichiers-compils` (autorisation portée par l'app : `Tree.owner_email`,
+  `Tree.is_public`, `TreeShare`), et est l'exemple de référence pour **la purge des octets quand
+  une app a plusieurs chemins de suppression**. Un `MediaObject` disparaît par au moins quatre
+  voies : `MediaObjectViewSet.destroy`, `MediaLinkViewSet.perform_destroy` (média que plus aucun
+  lien ne réclame), et les cascades depuis `Tree`. Les couvrir une par une laisserait des blobs
+  orphelins au premier chemin oublié — et **les cascades ne passent par aucune vue**. La purge vit
+  donc dans un **signal `post_delete`** sur le modèle (`api/models.py`), best-effort : l'échec de la
+  purge ne doit pas faire échouer une suppression déjà validée en base. Trois chemins d'écriture
+  (upload multipart, base64 `data_base64`, import depuis un fournisseur externe) passent par un
+  unique `storage_client.upload_bytes()`, pour que le nommage des chemins reste défini à un seul
+  endroit. Le test de « média hébergé ici » vs « média externe » est partout `storage_path` non vide
+  (sérialiseurs, `graph.py`, action `file`) — c'était `data` non vide auparavant.
+
 > ⚠ Sortir des blobs de `devdb` ne rend pas l'espace disque tout seul : `DROP COLUMN` ne fait que
 > marquer la colonne supprimée, les données TOAST restent jusqu'à une réécriture de table. Après
-> une migration de ce type, lancer `VACUUM FULL <schéma>.<table>` (ici : 20 Mo → 64 ko). Sans ça,
-> la base et ses sauvegardes gardent exactement le poids qu'on cherchait à leur retirer.
+> une migration de ce type, lancer `VACUUM FULL <schéma>.<table>`
+> (`traitement_de_fichiers_compils.fichiers` : 20 Mo → 64 ko ;
+> `arbre_genealogique.media_objects` : 6,4 Mo → 80 ko). Sans ça, la base et ses sauvegardes gardent
+> exactement le poids qu'on cherchait à leur retirer.
 
 Les trois migrations ont aussi corrigé un défaut préexistant, de la même famille. Pour
 `conciergerie` et `carto-lab`, un trou de sécurité : le téléchargement du fichier (facture /
