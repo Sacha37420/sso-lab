@@ -202,11 +202,8 @@ champs fichier des modèles, `MEDIA_ROOT`, code recevant des uploads) :
   (photos → nuages de points → maillages) sans utilisateur connecté, et tout le pipeline de
   reconstruction est à revérifier de bout en bout. Pas de trou de sécurité en attendant : le
   serving passe déjà par une `MediaView` authentifiée.
-- `traitement-de-fichiers-compils` et `arbre-genealogique` — pas de volume, mais des **blobs de
-  fichiers utilisateur dans `devdb`** (`Fichier.fichier_binaire`, `MediaObject.data`, tous deux
-  `BinaryField`), ce qui gonfle la base et ses sauvegardes. Le premier est une réimplémentation
-  quasi complète de `storage` (propriétaire par email + partages) : sa migration supprime plus de
-  code qu'elle n'en ajoute.
+- `arbre-genealogique` — pas de volume, mais des **blobs de fichiers utilisateur dans `devdb`**
+  (`MediaObject.data`, un `BinaryField`), ce qui gonfle la base et ses sauvegardes.
 
 Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit appeler l'API
 `storage` directement plutôt que de se donner son propre volume média ou de mettre des blobs en base.
@@ -214,7 +211,7 @@ Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit app
 > `robot-lab` n'est **pas** concernée : son volume `downloads` est non-`external` à dessein
 > (contenu transitoire, `engine` écrit / `backend` sert puis supprime).
 
-**`conciergerie`, `carto-lab` et `restauration` sont migrées.**
+**`conciergerie`, `carto-lab`, `restauration` et `traitement-de-fichiers-compils` sont migrées.**
 
 - `conciergerie` (`Frais.facture` → `Frais.facture_path`, un partage `storage` par bien nommé
   `conciergerie-bien-<id>`, créé automatiquement au premier upload) est l'exemple de référence pour
@@ -242,6 +239,28 @@ Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit app
   (`views_public.public_plat_photo`), le compte de service restant le seul à parler à `storage`.
   La décision d'exposer publiquement vit ainsi dans l'app qui porte la règle métier. Voir
   `restauration/backend/api/storage_client.py` et `PlatViewSet` (`api/views.py`).
+- `traitement-de-fichiers-compils` (`Fichier.fichier_binaire` → `Fichier.fichier_path`, un unique
+  partage `traitement-de-fichiers-compils`, compte de service homonyme `-admin`) est l'exemple de
+  référence pour deux cas :
+  - **« l'autorisation est portée par les modèles de l'app, pas par `storage` »** — un fichier est
+    lisible par son propriétaire (`Fichier.proprietaire`, un email) *et* par les destinataires de
+    ses `Partage`. `storage` ne connaît ni l'un ni l'autre : le token d'un destinataire ne lui
+    donnerait aucun droit sur l'espace du propriétaire, donc le forward de token (variante
+    `carto-lab`) est inapplicable. `_owned`/`_accessible` (`api/views.py`) décident, le compte de
+    service transporte. Un partage unique et non un par propriétaire : les noms de partage sont des
+    slugs `[a-z0-9-]` et les propriétaires des emails, sans dérivation stable de l'un vers l'autre.
+  - **la migration de données réelles** (10 fichiers, 19 Mo) : le transfert des octets et la
+    suppression de la colonne vivent dans **la même migration** (`0004_fichier_storage.py`), donc
+    la même transaction. Si `storage` est injoignable, la migration échoue et la colonne survit —
+    le conteneur ne démarre pas (`migrate` est dans le `CMD`), ce qui est le bon mode d'échec. Le
+    chemin cible est dérivé de la **clé primaire** (`fichiers/<pk>-<nom>`) et non d'un UUID comme
+    les uploads courants : une reprise après échec partiel réécrit au même chemin au lieu de
+    dupliquer des blobs orphelins.
+
+> ⚠ Sortir des blobs de `devdb` ne rend pas l'espace disque tout seul : `DROP COLUMN` ne fait que
+> marquer la colonne supprimée, les données TOAST restent jusqu'à une réécriture de table. Après
+> une migration de ce type, lancer `VACUUM FULL <schéma>.<table>` (ici : 20 Mo → 64 ko). Sans ça,
+> la base et ses sauvegardes gardent exactement le poids qu'on cherchait à leur retirer.
 
 Les trois migrations ont aussi corrigé un défaut préexistant, de la même famille. Pour
 `conciergerie` et `carto-lab`, un trou de sécurité : le téléchargement du fichier (facture /
