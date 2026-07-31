@@ -32,6 +32,7 @@ atelier-3d|Atelier 3D|Reconstruction 3D à partir de photos ou vidéo (COLMAP+Op
 conciergerie|Conciergerie|Gestion locative : biens, frais, co-propriétaires, synchronisation des réservations et bilan de capital.
 storage|Stockage|Stockage de fichiers du lab : espaces personnels, partages par groupe et accès depuis les autres applications.
 robot-lab|Robot Lab|Robots de navigation web : enregistrement d'un parcours, assistant IA pour le modifier, exécution avec récupération des fichiers téléchargés.
+code-route|Code de la route|Apprentissage du code de la route : fiches de révision, quiz thématiques, bilan personnalisé et génération IA de nouvelles questions.
 
 # ── Bacs à sable et infra (décommenter pour les afficher publiquement)
 # sso-lab|Keycloak|Console d'administration de l'IdP du lab.|/auth/
