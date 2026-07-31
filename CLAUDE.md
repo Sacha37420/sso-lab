@@ -3,6 +3,43 @@
 Dépôt parent qui héberge toutes les applications du lab (Django + Angular, Spring, Angular seul).
 Les applications sont des **sous-modules git** pointant vers leurs propres dépôts GitHub (`Sacha37420/<app>`).
 
+Démarrage/exploitation courants (clone, `.env`, HTTP local, WAN, HTTPS) : voir `README.md`,
+sections 1 et 5 — ce fichier ne redocumente pas ces procédures, seulement ce qui demande un
+raisonnement (règles, pièges, décisions déjà tranchées).
+
+---
+
+## Infrastructure partagée entre cadriciels (`dev/` / `dev2/`)
+
+Cet hôte fait tourner **deux cadriciels indépendants** : `dev/` (ce dépôt, « lab1 ») et
+`~/dev2/` (« lab2 », copie isolée avec son propre domaine/realm Keycloak/LDAP — voir
+`dev2/CLAUDE.md`). Aucune donnée ni secret partagé entre les deux, à trois exceptions près :
+l'hôte Docker lui-même, `code-server` (un seul conteneur, monte `/home/sacha/dev` **et**
+`/home/sacha/dev2`), et **`~/edge-router/`**.
+
+`~/edge-router/` est un répartiteur nginx (SNI pour 443, `Host` pour 80) qui aiguille le trafic
+entrant 80/443 de l'hôte vers le bon Caddy (`caddy` pour `dev/`, `caddy2` pour `dev2/`) selon le
+domaine demandé — sans jamais déchiffrer le TLS, chaque Caddy garde son propre ACME. C'est ce
+qui permet aux deux cadriciels de partager les mêmes ports 80/443 d'une seule IP WAN. Procédure
+complète, schéma et fichiers de config : `README.md` section 1.5.
+
+**À savoir avant de toucher au réseau `edge-net` ou au service `caddy` de `sso-lab/docker-compose.yml`** :
+- `~/edge-router/` vit **hors de tout dépôt git** (ni `dev/`, ni `dev2/`) — il n'apparaîtra
+  jamais dans une exploration du dépôt, `git grep`, ou `git log`. S'il faut le lire/modifier,
+  c'est un dossier séparé sur l'hôte (`docker-compose.yml` + `nginx.conf`), à ne jamais confondre
+  avec `sso-lab/caddy/`.
+  - Ne pas le recréer « proprement » dans un des deux dépôts de sa propre initiative : le retirer
+    de `~/edge-router/` couperait 80/443 pour **les deux** cadriciels simultanément.
+- Le service `caddy` de `sso-lab/docker-compose.yml` ne publie plus de `ports:` — c'est **normal**
+  depuis le passage en Phase C (commit `bd97ff0`), pas une régression à « corriger ». Si Caddy
+  doit redevenir directement joignable en 80/443 (rollback), réajouter le bloc `ports:` et
+  relancer `docker compose up -d` — ne pas toucher à `~/edge-router/` pour ça.
+- `PORT_HTTP`/`PORT_HTTPS` subsistent dans `sso-lab/.env.example` et sont toujours utilisés par
+  `open-bbox-ports2.sh` (ouverture NAT côté routeur) — sans effet sur le routage applicatif de
+  Caddy désormais, mais toujours corrects pour cet usage-là, ne pas les supprimer.
+- Toute modification de `edge-net` ou des `ports:` de `caddy`/`caddy2` affecte **les deux**
+  cadriciels à la fois : à faire uniquement en présence de l'utilisateur, jamais en autonomie.
+
 ---
 
 ## Créer une nouvelle application
@@ -639,3 +676,39 @@ Les templates sont dans `_templates/` :
 - `__APP_SLUG__` → snake_case pour le schéma SQL (ex: `mon_app`)
 - `__APP_TITLE__` → titre lisible (ex: `Mon App`)
 - `__BACKEND_PORT__` / `__FRONTEND_PORT__` → ports choisis
+
+---
+
+## UI — identité « Foyer »
+
+Toutes les apps du lab (11 sous-modules + les deux templates de scaffold) partagent une même
+identité visuelle et une même structure de navigation, baptisées **Foyer** — déployée
+intégralement le 2026-07-30 (avant cette date, chaque app avait sa propre nav en en-tête
+horizontal ; ne plus reproduire ce pattern). Cahier des charges exécutable complet — tokens,
+polices, comportements, checklist de vérification par app — dans `to_do_ui_foyer.md` (racine) :
+**le lire avant toute tâche touchant la navigation ou les tokens visuels d'une app**, ce résumé
+n'en couvre que les points qui piègent le plus souvent :
+
+- **Aucune couleur en dur** dans un composant — toujours via les tokens CSS (`--accent`,
+  `--bg`, `--text`…) définis en tête de `src/styles.scss`. C'est la seule chose qui permet au
+  thème sombre (`prefers-color-scheme` + bascule manuelle `[data-theme]`) de fonctionner sans
+  reprise page par page. Un `grep` rapide sur des valeurs hex dans un composant modifié est le
+  test le plus simple pour détecter une régression.
+- **Navigation toujours verticale**, jamais de bascule horizontal (PC) → burger (mobile) :
+  sidebar rétractable ≥ 900px, recouvrement plein écran `position: fixed; inset: 0` < 900px.
+  Rupture fixe à **900px** pour toutes les apps — ne jamais la faire varier d'une app à l'autre.
+- **Les liens de nav sont propres à chaque app** — seule la structure (sidebar/recouvrement) est
+  partagée. Avant de toucher la nav d'une app existante, lire son composant actuel et
+  `app.routes.ts` pour en extraire la liste réelle des pages ; ne jamais copier les liens d'une
+  autre app.
+- **Polices self-hébergées** (Inter + JetBrains Mono, WOFF2 dans `src/assets/fonts/`) — jamais
+  de CDN Google Fonts.
+- **Cible tactile minimale 44×44px**, sans exception, sur tout élément interactif.
+- **Toute nouvelle app créée via `new-app.sh` hérite de Foyer automatiquement** (le pattern vit
+  dans `_templates/`) — aucun travail supplémentaire à prévoir pour une app scaffoldée
+  normalement. Le sujet ne redevient pertinent que pour une modification de nav/UI sur une app
+  **existante**, ou une évolution du système Foyer lui-même (auquel cas mettre à jour
+  `_templates/` en plus de l'app concernée, sous peine de désynchroniser les futures apps).
+- Routes, URLs, logique métier, appels API et code backend sont **hors périmètre** de tout ce
+  qui touche à Foyer — une tâche UI qui semble impliquer un changement fonctionnel est un signal
+  pour s'arrêter et clarifier plutôt qu'improviser.
