@@ -34,3 +34,6 @@
 [submodule "code-route"]
 	path = code-route
 	url = https://github.com/Sacha37420/code-route.git
+[submodule "craft-lab"]
+	path = craft-lab
+	url = https://github.com/Sacha37420/craft-lab.git
