@@ -37,3 +37,6 @@
 [submodule "craft-lab"]
 	path = craft-lab
 	url = https://github.com/Sacha37420/craft-lab.git
+[submodule "bilan-thermique"]
+	path = bilan-thermique
+	url = https://github.com/Sacha37420/bilan-thermique.git
