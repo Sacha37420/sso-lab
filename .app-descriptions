@@ -33,6 +33,7 @@ conciergerie|Conciergerie|Gestion locative : biens, frais, co-propriétaires, sy
 storage|Stockage|Stockage de fichiers du lab : espaces personnels, partages par groupe et accès depuis les autres applications.
 robot-lab|Robot Lab|Robots de navigation web : enregistrement d'un parcours, assistant IA pour le modifier, exécution avec récupération des fichiers téléchargés.
 code-route|Code de la route|Apprentissage du code de la route : fiches de révision, quiz thématiques, bilan personnalisé et génération IA de nouvelles questions.
+craft-lab|Craft Lab|Jeu de construction/survie 2D façon Minecraft/Terraria, jouable en multijoueur : catalogue d'objets/monstres/cartes, génération procédurale de terrain, combat et artisanat.
 
 # ── Bacs à sable et infra (décommenter pour les afficher publiquement)
 # sso-lab|Keycloak|Console d'administration de l'IdP du lab.|/auth/
