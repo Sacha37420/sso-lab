@@ -14,23 +14,21 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F, G, H, K, M et P livrés** (tests physiques automatisés, renouvellement d'air, apports
-internes, triangles au contact du sol, résultats normalisés kWh/m²/an, aide au calcul de
-`c_air_int`) — voir leur section respective pour le détail. Chaque lot qui touche
-`_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api` avant/après
-modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la découvrir en
-production (H et K l'ont fait, 15/15 OK à chaque étape). **Lot L (météo automatique) reste la
-priorité la plus haute côté ergonomie** : c'est le goulot d'étranglement le plus lourd du parcours
-actuel (CSV collé à la main) et un prérequis moral avant de recommander l'outil pour un vrai
-bâtiment — pas encore fait, plus gros chantier restant (API externe + Celery + UI). **Lot I (cadre
-de fenêtre) reste à faire** : évalué le 2026-08-07 mais reporté — plus invasif que les autres lots
-H→K (change la forme de `paroi_layers_by_id` et remplace le système FEM complet par un système
-résistif simplifié pour les triangles concernés), a besoin d'une session dédiée plutôt que d'être
-pressé en fin de créneau. Lot J et Lot R restent à cadrer avec l'utilisateur avant de coder (voir
-leur section). **Lot Q peut démarrer maintenant que H est livré** (généralise `apports_internes_w`
-et le `debit_vent_m3h`/`eta_recup_vent` du Lot G à un planning horaire commun). **Lots R et S
-dépendent du Lot L** (tous deux ont besoin de la météo automatique : `vent_m_s` pour R, choix de la
-source pour S) — à ne pas commencer avant que L soit en place.
+**Lots F, G, H, K, L, M et P livrés** (tests physiques automatisés, renouvellement d'air, apports
+internes, triangles au contact du sol, import météo automatique Open-Meteo, résultats normalisés
+kWh/m²/an, aide au calcul de `c_air_int`) — voir leur section respective pour le détail. Chaque lot
+qui touche `_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api`
+avant/après modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la
+découvrir en production (H et K l'ont fait, 15/15 puis 28/28 OK à chaque étape). **Lots R et S
+peuvent démarrer maintenant que L est livré** (`weather_source.py` existe : R n'a plus qu'à demander
+`wind_speed_10m` à Open-Meteo, S qu'à ajouter une fonction de fetch PVGIS TMY produisant le même
+format). **Lot I (cadre de fenêtre) reste à faire** : évalué le 2026-08-07 mais reporté — plus
+invasif que les autres lots H→K (change la forme de `paroi_layers_by_id` et remplace le système FEM
+complet par un système résistif simplifié pour les triangles concernés), a besoin d'une session
+dédiée plutôt que d'être pressé en fin de créneau. Lot J et Lot R restent à cadrer avec l'utilisateur
+avant de coder (voir leur section — Lot R en plus de son cadrage, cf. ci-dessus). **Lot Q peut
+démarrer maintenant que H est livré** (généralise `apports_internes_w` et le
+`debit_vent_m3h`/`eta_recup_vent` du Lot G à un planning horaire commun).
 
 À lire intégralement avant tout lot, comme pour tout cahier des charges du lab. Mêmes règles que le
 reste de `dev/` (CLAUDE.md racine) : mémoire tenue à jour, demander avant tout commit/push et avant
@@ -232,41 +230,70 @@ moyenne annuelle de la météo — n'a de sens qu'une fois le Lot L (météo ré
 
 ---
 
-## Lot L — Import météo automatique (Open-Meteo Archive / PVGIS TMY)
+## Lot L — Import météo automatique (Open-Meteo Archive) ✅ livré le 2026-08-07
 
-### Constat
-La météo horaire reste 100 % manuelle : coller un CSV à la main (`calcul-3d.component.ts:127-146`)
-ou générer une série synthétique sinusoïdale de démonstration (`loadExample`/`loadConstant`, mêmes
-lignes 148-169) — ni l'une ni l'autre n'est une vraie donnée météo. C'est le goulot d'étranglement
-le plus lourd du parcours actuel, et déjà identifié comme prochain chantier (mémoire
-`project_bilan_thermique.md`). Sources déjà repérées : **Open-Meteo Archive API**
-(`temperature_2m`, `direct_normal_irradiance`, `diffuse_radiation` — correspondent presque champ
-pour champ à `BuildingWeatherPointSerializer`) ou **PVGIS TMY** (année type, plus représentatif pour
-un dimensionnement que l'historique brut d'une année réelle).
+### Ce qui a été fait
+Nouveau module pur `backend/api/weather_source.py` (même patron que `geodata.py`) :
+**Open-Meteo Archive** retenu comme unique source (PVGIS TMY laissé de côté — voir Lot S, qui
+reste la bonne occasion d'ajouter une seconde source « année type »). `temperature_2m`,
+`direct_normal_irradiance`, `diffuse_radiation` → `t_ext`/`e_dir`/`e_dif` directement (mêmes
+grandeurs physiques, DNI = irradiance normale au rayon = exactement ce que `e_dir*cos(theta_i)`
+attend). Open-Meteo ne fournissant ni azimuth ni élévation, calcul de la **position solaire réelle**
+heure par heure : déclinaison + équation du temps (séries de Fourier de Spencer 1971, la référence
+usuelle — citée par NOAA et Duffie & Beckman), puis (élévation, azimuth réel) par un changement de
+repère équatorial → horizon **dérivé à la main** (`_elevation_azimuth`) plutôt que la formule
+`cos(azimuth)` usuelle des calculatrices solaires — dont la disambiguïsation de quadrant (signe de
+l'angle horaire) est une source classique d'erreur de signe, piège concrètement rencontré pendant ce
+lot (première version basée sur la formule usuelle donnait un azimuth de 0° au lieu de 180° à midi
+solaire). Formule finale recoupée numériquement avec la bibliothèque tierce `astral` (installée
+temporairement dans le conteneur pour vérification, jamais ajoutée aux dépendances de l'app) sur 7
+cas latitudes/saisons/hémisphères variés : écart < 0,4° partout sauf singularité connue au zénith.
 
-### Étapes
-1. Nouveau module pur `backend/api/weather_source.py` (même patron que `geodata.py` : pas de
-   dépendance Django, prend lat/lon/période, retourne une liste de dicts) — appel Open-Meteo Archive,
-   conversion `direct_normal_irradiance`/`diffuse_radiation` (repère solaire) vers `e_dir`/`e_dif`
-   plus **calcul de l'azimuth/élévation solaire réels** heure par heure (formule d'éphéméride
-   standard, lat/lon/date/heure → position du soleil) puisqu'Open-Meteo ne les fournit pas
-   directement.
-2. **Point d'attention critique** : convertir l'azimuth solaire réel (convention météo usuelle,
-   0°=Sud ou 0°=Nord selon la source) vers la convention interne de l'app (`geometry.py:8-12` :
-   azimuth 0°=+Y, sens horaire) — et si le bâtiment est géoréférencé (`georef_north_offset_deg`),
-   appliquer la même rotation que `geodata._rotate_xy` pour que météo et géométrie restent dans le
-   même repère. Vérifier à la main sur un point connu (ex. midi solaire vrai, soleil plein sud)
-   avant de livrer — mêmes précautions que pour l'alignement bâtiment/environnement du 2026-08-05.
-3. Tâche Celery `fetch_weather` (même pattern que `generate_environment`), endpoint
-   `POST /api/batiments/<id>/meteo/` (ou un endpoint autonome si la météo doit pouvoir être
-   récupérée indépendamment d'un bâtiment précis).
-4. UI : sur la page Calcul 3D, un panneau « Récupérer depuis Open-Meteo » (lat/lon — réutiliser le
-   géoréférencement du bâtiment s'il existe — + période) à côté du textarea CSV existant, qui
-   remplit `weatherRaw`/`weather` en résultat. Le CSV manuel et les générateurs synthétiques restent
-   utiles (tests rapides, bâtiment non géoréférencé) — à garder, pas à remplacer.
-5. Annoter clairement dans l'UI que `loadExample`/`loadConstant` sont des données de démonstration,
-   pas une source utilisable pour un vrai bilan (actuellement aucune distinction visuelle avec une
-   vraie série).
+**Point d'attention critique traité** : `to_local_azimuth` applique très exactement la même
+rotation que `geodata._rotate_xy` (même signe, même convention `Building.georef_north_offset_deg`),
+appliquée à un vecteur direction plutôt qu'à un point. Vérifié à la main comme demandé (soleil plein
+sud à midi solaire quand latitude > déclinaison — cas général de « soleil plein sud », pas
+seulement à l'équinoxe) et par test automatisé avec rotation à 90° (voir tests). Azimuth déjà dans
+la convention interne (`geometry.py`) en sortie de `build_weather_series` — aucune conversion
+supplémentaire côté appelant.
+
+Tâche Celery `fetch_weather` (même pattern que `generate_environment`) + **endpoint autonome**
+`POST /api/meteo/recuperer/` (pas `/batiments/<id>/meteo/` — la météo n'est jamais persistée côté
+serveur, seulement renvoyée via `job.result` ; un endpoint autonome fonctionne aussi pour un
+bâtiment non géoréférencé, conforme à l'étape 4 d'origine). `WeatherFetchRequestSerializer` : dates
+converties en chaînes ISO avant `Job.params`/`.delay()` — un `datetime.date` brut n'est pas
+sérialisable JSON (piège rencontré et corrigé pendant ce lot). UI page Calcul 3D : panneau
+« Récupérer depuis Open-Meteo » (lat/lon pré-remplies depuis le géoréférencement du bâtiment si
+disponible, rotation nord, période) au-dessus du bloc météo constante ; CSV manuel et générateurs
+synthétiques conservés mais annotés explicitement « donnée de démonstration » (étape 5).
+
+Tests (`backend/api/tests.py`, 13 nouveaux — `SolarEphemerisTest`, `SolarElevationAzimuthTest`,
+`LocalAzimuthRotationTest`, `WeatherSeriesAssemblyTest`) : déclinaison bornée par l'inclinaison de
+l'axe terrestre (fait astronomique indépendant de la formule), midi solaire → azimuth exact
+0°/180° selon signe(déclinaison-latitude) + élévation exacte `90-|lat-décl|` (identité dérivée à la
+main), lever/coucher exactement Est/Ouest à l'équinoxe à 6 latitudes différentes, symétrie
+temporelle autour de midi solaire, rotation locale (identité à offset nul + deux cas à 90°),
+assemblage de série synthétique (clampe vers les bornes de `BuildingWeatherPointSerializer`, saute
+les heures à donnée manquante sans en inventer). **`_assemble_weather_series` séparée de
+`fetch_open_meteo_archive`** spécifiquement pour rendre l'assemblage testable sans réseau (suit la
+même réserve que le Lot F pour `geodata.py`, tout en couvrant la partie qui ne nécessite pas de
+mocker `requests`). Vérifié par mutation testing sur les deux formules les plus critiques
+(`_elevation_azimuth` et `to_local_azimuth`) : échec confirmé sur code muté, 28/28 après
+restauration. Vérifié en réel sur l'image rebuildée (`recompose_docker.sh --force`) : appel direct
+à l'API Open-Meteo (curl + script Python dans le conteneur), pipeline complet
+DRF → `Job` → Celery **via le vrai worker/Redis** (`.delay()`, pas seulement `.apply()` synchrone) →
+résultat exploitable, et chemin d'erreur (date hors plage Open-Meteo) → `Job` en `ERROR` avec message
+clair plutôt qu'un crash. `manage.py test` → 28/28, `manage.py check` → propre, `ng build
+--configuration production` → propre.
+
+### Reste ouvert
+**PVGIS TMY** (année type) non ajouté — traité au Lot S, qui devient significativement plus simple
+maintenant que `weather_source.py` existe (juste une seconde fonction de fetch produisant le même
+format de sortie). `vent_m_s` (Lot R) non demandé à Open-Meteo pour l'instant (`wind_speed_10m` est
+disponible dans la même réponse API, en km/h — à convertir en m/s le jour où le Lot R est entrepris).
+Pas de vérification manuelle dans un navigateur (UI derrière Keycloak SSO, non testée en
+interactif) — vérifié uniquement en API directe + build de production ; à tester en réel dans le
+navigateur avant de recommander l'outil pour un vrai bâtiment.
 
 ---
 
