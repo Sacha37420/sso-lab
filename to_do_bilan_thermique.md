@@ -14,21 +14,24 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F, G, H, K, L, M, P et S livrés** (tests physiques automatisés, renouvellement d'air, apports
-internes, triangles au contact du sol, import météo automatique Open-Meteo + PVGIS TMY, résultats
-normalisés kWh/m²/an, aide au calcul de `c_air_int`, années type) — voir leur section respective pour
-le détail. Chaque lot qui touche `_assemble_F`/`_assemble_F_hour` doit faire passer
-`python manage.py test api` avant/après modification — c'est tout l'intérêt du Lot F : détecter une
-régression au lieu de la découvrir en production (H et K l'ont fait, 15/15 puis 28/28 puis 36/36 OK à
-chaque étape). **Lot R peut démarrer maintenant que L est livré** (`weather_source.py` existe, n'a
-plus qu'à demander `wind_speed_10m`/`WS10m` à Open-Meteo/PVGIS). **Lot I (cadre de fenêtre) reste à
-faire** : évalué le 2026-08-07 mais reporté — plus invasif que les autres lots H→K (change la forme de
-`paroi_layers_by_id` et remplace le système FEM complet par un système résistif simplifié pour les
-triangles concernés), a besoin d'une session dédiée plutôt que d'être pressé en fin de créneau. Lot J
-et Lot R restent à cadrer avec l'utilisateur avant de coder (voir leur section — Lot R en plus de son
-cadrage, cf. ci-dessus). **Lot Q peut démarrer maintenant que H est livré** (généralise
-`apports_internes_w` et le
-`debit_vent_m3h`/`eta_recup_vent` du Lot G à un planning horaire commun).
+**Lots F, G, H, K, L, M, P, Q et S livrés** (tests physiques automatisés, renouvellement d'air,
+apports internes, triangles au contact du sol, import météo automatique Open-Meteo + PVGIS TMY,
+résultats normalisés kWh/m²/an, aide au calcul de `c_air_int`, plannings horaires, années type) — voir
+leur section respective pour le détail. Chaque lot qui touche `_assemble_F`/`_assemble_F_hour` doit
+faire passer `python manage.py test api` avant/après modification — c'est tout l'intérêt du Lot F :
+détecter une régression au lieu de la découvrir en production (H, K et Q l'ont fait, 15/15 puis 28/28
+puis 36/36 puis 43/43 OK à chaque étape ; Q touchait en plus la factorisation LU du solveur, le point
+le plus délicat rencontré depuis le Lot F — voir sa section). **Lot R peut démarrer maintenant que L
+est livré** (`weather_source.py` existe, n'a plus qu'à demander `wind_speed_10m`/`WS10m` à
+Open-Meteo/PVGIS) — et bénéficie maintenant du patron de factorisation-par-valeur-distincte posé par
+le Lot Q pour `h_e` (généralisé à `K_global` en entier plutôt qu'au seul nœud d'air, cf. sa section).
+**Lot I (cadre de fenêtre) reste à faire** : évalué le 2026-08-07 mais reporté — plus invasif que les
+autres lots H→K (change la forme de `paroi_layers_by_id` et remplace le système FEM complet par un
+système résistif simplifié pour les triangles concernés), a besoin d'une session dédiée plutôt que
+d'être pressé en fin de créneau. Lot J et Lot R restent à cadrer avec l'utilisateur avant de coder
+(voir leur section — Lot R en plus de son cadrage, cf. ci-dessus). Lots N et O (checklist de
+progression, générateur de boîte) restent aussi à faire — indépendants, purement frontend, aucun
+cadrage ni dépendance requis.
 
 À lire intégralement avant tout lot, comme pour tout cahier des charges du lab. Mêmes règles que le
 reste de `dev/` (CLAUDE.md racine) : mémoire tenue à jour, demander avant tout commit/push et avant
@@ -371,50 +374,51 @@ erreur, seulement les warnings de budget SCSS déjà présents avant ce lot).
 
 ---
 
-## Lot Q — Plannings horaires (ventilation + apports internes)
+## Lot Q — Plannings horaires (ventilation + apports internes) ✅ livré le 2026-08-07
 
-### Constat
-Après le Lot G (`debit_vent_m3h`/`eta_recup_vent`, déjà livré) et le Lot H (`apports_internes_w`, à
-livrer) tels que décrits, ces deux grandeurs restent **constantes sur toute la durée du run**. Or
-elles suivent le même moteur physique : la présence humaine. Un logement occupé le soir/week-end et
-vide en semaine journée a des apports internes ET un besoin de ventilation (VMC hygroréglable, cf. le
-profil « 2000-2012 » de `ventilation-profiles.ts`, déjà modulé selon l'occupation dans la réalité)
-qui varient ensemble — une seule valeur moyenne sur toute l'année écrase les pointes réelles
-(matin/soir en semaine, toute la journée le week-end) au lieu de les représenter. **Dépend du Lot H**
-— rien à faire ici tant que `apports_internes_w` n'existe pas encore comme constante à généraliser.
+### Ce qui a été fait
+**Décision de l'étape 1 confirmée telle que recommandée** : un seul profil « jour type » (24
+valeurs, cyclique), pas de distinguo semaine/week-end — reste hors scope (nécessiterait une donnée
+de calendrier, absente de `BuildingWeatherPointSerializer` même avec le Lot L livré entretemps :
+une série météo reste une séquence d'heures sans date attachée).
 
-### Étapes
-1. **Décision à trancher avant de coder** : un seul profil « jour type » (24 valeurs, répété
-   cycliquement sur toute la série météo) ou deux profils distincts semaine/week-end (48 valeurs) ?
-   Le second est plus réaliste mais suppose de savoir quel jour de semaine correspond à `weather[0]`
-   — aucune donnée de calendrier n'existe aujourd'hui dans `BuildingWeatherPointSerializer` (une
-   série séquentielle d'heures, sans date). Commencer par un seul profil « jour type » (plus simple,
-   couvre déjà le cas le plus utile : nuit vs journée) ; le distinguo semaine/week-end n'a de sens
-   qu'une fois le Lot L (météo réelle, datée) en place.
-2. **Nouveau champ optionnel `planning`** sur `BuildingCalculRequestSerializer` (`serializers.py`) :
-   liste de 24 entrées `{debit_vent_m3h, eta_recup_vent, apports_internes_w}`, une par heure de la
-   journée (index 0 = minuit). Absent → comportement actuel inchangé (valeurs constantes de
-   `interior`, ou 0 si non fournies — rétrocompatible avec les Lots G/H tels quels).
-3. **Phase horaire** : ajouter `heure_debut` (0-23, défaut 0) au payload de calcul — l'heure de la
-   journée du premier point de `weather`. Sans lui, `planning[hour_idx % 24]` suppose que la série
-   météo démarre toujours à minuit, hypothèse fragile dès que le Lot L (import Open-Meteo, période
-   arbitraire) sera en place.
-4. **`_assemble_F_hour`/`run_building_simulation`** (`building_solver.py`) : si `planning` est fourni,
-   calculer `g_vent`/`apports_internes_w` de chaque heure via
-   `planning[(heure_debut + hour_idx) % 24]` au lieu des constantes de `interior`. **Point dur** :
-   `g_vent` est aujourd'hui ajouté une seule fois à `K_global[air_idx, air_idx]` avant la boucle
-   horaire (voir Lot G), et `A_free`/`A_pinned` sont factorisés une seule fois par `spla.splu`
-   (`run_building_simulation:283-306`) en supposant `K_global` fixe pour tout le run. Un `g_vent`
-   variable par heure casse cette hypothèse — il faudra factoriser une fois **par valeur distincte**
-   de `g_vent` rencontrée dans le planning (24 au plus pour un profil « jour type », pas une par heure
-   simulée) plutôt qu'une seule fois pour tout le run. `apports_internes_w`, lui, n'affecte que `F`
-   (second membre, déjà recalculé à chaque heure) — aucun problème de factorisation de ce côté.
-5. **UI** (page Calcul 3D) : éditeur de planning réutilisant le même patron que la météo horaire déjà
-   en place (`calcul-3d.component.ts:127-146` — textarea CSV collée + bouton d'exemple) : 24 lignes
-   `débit_m3h, eta_recup, apports_w`. Le profil de ventilation par époque (Lot G,
-   `ventilation-profiles.ts`) reste utile comme point de départ (valeur constante) même une fois le
-   planning disponible — un planning est une variation AUTOUR d'un profil de base, pas forcément un
-   remplacement complet.
+`PlanningEntrySerializer` (`{debit_vent_m3h?, eta_recup_vent?, apports_internes_w?}`, mêmes bornes
+que les champs constants équivalents) + `planning` (liste, `required=False`, validée à exactement 24
+entrées via `validate_planning`) + `heure_debut` (0-23, défaut 0) sur
+`BuildingCalculRequestSerializer`. Absent → comportement inchangé (constantes de `interior`).
+
+**Point dur traité** (`building_solver.py`) : extraction de `_factorize_for_g_vent(K_global_no_vent,
+C_global, air_idx, mode, g_vent)` — construit `K_global[air_idx,air_idx] += g_vent` puis factorise
+(`spla.splu`, l'étape coûteuse) le(s) système(s) nécessaires au mode donné, retournés dans un dict
+(`'imposed'` : solver+col_saved+dirichlet_row ; `'free'` : solver ; `'thermostat'` : solver+
+pinned_solver+A_free+col_saved_pinned, pour le résidu HVAC). `run_building_simulation` calcule
+`g_vent_by_slot`/`apports_by_slot` (24 valeurs) si `planning` fourni, sinon une seule constante comme
+avant ; `bundles_by_g_vent = {g: _factorize_for_g_vent(...) for g in set(g_vent_by_slot)}` — une
+factorisation par **valeur distincte**, jamais par heure simulée (24 au plus, souvent bien moins :
+le test de conservation d'énergie du Lot Q exerce jusqu'à 12 valeurs distinctes sur 24 heures et
+reste quasi-instantané). La boucle horaire sélectionne `bundle = bundles_by_g_vent[g_vent]` selon
+`(heure_debut + hour_idx) % 24`. `apports_internes_w` par heure n'affecte que `F` (recalculé à
+chaque heure de toute façon) — aucun problème de factorisation de ce côté, comme anticipé. Sans
+effet en mode `'imposed'` (le planning n'y est simplement pas exploité), cohérent avec les
+constantes qu'il remplace.
+
+**UI** (page Calcul 3D) : case à cocher « Utiliser un planning horaire », qui révèle un champ
+`heure_debut` + un textarea 24 lignes (`débit_m3h, eta_recup, apports_w`) + un bouton d'exemple
+(profil résidentiel plausible, creux nocturne/pointes matin-soir, dérivé des constantes déjà
+saisies). Les champs constants restent affichés et actifs comme point de départ — un planning est
+une variation AUTOUR, pas un remplacement (conforme à l'étape 5 d'origine).
+
+Tests (`backend/api/tests.py`, 7 nouveaux — `HourlyPlanningTest`, `PlanningSerializerTest`) :
+identité EXACTE entre planning constant (24 entrées identiques) et constantes équivalentes, dans les
+trois modes `'imposed'`/`'free'`/`'thermostat'` (non-régression sur le nouveau mécanisme de bundles) ;
+`heure_debut` sélectionne bien le bon index dès `hour_idx=0` ; identité de conservation d'énergie
+généralisée à un `g_vent`/`apports_internes_w` variable heure par heure (même famille que Lot F/G,
+avec un planning exerçant réellement plusieurs bundles distincts) ; `'imposed'` ignore le planning ;
+validation stricte à 24 entrées. Mutation testing sur la sélection de slot (`heure_debut`) et sur la
+sélection de bundle (forcer l'usage d'un seul bundle peu importe `g_vent`) : échec confirmé dans les
+deux cas, 43/43 après restauration. Vérifié en réel sur l'image rebuildée via le pipeline DRF →
+`validated_data` → `run_building_simulation` complet (payload avec planning variable + `heure_debut`
+non nul).
 
 ---
 
