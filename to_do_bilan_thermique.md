@@ -14,20 +14,23 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F et G livrés** (tests physiques automatisés, renouvellement d'air) — voir leur section
-respective pour le détail. Chaque lot suivant qui touche `_assemble_F`/`_assemble_F_hour` (H, K)
-doit maintenant faire passer `python manage.py test api` avant/après modification — c'est tout
-l'intérêt du Lot F : détecter une régression au lieu de la découvrir en production. **Lot L (météo
-automatique) reste la priorité la plus haute côté ergonomie** : c'est le goulot d'étranglement le
-plus lourd du parcours actuel (CSV collé à la main) et un prérequis moral avant de recommander
-l'outil pour un vrai bâtiment. Les lots H→K sont indépendants entre eux mais touchent tous
-`solver.py`/`building_solver.py` — à faire un par un, jamais en parallèle. Les lots L→P sont
-largement indépendants les uns des autres (fichiers distincts) et parallélisables par sous-agents
-une fois leurs contrats d'API respectifs figés. **Lot Q dépend du Lot H** (généralise
-`apports_internes_w` et le `debit_vent_m3h`/`eta_recup_vent` du Lot G à un planning horaire commun) —
-à faire juste après H, pas en parallèle des autres. **Lots R et S dépendent du Lot L** (tous deux ont
-besoin de la météo automatique : `vent_m_s` pour R, choix de la source pour S) — à ne pas commencer
-avant que L soit en place.
+**Lots F, G, H, K, M et P livrés** (tests physiques automatisés, renouvellement d'air, apports
+internes, triangles au contact du sol, résultats normalisés kWh/m²/an, aide au calcul de
+`c_air_int`) — voir leur section respective pour le détail. Chaque lot qui touche
+`_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api` avant/après
+modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la découvrir en
+production (H et K l'ont fait, 15/15 OK à chaque étape). **Lot L (météo automatique) reste la
+priorité la plus haute côté ergonomie** : c'est le goulot d'étranglement le plus lourd du parcours
+actuel (CSV collé à la main) et un prérequis moral avant de recommander l'outil pour un vrai
+bâtiment — pas encore fait, plus gros chantier restant (API externe + Celery + UI). **Lot I (cadre
+de fenêtre) reste à faire** : évalué le 2026-08-07 mais reporté — plus invasif que les autres lots
+H→K (change la forme de `paroi_layers_by_id` et remplace le système FEM complet par un système
+résistif simplifié pour les triangles concernés), a besoin d'une session dédiée plutôt que d'être
+pressé en fin de créneau. Lot J et Lot R restent à cadrer avec l'utilisateur avant de coder (voir
+leur section). **Lot Q peut démarrer maintenant que H est livré** (généralise `apports_internes_w`
+et le `debit_vent_m3h`/`eta_recup_vent` du Lot G à un planning horaire commun). **Lots R et S
+dépendent du Lot L** (tous deux ont besoin de la météo automatique : `vent_m_s` pour R, choix de la
+source pour S) — à ne pas commencer avant que L soit en place.
 
 À lire intégralement avant tout lot, comme pour tout cahier des charges du lab. Mêmes règles que le
 reste de `dev/` (CLAUDE.md racine) : mémoire tenue à jour, demander avant tout commit/push et avant
@@ -132,23 +135,27 @@ apports internes du Lot H.
 
 ---
 
-## Lot H — Apports internes (occupants, éclairage, électroménager)
+## Lot H — Apports internes (occupants, éclairage, électroménager) ✅ livré le 2026-08-07
 
-### Constat
-Rien ne modélise les gains internes — chauffage systématiquement surestimé, climatisation sous-estimée
-par rapport à un bâtiment réellement occupé.
+### Ce qui a été fait
+`apports_internes_w` (W, défaut 0) ajouté à `BuildingInteriorSerializer` — 3D uniquement (comme
+`debit_vent_m3h`/Lot G, un bâtiment a un volume réel, pas le 1D), injecté directement dans
+`F[air_idx]` (`_assemble_F_hour`/`run_building_simulation`, `building_solver.py`) : puissance
+directe (W), pas de multiplication par `t_ext` contrairement à `g_vent`. Actif en modes
+`'free'`/`'thermostat'` uniquement — sans effet en `'imposed'` (Dirichlet écrase la ligne du nœud
+d'air, même raisonnement que le Lot G, vérifié par test). UI Calcul 3D : champ « Apports internes
+(W) » dans le bloc intérieur libre/thermostat. Documenté dans la page Théorie, section « Portée et
+hypothèses » (paragraphe sur les deux termes que le solveur 3D ajoute au nœud d'air, absents du
+bilan 1D d'une paroi isolée). Tests (`backend/api/tests.py`, classe
+`BuildingAirNodeEnergyBalanceTest`) : identité de conservation d'énergie
+`C_air·ΔT_air = Σ(flux + apports_internes_w)·dt` (mode `'free'`), non-régression (des apports
+internes laissent un bâtiment plus chaud), et non-effet en mode `'imposed'`.
 
-### Étapes
-1. Ajouter un champ `apports_internes_w` (puissance constante, W) à `BuildingInteriorSerializer` —
-   version minimale de ce lot : une seule valeur pour tout le run. Besoin confirmé d'un profil horaire
-   (planning d'occupation, plutôt qu'une constante) — traité au **Lot Q**, à faire juste après celui-ci
-   plutôt qu'en itération lointaine : Lot Q généralise `apports_internes_w` ET `debit_vent_m3h`/
-   `eta_recup_vent` (Lot G) au même mécanisme de planning, les deux grandeurs suivant le même moteur
-   physique (la présence humaine).
-2. Injecter directement dans `F[air_idx]` (`_assemble_F_hour`) — c'est le point d'injection le plus
-   simple, aucune dépendance à la géométrie d'un triangle particulier.
-3. Documenter dans la page Théorie (section « Portée et hypothèses ») au même titre que les autres
-   hypothèses déjà listées.
+### Reste ouvert
+Valeur constante pour tout le run — le besoin d'un profil horaire (planning d'occupation) est
+confirmé et traité au **Lot Q**, qui généralise `apports_internes_w` ET `debit_vent_m3h`/
+`eta_recup_vent` (Lot G) au même mécanisme de planning (même moteur physique : la présence
+humaine). Lot Q peut démarrer maintenant que ce lot est livré.
 
 ---
 
@@ -195,23 +202,33 @@ store extérieur qui limite les apports solaires d'été — seule la paroi stat
 
 ---
 
-## Lot K — Triangles au contact du sol (dallage)
+## Lot K — Triangles au contact du sol (dallage) ✅ livré le 2026-08-07
 
-### Constat
-Aucune distinction entre un triangle de mur/toiture (face à l'air extérieur, `h_e`/`t_ext`) et un
-triangle de plancher bas au contact du sol. Si un tel triangle est maillé, il reçoit aujourd'hui la
-même condition limite qu'un mur — physiquement faux, le sol a une température bien plus stable et
-amortie que l'air extérieur (grossièrement 10-14°C de moyenne annuelle en France, quasi-constante).
+### Ce qui a été fait
+Champ `boundary` sur `TriangleInputSerializer` : `'exterior_air'` (défaut, comportement historique
+inchangé pour tout maillage existant) ou `'ground'`. Température de sol **constante fournie dans le
+payload de calcul** (`t_ground`, `BuildingCalculRequestSerializer`, défaut 12°C — moyenne annuelle
+usuelle en France) plutôt qu'un champ sur `Building` : reste modifiable d'un run à l'autre sans
+éditer le bâtiment, pas de migration sur `Building`. `_assemble_F_hour`
+(`building_solver.py`) : pour un triangle `'ground'`, `f_local[0] += h_e * t_ground` au lieu de
+`h_e * t_ext` — même conductance `h_e` que les autres triangles (pas de `h_e` distinct pour le sol,
+cf. étape 3 d'origine — extension possible, non faite). UI : sélecteur « Sol / Air extérieur » par
+groupe OBJ sur la page Bâtiment (même patron que l'assignation de modèle de paroi par groupe),
+champ « Température de sol » sur la page Calcul 3D. Piège corrigé au passage :
+`BuildingSerializer._build_envelope` reconstruisait les triangles existants (chemin PATCH
+« triangles seul ») en ne recopiant que `v`/`group`/`paroi_model_id` — `boundary` aurait été
+silencieusement perdu à la moindre sauvegarde partielle sans le correctif.
 
-### Étapes
-1. Ajouter un champ `boundary` sur le triangle (`TriangleInputSerializer`) : `'exterior_air'`
-   (défaut, comportement actuel) ou `'ground'`.
-2. Pour les triangles `'ground'` : soit une température de sol constante fournie par l'utilisateur
-   (champ sur `Building` ou dans le payload de calcul), soit — plus tard — une valeur dérivée de la
-   moyenne annuelle de la série météo fournie. Commencer par la constante, la dérivation automatique
-   n'a de sens qu'une fois le Lot L (météo réelle) en place.
-3. `_assemble_F_hour`/`_assemble_F` : brancher `t_ground` à la place de `t_ext` pour ces triangles,
-   éventuellement avec un `h_e` différent (pas de convection due au vent contre le sol).
+Tests (`backend/api/tests.py`, `GroundBoundaryTest`) : identité EXACTE (pas une convergence) — un
+triangle `'ground'` soumis à une météo `t_ext` très différente et variable doit reproduire au
+chiffre près (1e-6) un mur 1D alimenté par une météo **constante** égale à `t_ground`, prouvant que
+`t_ext` n'a strictement aucune influence sur ce triangle ; non-régression sur un triangle
+`'exterior_air'` (jamais influencé par `t_ground`, quelle que soit sa valeur).
+
+### Reste ouvert
+`h_e` distinct pour un triangle au sol (pas de convection due au vent contre la terre) — extension
+possible, non faite (voir étape 3 d'origine). Dérivation automatique de `t_ground` depuis la
+moyenne annuelle de la météo — n'a de sens qu'une fois le Lot L (météo réelle) en place.
 
 ---
 
@@ -253,20 +270,22 @@ un dimensionnement que l'historique brut d'une année réelle).
 
 ---
 
-## Lot M — Surface de référence et résultats normalisés (kWh/m²/an)
+## Lot M — Surface de référence et résultats normalisés (kWh/m²/an) ✅ livré le 2026-08-07
 
-### Constat
-Le dashboard (`calcul-3d.component.html:189-210`) affiche des kWh bruts, jamais de kWh/m²/an — pourtant
-le catalogue de parois cite explicitement les seuils RT2005/RT2012/RE2020, qui ne sont comparables
-qu'en valeur surfacique. Sans ce champ, l'utilisateur ne peut pas juger si un résultat est bon ou
-mauvais.
+### Ce qui a été fait
+`surface_ref_m2` (optionnel, saisie directe — pas de déduction automatique depuis les triangles de
+plancher, qui aurait supposé le Lot K déjà exploité pour ça) ajouté à `Building`
+(migration `0008_building_surface_ref_m2`), champ sur la page Bâtiment. Dashboard Calcul 3D :
+tuiles « Chauffage normalisé »/« Climatisation normalisée » (`heating_kwh`/`cooling_kwh` divisés
+par `surface_ref_m2`) à côté des valeurs brutes existantes, avec un message explicite invitant à
+renseigner la surface si absente (plutôt que de masquer silencieusement la fonctionnalité). Repère
+visuel : note textuelle sous les tuiles (RT2012 ≈ 50 kWh/m²/an, RE2020 plus strict), avec la
+réserve explicite que ces seuils couvrent aussi ECS/éclairage/auxiliaires non modélisés ici — donc
+une comparaison approximative, pas une certification.
 
-### Étapes
-1. Ajouter un champ `surface_ref_m2` à `Building` (saisie directe — la déduire automatiquement des
-   triangles de plancher suppose le Lot K déjà en place pour identifier lesquels en sont).
-2. Dashboard : `heating_kwh / surface_ref_m2` et `cooling_kwh / surface_ref_m2` affichés à côté des
-   valeurs brutes existantes, avec un repère visuel simple (comparaison aux seuils déjà documentés
-   dans le catalogue : RT2012 ≈ 50 kWh/m²/an de consommation conventionnelle, RE2020 plus strict).
+### Reste ouvert
+Repère visuel volontairement textuel (pas de jauge/couleur) — un raffinement graphique reste
+possible mais non fait faute de temps dans ce lot.
 
 ---
 
@@ -306,18 +325,22 @@ Sans ça, impossible de tester l'outil sur un cas simple.
 
 ---
 
-## Lot P — Aide au calcul de `c_air_int`
+## Lot P — Aide au calcul de `c_air_int` ✅ livré le 2026-08-07
 
-### Constat
-`c_air_int` (J/K, capacité thermique de l'air intérieur) est demandé en valeur brute
-(`calcul-3d.component.html:110-111`) — une grandeur qu'un utilisateur non spécialiste ne sait pas
-estimer.
+### Ce qui a été fait
+Bouton « Calculer depuis le volume » à côté du champ `c_air_int` (page Calcul 3D) :
+`c_air_int = round(volumeM3 * 1200)` (J/m³·K, capacité thermique volumique usuelle de l'air),
+champ resté éditable ensuite. Réutilise **le champ `volumeM3` déjà existant** (bloc « Renouvellement
+d'air », Lot G) plutôt qu'un champ dupliqué — c'est physiquement le même volume d'air du bâtiment
+qui sert aux deux calculs. Pas de déduction depuis `surface_ref_m2` × hauteur sous plafond (option
+mentionnée en note) : `volumeM3` saisi directement est suffisant et évite une hauteur sous plafond
+supplémentaire à demander.
 
-### Étapes
-1. Petit calcul assisté dans le formulaire : à partir d'un volume d'air saisi (m³, ou déduit du Lot
-   M si `surface_ref_m2` × hauteur sous plafond sont connus), `c_air_int ≈ volume_m3 * 1200`
-   (J/m³·K, capacité thermique volumique usuelle de l'air à pression normale) — bouton "calculer
-   depuis le volume" qui pré-remplit le champ, resté éditable ensuite.
+### Reste ouvert
+Aucun test automatisé ajouté (calcul UI pur, une multiplication ; l'app n'a pas d'infrastructure de
+test frontend existante — aucune autre page n'en a non plus, cohérent avec le reste du lab).
+Vérifié par un build Angular de production propre (`ng build --configuration production`, aucune
+erreur, seulement les warnings de budget SCSS déjà présents avant ce lot).
 
 ---
 
