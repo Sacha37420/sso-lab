@@ -116,3 +116,122 @@ code, pre, .mono { font-family: var(--font-mono); }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* ─── Primitives UI partagées (pages métier) ────────────────────────────
+   Foyer (ci-dessus) ne fournit que les tokens. Ces classes sont le patron
+   commun déjà convergé indépendamment par la majorité des apps du lab
+   (page/card/btn/badge/table/form-group) — à réutiliser telles quelles
+   plutôt que réinventées par app, pour éviter la dérive de valeurs déjà
+   observée (max-width/padding différents selon l'app). Les patrons plus
+   riches d'une app donnée (modal, data-table, filtres, form-row…) restent
+   des ajouts propres à cette app, pas du Foyer de base. */
+.page { padding: var(--space-5); max-width: 1200px; margin: 0 auto; }
+
+@media (max-width: 899px) {
+  .page { padding: var(--space-4); }
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+
+  .subtitle { color: var(--text-mute); font-size: var(--text-sm); margin-top: var(--space-1); }
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 3px rgba(0,0,0,.1), 0 1px 2px rgba(0,0,0,.06);
+  padding: var(--space-4);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-family: var(--font-ui);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+
+  &-primary   { background: var(--accent); color: var(--accent-on); &:hover { background: var(--accent-deep); } }
+  &-danger    { background: var(--danger); color: var(--accent-on); &:hover { opacity: .85; } }
+  &-secondary { background: var(--border); color: var(--text); &:hover { opacity: .85; } }
+  &-ghost     { background: transparent; border: 1px solid var(--border); color: var(--text); &:hover { background: var(--bg); } }
+  &:disabled  { opacity: .5; cursor: not-allowed; }
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 600;
+
+  &.badge-blue   { background: var(--accent-tint);  color: var(--accent-deep); }
+  &.badge-green  { background: var(--success-tint); color: var(--success); }
+  &.badge-yellow { background: var(--warning-tint); color: var(--warning); }
+  &.badge-gray   { background: var(--bg); color: var(--text-mute); }
+  &.badge-red    { background: var(--danger-tint);  color: var(--danger); }
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+
+  /* Rend toute table scrollable horizontalement plutôt que de déborder de sa
+     carte ou de forcer un scroll de page entière — indispensable sur mobile où
+     les tables larges (nombreuses colonnes) dépassent la largeur de l'écran. */
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+
+  th, td { padding: var(--space-2) var(--space-3); text-align: left; border-bottom: 1px solid var(--border); }
+  th     { font-weight: 700; background: var(--bg); color: var(--text-mute); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .05em; }
+  tr:hover td { background: var(--bg); }
+}
+
+.form-group {
+  margin-bottom: var(--space-4);
+
+  label { display: block; font-size: var(--text-sm); font-weight: 600; color: var(--text-mute); margin-bottom: var(--space-2); }
+
+  input, select, textarea {
+    width: 100%;
+    min-height: 44px;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    font-family: var(--font-ui);
+    background: var(--card);
+    color: var(--text);
+    transition: border-color .15s;
+
+    &:focus { outline: none; border-color: var(--accent); }
+    &:focus-visible { box-shadow: 0 0 0 3px var(--accent-tint); }
+  }
+
+  textarea { min-height: 80px; resize: vertical; }
+}
+
+.loading-msg { color: var(--text-mute); font-size: var(--text-sm); }
+.error-msg   { color: var(--danger); font-size: var(--text-sm); }
+.empty-msg   { color: var(--text-mute); font-size: var(--text-sm); text-align: center; padding: var(--space-5); }
