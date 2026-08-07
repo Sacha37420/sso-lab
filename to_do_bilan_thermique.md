@@ -14,20 +14,20 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F, G, H, K, L, M et P livrés** (tests physiques automatisés, renouvellement d'air, apports
-internes, triangles au contact du sol, import météo automatique Open-Meteo, résultats normalisés
-kWh/m²/an, aide au calcul de `c_air_int`) — voir leur section respective pour le détail. Chaque lot
-qui touche `_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api`
-avant/après modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la
-découvrir en production (H et K l'ont fait, 15/15 puis 28/28 OK à chaque étape). **Lots R et S
-peuvent démarrer maintenant que L est livré** (`weather_source.py` existe : R n'a plus qu'à demander
-`wind_speed_10m` à Open-Meteo, S qu'à ajouter une fonction de fetch PVGIS TMY produisant le même
-format). **Lot I (cadre de fenêtre) reste à faire** : évalué le 2026-08-07 mais reporté — plus
-invasif que les autres lots H→K (change la forme de `paroi_layers_by_id` et remplace le système FEM
-complet par un système résistif simplifié pour les triangles concernés), a besoin d'une session
-dédiée plutôt que d'être pressé en fin de créneau. Lot J et Lot R restent à cadrer avec l'utilisateur
-avant de coder (voir leur section — Lot R en plus de son cadrage, cf. ci-dessus). **Lot Q peut
-démarrer maintenant que H est livré** (généralise `apports_internes_w` et le
+**Lots F, G, H, K, L, M, P et S livrés** (tests physiques automatisés, renouvellement d'air, apports
+internes, triangles au contact du sol, import météo automatique Open-Meteo + PVGIS TMY, résultats
+normalisés kWh/m²/an, aide au calcul de `c_air_int`, années type) — voir leur section respective pour
+le détail. Chaque lot qui touche `_assemble_F`/`_assemble_F_hour` doit faire passer
+`python manage.py test api` avant/après modification — c'est tout l'intérêt du Lot F : détecter une
+régression au lieu de la découvrir en production (H et K l'ont fait, 15/15 puis 28/28 puis 36/36 OK à
+chaque étape). **Lot R peut démarrer maintenant que L est livré** (`weather_source.py` existe, n'a
+plus qu'à demander `wind_speed_10m`/`WS10m` à Open-Meteo/PVGIS). **Lot I (cadre de fenêtre) reste à
+faire** : évalué le 2026-08-07 mais reporté — plus invasif que les autres lots H→K (change la forme de
+`paroi_layers_by_id` et remplace le système FEM complet par un système résistif simplifié pour les
+triangles concernés), a besoin d'une session dédiée plutôt que d'être pressé en fin de créneau. Lot J
+et Lot R restent à cadrer avec l'utilisateur avant de coder (voir leur section — Lot R en plus de son
+cadrage, cf. ci-dessus). **Lot Q peut démarrer maintenant que H est livré** (généralise
+`apports_internes_w` et le
 `debit_vent_m3h`/`eta_recup_vent` du Lot G à un planning horaire commun).
 
 À lire intégralement avant tout lot, comme pour tout cahier des charges du lab. Mêmes règles que le
@@ -460,33 +460,54 @@ manquants, celui-ci corrige la précision d'un poste déjà modélisé (la conve
 
 ---
 
-## Lot S — Années type (TMY)
+## Lot S — Années type (TMY) ✅ livré le 2026-08-07
 
-### Constat
-Même une fois le Lot L livré, l'import météo automatique reste l'historique BRUT d'**une année réelle
-particulière** (Open-Meteo Archive) — un hiver anormalement doux ou rude biaise le résultat sans que
-rien ne le signale. Les outils de dimensionnement std utilisent une **année type** (TMY — Typical
-Meteorological Year), construite pour être statistiquement représentative (méthode Finkelstein-Schafer
-ou équivalent : sélectionne, mois par mois, le mois le plus « typique » parmi plusieurs années
-d'historique, puis les assemble en une seule année synthétique). Déjà repéré comme piste au Lot L :
-**PVGIS TMY**, qui calcule déjà ce type d'année de façon validée — pas la peine de réimplémenter
-Finkelstein-Schafer à la main.
+### Ce qui a été fait
+**PVGIS TMY** (`re.jrc.ec.europa.eu/api/v5_2/tmy`, JRC — Commission européenne, gratuite, sans clé)
+ajouté à `backend/api/weather_source.py` (créé au Lot L) : `fetch_pvgis_tmy` + `_assemble_tmy_series`
+(partie pure, testable sans réseau) + `build_tmy_series` (sans repli) + `build_tmy_or_fallback_series`
+(point d'entrée principal, avec repli). `Gb(n)`/`Gd(h)` de la réponse PVGIS sont EXACTEMENT les mêmes
+grandeurs physiques que `direct_normal_irradiance`/`diffuse_radiation` d'Open-Meteo (irradiance directe
+normale au rayon / diffuse horizontale) → `e_dir`/`e_dif` directement. La position solaire (module déjà
+écrit au Lot L) s'applique telle quelle : refactor `_enrich_hour`, extrait de
+`_assemble_weather_series`, partagé par les deux sources — seul le parsing du format brut change d'une
+source à l'autre (Open-Meteo : tableaux parallèles + timestamp ISO ; PVGIS : un tableau de dicts par
+heure + timestamp `'YYYYMMDD:HHMM'`, `_parse_pvgis_timestamp`).
 
-### Étapes
-1. **PVGIS TMY comme source privilégiée** (`backend/api/weather_source.py`, créé au Lot L) : endpoint
-   PVGIS `tmy` (lat/lon → une année horaire déjà assemblée comme année type) — même principe que le
-   repli IGN→OSM de `geodata.py` (`is_in_france()`), mais la bascule ici ne se fait pas sur la France :
-   PVGIS couvre l'essentiel du globe hors zones polaires (à vérifier précisément la couverture au
-   moment de coder — PVGIS s'appuie sur différentes bases satellite selon la zone, SARAH2/NSRDB/ERA5).
-   Repli sur l'historique brut Open-Meteo Archive (Lot L) hors couverture PVGIS.
-2. **Choix explicite côté UI** entre « année type (PVGIS TMY) » — pour un dimensionnement
-   représentatif — et « année réelle (Open-Meteo Archive), datée au choix » — pour étudier un épisode
-   précis (ex. la canicule d'un été réel donné). Les deux sources produisant le même format interne
-   (`e_dir`/`e_dif`/`t_ext`/`sun_azimuth`/`sun_elevation`, plus `vent_m_s` si le Lot R est en place), le
-   reste du pipeline (solveur, dashboard) ne voit aucune différence entre les deux.
-3. Annoter clairement dans le dashboard quelle source a produit le résultat affiché (TMY vs année
-   réelle datée) — un résultat en kWh/m²/an (Lot M) n'a pas le même sens statistique selon la source,
-   à ne jamais laisser ambigu.
+**Couverture PVGIS vérifiée en réel** (pas seulement documentée) : Paris/New York/Australie centrale
+couverts (SARAH2/NSRDB/ERA5 selon la zone, confirmant la note d'origine) ; Pacifique, Svalbard (arctique)
+et pôle Sud renvoient tous le **même message générique** `"Location over the sea"` malgré le fait que
+Svalbard/pôle Sud soient des terres — PVGIS ne distingue pas "vraiment en mer" de "zone polaire non
+couverte" dans son message d'erreur, `fetch_pvgis_tmy` ne cherche donc pas à interpréter ce message,
+il déclenche simplement le repli sur toute erreur PVGIS (coverage ou transitoire). Pas de bbox de
+couverture précalculée façon `geodata.is_in_france()` : PVGIS renvoie lui-même clairement si la zone
+est couverte, un test try/except suffit, plus simple que le Lot L ne l'anticipait.
+
+**Choix explicite côté UI** : `WeatherFetchRequestSerializer.source` (`'archive'` par défaut = Lot L
+inchangé, `'tmy'` = Lot S) ; toggle sur la page Calcul 3D entre « Année type (PVGIS TMY) » et « Année
+réelle datée (Open-Meteo) », avec les dates existantes réutilisées comme **repli uniquement** en mode
+TMY (pas de champ dupliqué, pas de validation conditionnelle côté serializer — toujours requises, sans
+effet si PVGIS répond). **Source annotée à deux endroits distincts** (to_do.md étape 3) : dans le
+panneau météo dès la récupération (`weatherSourceLabel`, y compris le message de repli s'il a eu lieu),
+et **séparément** dans le dashboard de résultats (`submittedWeatherSourceLabel`, capturée au moment du
+clic « Lancer le calcul » plutôt que relue en direct — si l'utilisateur recharge une autre météo pendant
+qu'un calcul tourne, le dashboard doit continuer à refléter la source qui a vraiment produit ce
+résultat, pas celle actuellement dans le formulaire).
+
+Tests (`backend/api/tests.py`, 8 nouveaux — `PvgisTimestampTest`, `TmySeriesAssemblyTest`,
+`TmyFallbackTest`) : parsing du format de timestamp PVGIS, assemblage synthétique (mêmes vérifications
+de clamping/heures manquantes que Lot L, format brut différent), et **branchement du repli mocké**
+(`unittest.mock.patch.object` sur `build_tmy_series`/`build_weather_series` — première utilisation de
+mock dans ce fichier de tests, pour isoler la logique de branchement du réseau réel, déjà couvert par
+la vérification en direct). Mutation testing sur le retour `'pvgis-tmy'` du chemin succès : échec
+confirmé, 36/36 après restauration. Vérifié en réel sur l'image rebuildée : Paris en mode TMY → 8760
+heures `source: pvgis-tmy` ; océan Pacifique en mode TMY → repli automatique vers Open-Meteo Archive
+avec avertissement clair, via le vrai worker Celery/Redis.
+
+### Reste ouvert
+`vent_m_s` (Lot R) toujours pas demandé — PVGIS fournit aussi `WS10m` (à vérifier l'unité au moment du
+Lot R, PVGIS et Open-Meteo n'utilisent probablement pas la même). Pas de vérification dans un
+navigateur réel (même réserve qu'au Lot L).
 
 ---
 
