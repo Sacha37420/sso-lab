@@ -14,24 +14,29 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F, G, H, K, L, M, P, Q et S livrés** (tests physiques automatisés, renouvellement d'air,
-apports internes, triangles au contact du sol, import météo automatique Open-Meteo + PVGIS TMY,
-résultats normalisés kWh/m²/an, aide au calcul de `c_air_int`, plannings horaires, années type) — voir
-leur section respective pour le détail. Chaque lot qui touche `_assemble_F`/`_assemble_F_hour` doit
-faire passer `python manage.py test api` avant/après modification — c'est tout l'intérêt du Lot F :
-détecter une régression au lieu de la découvrir en production (H, K et Q l'ont fait, 15/15 puis 28/28
-puis 36/36 puis 43/43 OK à chaque étape ; Q touchait en plus la factorisation LU du solveur, le point
-le plus délicat rencontré depuis le Lot F — voir sa section). **Lot R peut démarrer maintenant que L
-est livré** (`weather_source.py` existe, n'a plus qu'à demander `wind_speed_10m`/`WS10m` à
-Open-Meteo/PVGIS) — et bénéficie maintenant du patron de factorisation-par-valeur-distincte posé par
-le Lot Q pour `h_e` (généralisé à `K_global` en entier plutôt qu'au seul nœud d'air, cf. sa section).
-**Lot I (cadre de fenêtre) reste à faire** : évalué le 2026-08-07 mais reporté — plus invasif que les
-autres lots H→K (change la forme de `paroi_layers_by_id` et remplace le système FEM complet par un
-système résistif simplifié pour les triangles concernés), a besoin d'une session dédiée plutôt que
-d'être pressé en fin de créneau. Lot J et Lot R restent à cadrer avec l'utilisateur avant de coder
-(voir leur section — Lot R en plus de son cadrage, cf. ci-dessus). Lots N et O (checklist de
-progression, générateur de boîte) restent aussi à faire — indépendants, purement frontend, aucun
-cadrage ni dépendance requis.
+**Lots F, G, H, I, K, L, M, P, Q et S livrés** (tests physiques automatisés, renouvellement d'air,
+apports internes, cadre de fenêtre, triangles au contact du sol, import météo automatique Open-Meteo
++ PVGIS TMY, résultats normalisés kWh/m²/an, aide au calcul de `c_air_int`, plannings horaires, années
+type) — voir leur section respective pour le détail. Chaque lot qui touche
+`_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api` avant/après
+modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la découvrir en
+production (H, K, Q et I l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43 puis 48/48 OK à chaque
+étape ; Q touchait la factorisation LU du solveur, I a fait remonter un vrai trou de couverture par
+mutation testing — voir leurs sections respectives). **Lot I livré avec un design différent de
+l'étape 2 d'origine** (tranché avec l'utilisateur avant de coder — voir sa section) : le vitrage garde
+son maillage complet sur une aire réduite plutôt que d'être remplacé par un résistor unique, pour ne
+pas perdre le gain solaire. **Lot R peut démarrer maintenant que L est livré**
+(`weather_source.py` existe, n'a plus qu'à demander `wind_speed_10m`/`WS10m` à Open-Meteo/PVGIS) — et
+bénéficie du patron de factorisation-par-valeur-distincte posé par le Lot Q pour `h_e` (généralisé à
+`K_global` en entier plutôt qu'au seul nœud d'air, cf. sa section). Lot J et Lot R restent à cadrer
+avec l'utilisateur avant de coder (voir leur section — Lot R en plus de son cadrage, cf. ci-dessus).
+Lots N et O (checklist de progression, générateur de boîte) restent aussi à faire — indépendants,
+purement frontend, aucun cadrage ni dépendance requis. **Lot T (mode simplifié, spécifié par
+l'utilisateur le 2026-08-07) reste à faire** — recherche de bâtiment réel (IGN/OSM) + taux de
+vitrage par paroi + météo automatique, pensé comme point d'entrée pédagogique vers la méthode
+complète ; a des décisions à trancher au moment de coder (regroupement des faces par mur — voir sa
+section, réutilisable par le Lot O — et distinction paroi opaque/vitrage dans le catalogue), mais
+pas de cadrage utilisateur préalable requis puisque déjà spécifié en détail.
 
 À lire intégralement avant tout lot, comme pour tout cahier des charges du lab. Mêmes règles que le
 reste de `dev/` (CLAUDE.md racine) : mémoire tenue à jour, demander avant tout commit/push et avant
@@ -160,25 +165,51 @@ humaine). Lot Q peut démarrer maintenant que ce lot est livré.
 
 ---
 
-## Lot I — Cadre de fenêtre (Uw, fraction de cadre)
+## Lot I — Cadre de fenêtre (Uw, fraction de cadre) ✅ livré le 2026-08-07
 
-### Constat
-Le catalogue le documente déjà lui-même (« Modélise uniquement le vitrage, pas le cadre »,
-`seed_paroi_catalogue.py`) — le cadre a souvent un U bien plus élevé que le vitrage (alu ~3-7 W/m²·K
-contre 1,1-2,9 pour un double vitrage), donc l'ignorer sous-estime les pertes par les baies.
+### Ce qui a été fait
+**Design différent de l'étape 2 d'origine, tranché avec l'utilisateur avant de coder** (voir
+mémoire projet) : la formule `U_global` combinée en un résistor unique remplaçant tout le système
+du triangle a été écartée — elle aurait perdu le calcul détaillé du gain solaire du vitrage (le
+poste le plus important pour une fenêtre) sans que le texte d'origine ne dise ce qui le remplace.
+Design retenu à la place : le maillage multicouche existant du vitrage garde sa physique complète
+(gains solaires couche par couche, capacité) **sur l'aire réduite à `(1 - frame_fraction) * aire`**
+— aucun changement à `_build_triangle_systems` ni à la forme de `paroi_layers_by_id` (le cadre est
+passé séparément via `paroi_frame_by_id = {paroi_model_id: (frame_u, frame_fraction)}`, construit
+dans `tasks.py`). Le cadre lui-même devient une **résistance directe extérieur → nœud d'air**,
+exactement le même schéma que `g_vent` (Lot G) mais **par triangle** plutôt qu'un terme global
+unique (des fenêtres différentes peuvent avoir des cadres différents) : conductance
+`frame_fraction * frame_u * aire_triangle`, ajoutée à `K_global[air_idx,air_idx]`
+(`_assemble_global_kc`) et à `F[air_idx]` heure par heure (`_assemble_F_hour`, réutilise le même
+`t_boundary` que la paroi — donc `t_ground` si le triangle est aussi marqué `'ground'`, combo non
+réaliste pour une fenêtre mais géré sans crash). Pas de nœud de surface propre pour le cadre : pas
+de comportement optique, capacité négligeable — hypothèses du texte d'origine conservées, juste
+réparties différemment. `frame_u` est interprété comme déjà inclusif des résistances superficielles
+(comme Uf/Uw dans le vocabulaire fenêtre standard, cohérent avec Ug du catalogue — voir
+`seed_paroi_catalogue.py`, calculé avec Rsi/Rse conventionnels).
 
-### Étapes
-1. Ajouter deux champs optionnels à `ParoiModel` (pertinents seulement pour un modèle de type
-   fenêtre) : `frame_u` (W/m²·K) et `frame_fraction` (0..1, part de l'aire totale occupée par le
-   cadre plutôt que le vitrage).
-2. Au niveau triangle (`_build_triangle_systems`/`_assemble_global_kc`) : si ces champs sont
-   présents, pondérer la conductance du triangle comme une résistance en parallèle
-   (`U_global = frame_fraction * frame_u + (1 - frame_fraction) * U_vitrage`) plutôt que d'appliquer
-   le système multicouche 1D complet sur toute l'aire — le cadre n'a pas de comportement optique
-   (tau=0) et sa capacité thermique est négligeable, un terme purement résistif suffit.
-3. Étendre les deux entrées « Fenêtre » du catalogue de départ avec des valeurs de cadre usuelles
-   (PVC ≈ 1,5-2 W/m²·K, alu ≈ 3-5, bois ≈ 1,5-2 ; `frame_fraction` ≈ 0,20-0,30 pour une fenêtre
-   standard).
+`ParoiModel.frame_u`/`frame_fraction` (migration `0009`), les deux à renseigner ensemble ou ni l'un
+ni l'autre (`ParoiModelSerializer.validate`). **`frame_fraction` plafonné à 0,95, pas 1,0**, piège
+découvert en concevant les tests : à 1,0 l'aire "vitrage" tomberait exactement à zéro, annulant tout
+le bloc du triangle dans la matrice globale (lignes nulles) → système singulier, `spla.splu`
+échouerait. Garde-fou en double : plafond côté `ParoiModelSerializer` ET vérification directe dans
+`run_building_simulation` (`BuildingSimulationError` explicite) pour tout appelant direct du solveur
+qui contournerait le serializer. Catalogue de départ étendu (cadre PVC usuel, `frame_u` 2,0/1,8
+W/m²·K pour simple/double vitrage, `frame_fraction` 0,25). **UI non prévue par le texte d'origine
+mais ajoutée** (page « Bibliothèque de parois ») : sans elle, `frame_u`/`frame_fraction` n'auraient
+été réglables que par appel API direct — case à cocher « a un cadre » + deux champs, affichage
+récapitulatif dans la liste des modèles.
+
+**Tests** (`backend/api/tests.py`, `WindowFrameTest`, 5 nouveaux — 48/48 au total) :
+non-régression `frame_fraction=0`, conservation d'énergie généralisée (frame_fraction 0,3 et 0,9),
+attribution par triangle (comparaison différentielle, pas une égalité stricte — voir piège
+ci-dessous), validation `frame_fraction` invalide. Mutation testing : 2 mutations injectées, la
+formule de conductance du cadre détectée immédiatement (test de conservation), **la réduction d'aire
+du vitrage NON détectée du premier coup** — un vrai trou de couverture corrigé en cours de route
+(voir mémoire projet pour le piège de conception qui l'a causé).
+
+### Reste ouvert
+Aucun.
 
 ---
 
@@ -512,6 +543,91 @@ avec avertissement clair, via le vrai worker Celery/Redis.
 `vent_m_s` (Lot R) toujours pas demandé — PVGIS fournit aussi `WS10m` (à vérifier l'unité au moment du
 Lot R, PVGIS et Open-Meteo n'utilisent probablement pas la même). Pas de vérification dans un
 navigateur réel (même réserve qu'au Lot L).
+
+---
+
+## Lot T — Mode simplifié pour un bâtiment existant (recherche + taux de vitrage, pédagogique)
+
+### Constat
+Le parcours complet (import OBJ groupé → assignation paroi par paroi → géoréférencement → génération
+d'environnement → précalcul d'ombrage → construction météo → calcul) suppose un maillage déjà
+modélisé et une bonne maîtrise de l'outil — un frein complet pour qui veut juste évaluer rapidement
+UN bâtiment réel existant (le sien, par exemple), et rien n'explique aujourd'hui comment ce parcours
+détaillé se rattache à un résultat simplifié. Objectif : un mode guidé, à partir d'un bâtiment réel
+cherché par coordonnées, qui produit un `Building` ordinaire (éditable ensuite via le parcours manuel
+complet), tout en expliquant à chaque étape ce qu'il simplifie et où sont ses limites par rapport à
+la méthode complète — un outil pédagogique autant qu'un raccourci.
+
+Spécifié par l'utilisateur en 4 étapes (2026-08-07) :
+1. Rechercher le bâtiment comme on cherche les bâtiments d'un environnement.
+2. Choisir, paroi par paroi, un taux de vitrage et les modèles de paroi opaque/vitrage parmi le
+   catalogue.
+3. Subdiviser finement le maillage de chaque paroi pour respecter les proportions de vitrage
+   demandées (sans encadrement — Lot I volontairement ignoré ici).
+4. Choisir une année et récupérer automatiquement la météo à la localisation trouvée.
+
+### Étapes
+1. **Recherche du bâtiment** — même mécanisme que la génération d'environnement (`api/geodata.py` :
+   `fetch_ign_buildings`/`fetch_osm_buildings`/`is_in_france`, déjà utilisés par
+   `generate_environment_mesh`), mais pour identifier UN bâtiment précis plutôt que tous les
+   obstacles d'un rayon : lat/lon (+ un petit rayon, ex. 30-50 m) → liste des empreintes trouvées
+   triées par distance (le tri existe déjà dans `generate_environment_mesh`), l'utilisateur confirme
+   laquelle est son bâtiment (probablement la plus proche par défaut). Bénéfice à documenter :
+   contrairement à un maillage importé manuellement, un bâtiment géoréférencé via `geodata.local_xy`
+   (x=est, y=nord — déjà exactement la convention de `geometry.py`) a par construction
+   `georef_north_offset_deg = 0` correct sans calibration manuelle.
+2. **Décision à trancher avant de coder** : comment obtenir des groupes « un mur = un côté du
+   polygone d'empreinte + une toiture », assignables indépendamment ? `extrude_footprint`
+   (`geodata.py`, via `trimesh.creation.extrude_polygon`) ne garantit aujourd'hui aucun regroupement
+   par face exploitable côté appelant — à vérifier au moment de coder si l'ordre des faces retournées
+   par `trimesh` permet de dériver un groupe par arête du polygone + un groupe toiture, ou s'il faut
+   extruder côté par côté nous-mêmes (un quad par arête de l'empreinte, plus un remplissage de la
+   toiture) pour garantir des groupes propres — piste à privilégier si `trimesh` ne le permet pas
+   nativement, réutilisable aussi par le Lot O (générateur de boîte), qui a le même besoin en plus
+   simple (footprint rectangulaire connu d'avance, pas un polygone arbitraire IGN/OSM).
+3. **Par paroi (groupe)** : l'utilisateur choisit un modèle de paroi opaque et un modèle de vitrage
+   parmi le catalogue existant (`ParoiModel`/`paroi-modeles`), plus un taux de vitrage (0-100 %).
+   Distinguer les deux catégories dans le catalogue suppose de repérer un modèle « vitrage » — pas de
+   champ dédié aujourd'hui, seul indice indirect : au moins une couche à `tau > 0` (déjà le cas des
+   deux entrées Fenêtre du catalogue de départ). **Décision à trancher** : ajouter un champ explicite
+   (ex. `is_glazing` sur `ParoiModel`) plutôt que déduire depuis les couches, pour ne pas dépendre
+   d'une heuristique fragile si un mur avait par erreur une couche légèrement translucide.
+4. **Subdivision fine + assignation proportionnelle (par groupe)** — réutilise `geometry.refine_envelope`
+   (déjà utilisé par `BuildingRefineView`, jusqu'ici un raffinement global uniforme) mais appliqué
+   UNIQUEMENT aux triangles du groupe concerné, jusqu'à une taille de maille assez fine pour que la
+   proportion de triangles assignés au vitrage approxime le taux demandé à une tolérance raisonnable
+   (ex. ±5 %). **Cadre de fenêtre (Lot I) volontairement ignoré ici** — le modèle de vitrage choisi est
+   assigné tel quel, sans distinction fine des positions/formes réelles des baies : la pédagogie de ce
+   mode doit dire explicitement que c'est une approximation par « répartition », pas une vraie
+   disposition de fenêtres (même si le modèle de vitrage choisi a lui-même un `frame_u`/`frame_fraction`
+   renseigné au catalogue, le Lot I s'appliquerait quand même — la simplification est dans la
+   disposition, pas dans la désactivation technique du Lot I). **Décision à trancher** : répartition
+   des triangles vitrage/opaque déterministe et régulière (ex. 1 triangle sur N, motif régulier façon
+   mur-rideau) plutôt qu'aléatoire — plus simple à expliquer à l'utilisateur et à vérifier visuellement
+   dans le viewer 3D existant, l'aléatoire n'apporterait rien ici.
+5. **Météo** — réutilise tel quel `POST /api/meteo/recuperer/` (Lot L/S,
+   `weather_source.build_weather_series`/`build_tmy_or_fallback_series`) avec les lat/lon du bâtiment
+   trouvé à l'étape 1 et un choix d'année par l'utilisateur (année réelle datée ou TMY, même toggle
+   que la page Calcul 3D) — aucun nouveau code métier, juste un appel automatique à l'endpoint
+   existant sans repasser par le panneau manuel.
+6. **UI pédagogique, sur toutes les étapes** — à chaque étape du mode simplifié, un encart explique ce
+   que ferait la méthode complète à cet endroit (import de maillage, assignation manuelle paroi par
+   paroi, géoréférencement, précalcul d'ombrage, météo) et quelles limites la simplification introduit
+   par rapport à elle (empreinte IGN/OSM approximative, hauteur souvent estimée —
+   `_resolve_ign_height`/`_resolve_osm_height` existants, toiture simplifiée, pas de vraie disposition
+   de fenêtres, pas d'ombrage d'un environnement réel tant que celui-ci n'est pas généré séparément —
+   Lot C/génération d'environnement existants, réutilisables tels quels ensuite). Le `Building` produit
+   reste un `Building` ordinaire : à la fin du mode simplifié, rediriger vers la page Bâtiment
+   habituelle pour que l'utilisateur puisse continuer à l'affiner avec les outils complets (précalcul
+   d'ombrage, environnement, cadre de fenêtre, planning horaire…) — ce mode est un point d'entrée, pas
+   un système séparé.
+
+### Reste ouvert (à cadrer plus précisément au moment de coder)
+Génération automatique d'un environnement voisin (Lot C existant, `generate_environment_for_building`)
+non incluse dans les étapes ci-dessus par défaut — à ajouter en une étape optionnelle, le mécanisme
+existe déjà entièrement. Toiture non plane (pans, faîtage) hors scope initial — toiture plate ou pan
+unique simple pour la V1 de ce lot, cohérent avec `extrude_footprint` qui ne modélise aujourd'hui
+qu'un volume à toiture plate.
 
 ---
 
