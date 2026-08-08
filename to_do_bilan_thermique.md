@@ -14,11 +14,12 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F, G, H, I, K, L, M, N, P, Q, S et T livrés** (tests physiques automatisés, renouvellement
+**Lots F, G, H, I, K, L, M, N, O, P, Q, S et T livrés** (tests physiques automatisés, renouvellement
 d'air, apports internes, cadre de fenêtre, triangles au contact du sol, import météo automatique
-Open-Meteo + PVGIS TMY, résultats normalisés kWh/m²/an, checklist de progression, aide au calcul de
-`c_air_int`, plannings horaires, années type, mode simplifié pour un bâtiment réel existant) — voir
-leur section respective pour le détail.
+Open-Meteo + PVGIS TMY, résultats normalisés kWh/m²/an, checklist de progression, générateur de boîte,
+aide au calcul de `c_air_int`, plannings horaires, années type, mode simplifié pour un bâtiment réel
+existant) — voir leur section respective pour le détail. Seuls **Lot J** et **Lot R** restent
+non commencés, tous deux en attente de cadrage utilisateur (voir plus bas).
 Chaque lot qui touche `_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api`
 avant/après modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la
 découvrir en production (H, K, Q et I l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43 puis 48/48
@@ -32,8 +33,9 @@ bénéficie du patron de factorisation-par-valeur-distincte posé par le Lot Q p
 `K_global` en entier plutôt qu'au seul nœud d'air, cf. sa section). Lot J et Lot R restent à cadrer
 avec l'utilisateur avant de coder (voir leur section — Lot R en plus de son cadrage, cf. ci-dessus).
 **Lot N livré le 2026-08-08** (checklist de progression, page Bâtiment) — voir sa section, notamment
-l'écart assumé sur l'item « météo chargée » (aucun état persisté possible, Lot L). **Lot O (générateur
-de boîte) reste à faire** — indépendant, purement frontend, aucun cadrage ni dépendance requis.
+l'écart assumé sur l'item « météo chargée » (aucun état persisté possible, Lot L). **Lot O livré le
+2026-08-08** (générateur de boîte) — voir sa section, notamment la dérivation à la main des normales
+sortantes par groupe, vérifiée en réel via `api.geometry.compute_envelope_geometry`.
 **Lot T (mode simplifié, spécifié par
 l'utilisateur le 2026-08-07) livré le 2026-08-08** — recherche de bâtiment réel (IGN/OSM) + taux de
 vitrage par paroi + météo automatique (réutilise le préremplissage existant de Calcul 3D), pensé
@@ -395,21 +397,51 @@ encore importé (`#section-assignation` n'existe pas tant que `totalCount === 0`
 
 ---
 
-## Lot O — Générateur de bâtiment simple (« boîte »)
+## Lot O — Générateur de bâtiment simple (« boîte ») ✅ livré le 2026-08-08
 
-### Constat
-La seule voie d'entrée pour un bâtiment est l'import d'un fichier OBJ/STL groupé
-(`mesh-import.ts`) — suppose une maîtrise d'un outil de modélisation 3D externe (Blender, etc.).
-Sans ça, impossible de tester l'outil sur un cas simple.
+### Ce qui a été fait
+Nouveau module pur `frontend/src/app/core/box-generator.ts` (`generateBoxEnvelope`, même patron que
+`mesh-import.ts` — aucune dépendance Angular/Django) : génère `vertices`/`triangles`/`groups`
+directement côté client à partir de largeur/longueur/hauteur, sans endpoint dédié, comme prévu.
+Groupes nommés automatiquement (`sol`, `mur_est`, `mur_ouest`, `mur_sud`, `mur_nord`, `toiture` ou
+`toiture_est`/`toiture_ouest` en 2 pans) — l'assignation par groupe déjà en place sur la page Bâtiment
+fonctionne immédiatement, aucune modification nécessaire là. `sol` est marqué `boundary: 'ground'`
+(convention Lot K, déjà réutilisée par le Lot T) plutôt que `exterior_air`, cohérent avec toute autre
+source de maillage de l'app. Nouveau bloc « Générer une boîte » sur la page Bâtiment
+(`batiment.component.html`), juste après l'import de fichier, avec un rappel que l'import reste la
+voie avancée pour une géométrie réelle (et un lien vers le mode simplifié du Lot T pour un bâtiment
+réel existant) — le générateur n'est qu'un point d'entrée pédagogique/de test, comme spécifié.
 
-### Étapes
-1. Sur la page Bâtiment, un formulaire « Générer une boîte » : longueur × largeur × hauteur (+
-   option toiture plate/2 pans), génère directement `vertices`/`triangles` côté client (géométrie
-   triviale, pas besoin d'un endpoint dédié) avec des groupes nommés automatiquement (`mur_nord`,
-   `mur_sud`, `toiture`, etc.) pour que l'assignation par groupe (déjà en place,
-   `batiment.component.ts:173-181`) fonctionne immédiatement.
-2. L'import OBJ reste la voie avancée pour une géométrie réelle — ce générateur est un point d'entrée
-   pédagogique/de test, pas un remplacement.
+**Point délicat traité avec soin, malgré une géométrie qualifiée de « triviale » par le texte
+d'origine** : chaque triangle doit avoir une normale sortante correcte (`api.geometry` la déduit du
+seul ordre des sommets — produit vectoriel) pour que l'ombrage/l'exposition solaire aient un sens
+physique. L'ordre des sommets de chacun des 6 groupes (et des 2 groupes de pignon en toiture 2 pans)
+a été dérivé à la main (produit vectoriel), puis **vérifié en réel** dans le conteneur backend en
+appelant directement `api.geometry.compute_envelope_geometry` sur le maillage généré : tilt/azimuth
+obtenus exactement conformes à la convention documentée dans `geometry.py` pour les deux variantes de
+toiture (murs à tilt=90° et l'azimuth attendu par orientation ; toiture plate à tilt=0° ; toiture 2
+pans à tilt≈20,6° pour une boîte 8×6×3 avec faîtage +1,5 m, azimuth 90°/270° pour les pans est/ouest ;
+sol à tilt=180°, normale vers le bas) — et aires cohérentes avec la géométrie attendue (aire de pan
+en 2 pans = longueur de rampant × largeur, rampant = √(4²+1,5²) ≈ 4,27 m). Round-trip complet vérifié
+via `BuildingSerializer` (création réelle, `manage.py shell`) : 16 triangles, 7 groupes, `sol` bien
+seul groupe marqué `ground`.
+
+Toiture 2 pans : faîtage toujours orienté nord-sud (les murs est/ouest restent rectangulaires jusqu'à
+l'égout, les murs nord/sud deviennent des pentagones portant le pignon) — un seul degré de liberté
+d'orientation plutôt que deux, cohérent avec l'esprit « point d'entrée simple » du lot (une vraie
+orientation de faîtage librement choisie aurait nécessité un paramètre de rotation supplémentaire,
+hors scope).
+
+Vérifié sur l'image rebuildée (`recompose_docker.sh --app bilan-thermique --force`) : chunk lazy de
+la page Bâtiment contient bien le nouveau code, build Angular sans erreur, `manage.py test` → 56/56
+inchangé (lot purement frontend), `manage.py check` propre.
+
+### Reste ouvert
+Pas de test automatisé dédié dans `tests.py` — `box-generator.ts` est un module frontend pur sans
+infrastructure de test frontend dans cette app (même situation que Lots P/T), vérifié à la place par
+appel réel à `api.geometry.compute_envelope_geometry` sur le maillage produit (voir ci-dessus).
+Orientation du faîtage fixe (nord-sud) — toiture à 2 pans orientée est-ouest non couverte, hors scope
+initial. Non vérifié en navigateur réel (même réserve que L/S/Q/N/T).
 
 ---
 
