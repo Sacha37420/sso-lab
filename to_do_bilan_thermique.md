@@ -14,29 +14,30 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F, G, H, I, K, L, M, P, Q et S livrés** (tests physiques automatisés, renouvellement d'air,
+**Lots F, G, H, I, K, L, M, P, Q, S et T livrés** (tests physiques automatisés, renouvellement d'air,
 apports internes, cadre de fenêtre, triangles au contact du sol, import météo automatique Open-Meteo
 + PVGIS TMY, résultats normalisés kWh/m²/an, aide au calcul de `c_air_int`, plannings horaires, années
-type) — voir leur section respective pour le détail. Chaque lot qui touche
-`_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api` avant/après
-modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la découvrir en
-production (H, K, Q et I l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43 puis 48/48 OK à chaque
-étape ; Q touchait la factorisation LU du solveur, I a fait remonter un vrai trou de couverture par
-mutation testing — voir leurs sections respectives). **Lot I livré avec un design différent de
-l'étape 2 d'origine** (tranché avec l'utilisateur avant de coder — voir sa section) : le vitrage garde
-son maillage complet sur une aire réduite plutôt que d'être remplacé par un résistor unique, pour ne
-pas perdre le gain solaire. **Lot R peut démarrer maintenant que L est livré**
+type, mode simplifié pour un bâtiment réel existant) — voir leur section respective pour le détail.
+Chaque lot qui touche `_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api`
+avant/après modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la
+découvrir en production (H, K, Q et I l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43 puis 48/48
+OK à chaque étape ; Q touchait la factorisation LU du solveur, I a fait remonter un vrai trou de
+couverture par mutation testing — voir leurs sections respectives). **Lot I livré avec un design
+différent de l'étape 2 d'origine** (tranché avec l'utilisateur avant de coder — voir sa section) : le
+vitrage garde son maillage complet sur une aire réduite plutôt que d'être remplacé par un résistor
+unique, pour ne pas perdre le gain solaire. **Lot R peut démarrer maintenant que L est livré**
 (`weather_source.py` existe, n'a plus qu'à demander `wind_speed_10m`/`WS10m` à Open-Meteo/PVGIS) — et
 bénéficie du patron de factorisation-par-valeur-distincte posé par le Lot Q pour `h_e` (généralisé à
 `K_global` en entier plutôt qu'au seul nœud d'air, cf. sa section). Lot J et Lot R restent à cadrer
 avec l'utilisateur avant de coder (voir leur section — Lot R en plus de son cadrage, cf. ci-dessus).
 Lots N et O (checklist de progression, générateur de boîte) restent aussi à faire — indépendants,
 purement frontend, aucun cadrage ni dépendance requis. **Lot T (mode simplifié, spécifié par
-l'utilisateur le 2026-08-07) reste à faire** — recherche de bâtiment réel (IGN/OSM) + taux de
-vitrage par paroi + météo automatique, pensé comme point d'entrée pédagogique vers la méthode
-complète ; a des décisions à trancher au moment de coder (regroupement des faces par mur — voir sa
-section, réutilisable par le Lot O — et distinction paroi opaque/vitrage dans le catalogue), mais
-pas de cadrage utilisateur préalable requis puisque déjà spécifié en détail.
+l'utilisateur le 2026-08-07) livré le 2026-08-08** — recherche de bâtiment réel (IGN/OSM) + taux de
+vitrage par paroi + météo automatique (réutilise le préremplissage existant de Calcul 3D), pensé
+comme point d'entrée pédagogique vers la méthode complète ; les deux décisions à trancher au moment
+de coder (regroupement des faces par mur, distinction paroi opaque/vitrage) ont été résolues sans
+cadrage utilisateur supplémentaire — voir sa section pour le détail et les découvertes en réel
+(limite `MAX_WALLS_SIMPLIFIED_MODE`, cascade de raffinement).
 
 À lire intégralement avant tout lot, comme pour tout cahier des charges du lab. Mêmes règles que le
 reste de `dev/` (CLAUDE.md racine) : mémoire tenue à jour, demander avant tout commit/push et avant
@@ -546,88 +547,87 @@ navigateur réel (même réserve qu'au Lot L).
 
 ---
 
-## Lot T — Mode simplifié pour un bâtiment existant (recherche + taux de vitrage, pédagogique)
+## Lot T — Mode simplifié pour un bâtiment existant (recherche + taux de vitrage, pédagogique) ✅ livré le 2026-08-08
 
-### Constat
-Le parcours complet (import OBJ groupé → assignation paroi par paroi → géoréférencement → génération
-d'environnement → précalcul d'ombrage → construction météo → calcul) suppose un maillage déjà
-modélisé et une bonne maîtrise de l'outil — un frein complet pour qui veut juste évaluer rapidement
-UN bâtiment réel existant (le sien, par exemple), et rien n'explique aujourd'hui comment ce parcours
-détaillé se rattache à un résultat simplifié. Objectif : un mode guidé, à partir d'un bâtiment réel
-cherché par coordonnées, qui produit un `Building` ordinaire (éditable ensuite via le parcours manuel
-complet), tout en expliquant à chaque étape ce qu'il simplifie et où sont ses limites par rapport à
-la méthode complète — un outil pédagogique autant qu'un raccourci.
+### Ce qui a été fait
+Spécifié par l'utilisateur en 4 étapes (2026-08-07), implémenté le lendemain. Les deux décisions
+« à trancher avant de coder » ont été résolues sans nécessiter de cadrage utilisateur :
 
-Spécifié par l'utilisateur en 4 étapes (2026-08-07) :
-1. Rechercher le bâtiment comme on cherche les bâtiments d'un environnement.
-2. Choisir, paroi par paroi, un taux de vitrage et les modèles de paroi opaque/vitrage parmi le
-   catalogue.
-3. Subdiviser finement le maillage de chaque paroi pour respecter les proportions de vitrage
-   demandées (sans encadrement — Lot I volontairement ignoré ici).
-4. Choisir une année et récupérer automatiquement la météo à la localisation trouvée.
+- **Regroupement par mur** : `trimesh.creation.extrude_polygon` a en réalité un ordre de faces
+  parfaitement déterministe (vérifié empiriquement sur un rectangle N=4 et un polygone en L non
+  convexe N=6), même si non documenté par trimesh — pour une empreinte à N sommets, les N-2
+  premières faces triangulent le sol, les N-2 suivantes le toit, puis exactement 2 triangles par
+  arête dans l'ordre des arêtes. `geodata.extrude_footprint_grouped` exploite ce fait directement
+  (avec une vérification de structure qui échoue bruyamment si jamais trimesh changeait de
+  comportement) — pas besoin d'extruder côté par côté à la main comme l'étape 2 d'origine
+  l'envisageait.
+- **Distinction vitrage/opaque** : `ParoiModel.is_glazing` (booléen explicite, migration `0010`)
+  plutôt qu'une heuristique sur les couches, comme pressenti.
 
-### Étapes
-1. **Recherche du bâtiment** — même mécanisme que la génération d'environnement (`api/geodata.py` :
-   `fetch_ign_buildings`/`fetch_osm_buildings`/`is_in_france`, déjà utilisés par
-   `generate_environment_mesh`), mais pour identifier UN bâtiment précis plutôt que tous les
-   obstacles d'un rayon : lat/lon (+ un petit rayon, ex. 30-50 m) → liste des empreintes trouvées
-   triées par distance (le tri existe déjà dans `generate_environment_mesh`), l'utilisateur confirme
-   laquelle est son bâtiment (probablement la plus proche par défaut). Bénéfice à documenter :
-   contrairement à un maillage importé manuellement, un bâtiment géoréférencé via `geodata.local_xy`
-   (x=est, y=nord — déjà exactement la convention de `geometry.py`) a par construction
-   `georef_north_offset_deg = 0` correct sans calibration manuelle.
-2. **Décision à trancher avant de coder** : comment obtenir des groupes « un mur = un côté du
-   polygone d'empreinte + une toiture », assignables indépendamment ? `extrude_footprint`
-   (`geodata.py`, via `trimesh.creation.extrude_polygon`) ne garantit aujourd'hui aucun regroupement
-   par face exploitable côté appelant — à vérifier au moment de coder si l'ordre des faces retournées
-   par `trimesh` permet de dériver un groupe par arête du polygone + un groupe toiture, ou s'il faut
-   extruder côté par côté nous-mêmes (un quad par arête de l'empreinte, plus un remplissage de la
-   toiture) pour garantir des groupes propres — piste à privilégier si `trimesh` ne le permet pas
-   nativement, réutilisable aussi par le Lot O (générateur de boîte), qui a le même besoin en plus
-   simple (footprint rectangulaire connu d'avance, pas un polygone arbitraire IGN/OSM).
-3. **Par paroi (groupe)** : l'utilisateur choisit un modèle de paroi opaque et un modèle de vitrage
-   parmi le catalogue existant (`ParoiModel`/`paroi-modeles`), plus un taux de vitrage (0-100 %).
-   Distinguer les deux catégories dans le catalogue suppose de repérer un modèle « vitrage » — pas de
-   champ dédié aujourd'hui, seul indice indirect : au moins une couche à `tau > 0` (déjà le cas des
-   deux entrées Fenêtre du catalogue de départ). **Décision à trancher** : ajouter un champ explicite
-   (ex. `is_glazing` sur `ParoiModel`) plutôt que déduire depuis les couches, pour ne pas dépendre
-   d'une heuristique fragile si un mur avait par erreur une couche légèrement translucide.
-4. **Subdivision fine + assignation proportionnelle (par groupe)** — réutilise `geometry.refine_envelope`
-   (déjà utilisé par `BuildingRefineView`, jusqu'ici un raffinement global uniforme) mais appliqué
-   UNIQUEMENT aux triangles du groupe concerné, jusqu'à une taille de maille assez fine pour que la
-   proportion de triangles assignés au vitrage approxime le taux demandé à une tolérance raisonnable
-   (ex. ±5 %). **Cadre de fenêtre (Lot I) volontairement ignoré ici** — le modèle de vitrage choisi est
-   assigné tel quel, sans distinction fine des positions/formes réelles des baies : la pédagogie de ce
-   mode doit dire explicitement que c'est une approximation par « répartition », pas une vraie
-   disposition de fenêtres (même si le modèle de vitrage choisi a lui-même un `frame_u`/`frame_fraction`
-   renseigné au catalogue, le Lot I s'appliquerait quand même — la simplification est dans la
-   disposition, pas dans la désactivation technique du Lot I). **Décision à trancher** : répartition
-   des triangles vitrage/opaque déterministe et régulière (ex. 1 triangle sur N, motif régulier façon
-   mur-rideau) plutôt qu'aléatoire — plus simple à expliquer à l'utilisateur et à vérifier visuellement
-   dans le viewer 3D existant, l'aléatoire n'apporterait rien ici.
-5. **Météo** — réutilise tel quel `POST /api/meteo/recuperer/` (Lot L/S,
-   `weather_source.build_weather_series`/`build_tmy_or_fallback_series`) avec les lat/lon du bâtiment
-   trouvé à l'étape 1 et un choix d'année par l'utilisateur (année réelle datée ou TMY, même toggle
-   que la page Calcul 3D) — aucun nouveau code métier, juste un appel automatique à l'endpoint
-   existant sans repasser par le panneau manuel.
-6. **UI pédagogique, sur toutes les étapes** — à chaque étape du mode simplifié, un encart explique ce
-   que ferait la méthode complète à cet endroit (import de maillage, assignation manuelle paroi par
-   paroi, géoréférencement, précalcul d'ombrage, météo) et quelles limites la simplification introduit
-   par rapport à elle (empreinte IGN/OSM approximative, hauteur souvent estimée —
-   `_resolve_ign_height`/`_resolve_osm_height` existants, toiture simplifiée, pas de vraie disposition
-   de fenêtres, pas d'ombrage d'un environnement réel tant que celui-ci n'est pas généré séparément —
-   Lot C/génération d'environnement existants, réutilisables tels quels ensuite). Le `Building` produit
-   reste un `Building` ordinaire : à la fin du mode simplifié, rediriger vers la page Bâtiment
-   habituelle pour que l'utilisateur puisse continuer à l'affiner avec les outils complets (précalcul
-   d'ombrage, environnement, cadre de fenêtre, planning horaire…) — ce mode est un point d'entrée, pas
-   un système séparé.
+**Découverte en réel non anticipée par le cadrage d'origine** : une empreinte IGN en zone urbaine
+dense peut avoir des centaines de sommets (515 murs observés en plein Paris — un pâté de maisons
+digitalisé comme un seul bâtiment complexe), inutilisable pour une configuration paroi par paroi.
+`MAX_WALLS_SIMPLIFIED_MODE = 30` : `geodata.search_nearby_buildings` écarte silencieusement les
+candidats trop complexes (comptés dans `n_skipped_too_complex`, affiché à l'utilisateur) plutôt que
+de produire une UI à des centaines de menus déroulants — une zone pavillonnaire donne typiquement
+4-26 murs, largement dans la limite.
 
-### Reste ouvert (à cadrer plus précisément au moment de coder)
+**Deuxième découverte en réel, plus structurante** : `geometry.refine_envelope` (Lot raffinement de
+maillage, existant) propage la subdivision à tout le maillage connecté par arêtes partagées — un
+volume extrudé étanche (murs soudés au sol et au toit) ne permet donc PAS de raffiner finement les
+murs sans que ça cascade vers le sol/la toiture. Un premier essai à 0,6 m de finesse a produit
+16 384 triangles pour un petit pavillon à 5 murs (bien au-delà de ce que le solveur peut absorber
+une fois chaque triangle maillé en profondeur — `MAX_TOTAL_DOF` aurait été dépassé). Testé
+empiriquement plusieurs valeurs : 2,0 m donne ~128 triangles/mur (1024 au total pour ce même
+bâtiment), largement assez fin pour un taux de vitrage à quelques % près, avec une marge
+confortable — retenu comme défaut. Pas de raffinement séparé par groupe (aurait nécessité de
+désolidariser les groupes en dupliquant les sommets aux jonctions, hors scope de cette V1).
+
+**Étape météo simplifiée par réutilisation** : plutôt que d'intégrer un panneau météo dans
+l'assistant, la dernière étape redirige vers la page Calcul 3D — celle-ci pré-remplit déjà
+automatiquement `weatherFetchLat/Lon/NorthOffset` depuis `Building.georef_lat/lon/north_offset_deg`
+(mécanisme du Lot L), donc un bâtiment créé par ce mode simplifié a sa météo déjà prête à récupérer
+sans code supplémentaire — il suffit à l'utilisateur de choisir l'année.
+
+**Backend** : `geodata.extrude_footprint_grouped` (triangles `{'v','group','boundary'}`, sol marqué
+`boundary='ground'` — Lot K — puisqu'un plancher bas issu d'une empreinte réelle touche le terrain
+par construction) + `geodata.search_nearby_buildings` (recherche, tri par distance existant réutilisé,
+extrusion de chaque candidat au moment de la recherche pour éviter un second aller-retour réseau une
+fois choisi) ; endpoint autonome et **synchrone** `POST /api/batiments/rechercher/`
+(`SearchNearbyBuildingsView`/`SearchNearbyBuildingsRequestSerializer`, rayon plafonné à 150 m — pas
+de Celery, contrairement à la génération d'environnement, le rayon volontairement petit rend l'appel
+assez rapide). **Aucun nouvel endpoint de création** : le mesh extrudé d'un candidat est directement
+consommable par `POST /api/batiments/` existant (`BuildingSerializer` accepte déjà `group`/`boundary`
+par triangle) — vérifié en réel.
+
+**Frontend** : nouvelle page `/mode-simplifie` (assistant à 4 étapes, lazy-loaded comme
+Bâtiment/Environnement/Calcul 3D), lien de nav Foyer ajouté. Étape 3 (assignation proportionnelle)
+entièrement côté client : pour chaque paroi configurée, tous les triangles reçoivent le modèle
+opaque, puis un triangle sur N (N = arrondi de 1/taux) est réassigné au modèle vitrage — motif
+régulier plutôt qu'aléatoire, comme décidé. Aperçu 3D coloré (vitrage/opaque/non assigné) via le
+`mesh-viewer` déjà utilisé ailleurs.
+
+**Tests** (`backend/api/tests.py`, 8 nouveaux — `ExtrudeFootprintGroupedTest`,
+`SearchNearbyBuildingsSerializerTest`) : structure de faces figée (rectangle + polygone en L),
+oracle indépendant du comptage de groupes (sol/toiture aux bonnes élévations z), intégration avec
+`compute_envelope_geometry`, validation du serializer de recherche. `search_nearby_buildings`
+lui-même (réseau) vérifié uniquement en réel, comme les autres fonctions réseau de `geodata.py`
+(même réserve que Lot F pour ce module). Mutation testing sur l'arithmétique d'indices de faces :
+échec confirmé. **Pipeline complet vérifié en réel de bout en bout sur l'image rebuildée** :
+recherche (bâtiment réel, zone pavillonnaire) → création → subdivision (1024 triangles) →
+assignation proportionnelle (130 triangles vitrage / 1024, ≈12,7 % pondéré sol+toiture+murs
+inclus) → sauvegarde → **calcul thermique réel réussi** sur le bâtiment ainsi produit.
+`manage.py test` → 56/56, `manage.py check` → propre, `ng build --configuration production` →
+propre.
+
+### Reste ouvert
 Génération automatique d'un environnement voisin (Lot C existant, `generate_environment_for_building`)
-non incluse dans les étapes ci-dessus par défaut — à ajouter en une étape optionnelle, le mécanisme
-existe déjà entièrement. Toiture non plane (pans, faîtage) hors scope initial — toiture plate ou pan
-unique simple pour la V1 de ce lot, cohérent avec `extrude_footprint` qui ne modélise aujourd'hui
-qu'un volume à toiture plate.
+non incluse dans l'assistant — l'utilisateur peut l'ajouter ensuite depuis la page Bâtiment, le
+mécanisme existe déjà entièrement. Toiture non plane (pans, faîtage) hors scope — toiture plate,
+cohérent avec `extrude_footprint`/`extrude_footprint_grouped`. Pas de raffinement différencié par
+groupe (voir découverte ci-dessus) — un bâtiment avec une très grande façade et une très petite
+pourrait avoir une précision de taux de vitrage inégale entre les deux à finesse de subdivision
+égale. Pas de vérification dans un navigateur réel (même réserve que Lots L/S).
 
 ---
 
