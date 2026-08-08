@@ -14,19 +14,26 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F, G, H, I, K, L, M, N, O, P, Q, R, S et T livrés** (tests physiques automatisés,
+**Lots F, G, H, I, K, L, M, N, O, P, Q, R, S, T et U livrés** (tests physiques automatisés,
 renouvellement d'air, apports internes, cadre de fenêtre, triangles au contact du sol, import météo
 automatique Open-Meteo + PVGIS TMY, résultats normalisés kWh/m²/an, checklist de progression,
 générateur de boîte, aide au calcul de `c_air_int`, plannings horaires, convection dynamique (vent +
-orientation), années type, mode simplifié pour un bâtiment réel existant) — voir leur section
-respective pour le détail. Seul **Lot J** reste non commencé, en attente de cadrage utilisateur (voir
-sa section — plusieurs designs possibles pour les occultations mobiles).
+orientation), années type, mode simplifié pour un bâtiment réel existant, rayonnement transmis
+intégralement à travers un vitrage) — voir leur section respective pour le détail. Seul **Lot J**
+reste non commencé, en attente de cadrage utilisateur (voir sa section — plusieurs designs possibles
+pour les occultations mobiles). **Lot U (2026-08-08) est un correctif, pas une nouvelle
+fonctionnalité** — signalé par l'utilisateur en testant manuellement des fenêtres en 1D, il touchait
+`solver._propagate_solar`, partagée par les deux solveurs : jusqu'à 87 % du rayonnement solaire
+incident sur tout le catalogue de vitrages disparaissait du bilan avant ce correctif (voir sa
+section) — le plus significatif en gravité de tous les correctifs de cette phase 2.
 Chaque lot qui touche `_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api`
 avant/après modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la
-découvrir en production (H, K, Q, I et R l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43 puis
-48/48 puis 70/70 OK à chaque étape ; Q et R touchaient la factorisation LU du solveur, I a fait
-remonter un vrai trou de couverture par mutation testing, R un piège d'identité tautologique — voir
-leurs sections respectives). **Lot I livré avec un design différent de l'étape 2 d'origine** (tranché
+découvrir en production (H, K, Q, I, R et U l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43 puis
+48/48 puis 70/70 puis 78/78 OK à chaque étape ; Q et R touchaient la factorisation LU du solveur, I a
+fait remonter un vrai trou de couverture par mutation testing, R un piège d'identité tautologique
+(la conservation d'énergie ne peut pas détecter un bug dans K), U l'inverse — un bug dans **F**, où
+cette même identité redevient légitime — voir leurs sections respectives). **Lot I livré avec un
+design différent de l'étape 2 d'origine** (tranché
 avec l'utilisateur avant de coder — voir sa section) : le vitrage garde son maillage complet sur une
 aire réduite plutôt que d'être remplacé par un résistor unique, pour ne pas perdre le gain solaire.
 **Lot R livré le 2026-08-08** (cadré avec l'utilisateur avant de coder — formule Jürges, portée
@@ -754,6 +761,63 @@ cohérent avec `extrude_footprint`/`extrude_footprint_grouped`. Pas de raffineme
 groupe (voir découverte ci-dessus) — un bâtiment avec une très grande façade et une très petite
 pourrait avoir une précision de taux de vitrage inégale entre les deux à finesse de subdivision
 égale. Pas de vérification dans un navigateur réel (même réserve que Lots L/S).
+
+---
+
+## Lot U — Correctif : rayonnement transmis intégralement à travers un vitrage ✅ livré le 2026-08-08
+
+### Constat
+Signalé par l'utilisateur : ses tests 1D sur des fenêtres montraient les nœuds du vitrage chauffant
+toujours plus vite que l'air intérieur, même en réduisant `c_air_int` — alors que la lumière qui
+traverse une fenêtre devrait au contraire chauffer l'air directement, donc plus vite que le vitrage
+à `c_air_int` faible.
+
+### Ce qui a été fait
+Bug réel trouvé dans `solver._propagate_solar` (module partagé, réutilisé tel quel par
+`building_solver.py` — **identique en 1D et 3D**) : à chaque couche translucide (τ &gt; 0), une
+fraction `alpha·e_inc` est absorbée (chauffe la couche) et le reliquat `tau·e_inc` continue vers la
+couche suivante. Le cas déjà géré et documenté (page Théorie, section 05) est le **mur Trombe** — une
+couche translucide toujours suivie d'une couche opaque qui arrête tout et absorbe le reliquat. Mais
+**rien ne gérait le cas où TOUTES les couches sont translucides** (pas de couche opaque en fond) :
+à la fin de la boucle, le reliquat qui a traversé la DERNIÈRE couche était silencieusement perdu — ni
+sur un nœud de la paroi, ni sur le nœud d'air. Or c'est exactement la structure de **tout le
+catalogue de vitrages actuel** (`VITRAGE_SIMPLE` : 1 couche τ=0,87 ; `VITRAGE_DOUBLE` : 3 couches
+τ=0,88/0,97/0,88) — pour ces valeurs, 87 % (simple) à 75 % (double) du rayonnement solaire incident
+disparaissait purement et simplement du bilan, sur tout calcul avec vitrage fait jusqu'ici. Les nœuds
+du vitrage chauffaient bien un peu (la petite fraction absorbée, ~6 % par vitre), mais l'air ne
+recevait AUCUN gain solaire direct — seulement une conduction lente via `h_i`, insensible à
+`c_air_int` puisqu'aucun grand terme ne l'alimente : exactement le symptôme rapporté.
+
+**Correctif** : `_propagate_solar` détecte désormais (via `for...else` sur la boucle des couches — le
+`else` ne s'exécute que si aucun `break` n'a eu lieu, donc jamais de couche opaque rencontrée) le cas
+où le rayonnement a traversé toute la paroi sans être arrêté, et retourne une source supplémentaire
+`('interior', None, énergie_W_par_m2)`. `solver._assemble_F` (1D) et `building_solver._assemble_F_hour`
+(3D) l'ajoutent directement à `F[air_idx]` — même convention que le renouvellement d'air/apports
+internes déjà en place (Lots G/H) : actif en cas 2 (nœud d'air libre), sans effet en cas 1 (T_int
+imposée, 1D n'a même pas de nœud d'air dans ce mode) ni en mode `'imposed'` 3D (Dirichlet absorbe le
+terme, comme pour `g_vent`/`apports_internes_w`). Non-régression stricte du mur Trombe (couche
+translucide + couche opaque) et du mur opaque simple, vérifiée explicitement par test.
+
+**Tests** (`backend/api/tests.py`, `TransmittedSolarGainTest`, 8 nouveaux) : formules pures (oracle
+= produit des τ des couches successives, calculé à la main, indépendant de `_propagate_solar`),
+non-régression mur opaque/mur Trombe, intégration 1D et 3D (identité de conservation d'énergie
+étendue au nouveau terme — légitime ici, contrairement au piège du Lot R : le bug visé est dans **F**,
+pas dans **K**, donc l'identité n'est pas tautologique, elle re-dérive `e_interior` à la main plutôt
+que d'appeler `_propagate_solar`), et un test reproduisant directement le symptôme rapporté
+(`c_air_int` faible → l'air chauffe désormais plus vite que le vitrage). Mutation testing sur les
+trois points de correction (le `for...else` lui-même, le consommateur 1D, le consommateur 3D) : les
+trois confirmées détectées, exactement les 5 tests concernés échouant à chaque fois (les 3 tests de
+non-régression restant verts, comme attendu). 78/78 tests au total, `manage.py check` propre.
+
+**Documentation** : page Théorie (section 05) complétée avec un troisième paragraphe couvrant ce cas
+« aucune couche opaque », symétrique au terme de renouvellement d'air déjà documenté.
+
+Vérifié en réel dans le conteneur (avant et après le correctif) avec les valeurs réelles du
+catalogue : `c_air_int` faible → l'air atteint désormais 137°C après quelques heures pendant que le
+vitrage reste à ~44°C, conforme à l'intuition physique de l'utilisateur.
+
+### Reste ouvert
+Pas de vérification en navigateur réel (même réserve que les autres lots récents).
 
 ---
 
