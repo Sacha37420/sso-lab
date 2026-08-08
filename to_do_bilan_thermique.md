@@ -14,28 +14,30 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F, G, H, I, K, L, M, N, O, P, Q, S et T livrés** (tests physiques automatisés, renouvellement
-d'air, apports internes, cadre de fenêtre, triangles au contact du sol, import météo automatique
-Open-Meteo + PVGIS TMY, résultats normalisés kWh/m²/an, checklist de progression, générateur de boîte,
-aide au calcul de `c_air_int`, plannings horaires, années type, mode simplifié pour un bâtiment réel
-existant) — voir leur section respective pour le détail. Seuls **Lot J** et **Lot R** restent
-non commencés, tous deux en attente de cadrage utilisateur (voir plus bas).
+**Lots F, G, H, I, K, L, M, N, O, P, Q, R, S et T livrés** (tests physiques automatisés,
+renouvellement d'air, apports internes, cadre de fenêtre, triangles au contact du sol, import météo
+automatique Open-Meteo + PVGIS TMY, résultats normalisés kWh/m²/an, checklist de progression,
+générateur de boîte, aide au calcul de `c_air_int`, plannings horaires, convection dynamique (vent +
+orientation), années type, mode simplifié pour un bâtiment réel existant) — voir leur section
+respective pour le détail. Seul **Lot J** reste non commencé, en attente de cadrage utilisateur (voir
+sa section — plusieurs designs possibles pour les occultations mobiles).
 Chaque lot qui touche `_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api`
 avant/après modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la
-découvrir en production (H, K, Q et I l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43 puis 48/48
-OK à chaque étape ; Q touchait la factorisation LU du solveur, I a fait remonter un vrai trou de
-couverture par mutation testing — voir leurs sections respectives). **Lot I livré avec un design
-différent de l'étape 2 d'origine** (tranché avec l'utilisateur avant de coder — voir sa section) : le
-vitrage garde son maillage complet sur une aire réduite plutôt que d'être remplacé par un résistor
-unique, pour ne pas perdre le gain solaire. **Lot R peut démarrer maintenant que L est livré**
-(`weather_source.py` existe, n'a plus qu'à demander `wind_speed_10m`/`WS10m` à Open-Meteo/PVGIS) — et
-bénéficie du patron de factorisation-par-valeur-distincte posé par le Lot Q pour `h_e` (généralisé à
-`K_global` en entier plutôt qu'au seul nœud d'air, cf. sa section). Lot J et Lot R restent à cadrer
-avec l'utilisateur avant de coder (voir leur section — Lot R en plus de son cadrage, cf. ci-dessus).
-**Lot N livré le 2026-08-08** (checklist de progression, page Bâtiment) — voir sa section, notamment
-l'écart assumé sur l'item « météo chargée » (aucun état persisté possible, Lot L). **Lot O livré le
-2026-08-08** (générateur de boîte) — voir sa section, notamment la dérivation à la main des normales
-sortantes par groupe, vérifiée en réel via `api.geometry.compute_envelope_geometry`.
+découvrir en production (H, K, Q, I et R l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43 puis
+48/48 puis 70/70 OK à chaque étape ; Q et R touchaient la factorisation LU du solveur, I a fait
+remonter un vrai trou de couverture par mutation testing, R un piège d'identité tautologique — voir
+leurs sections respectives). **Lot I livré avec un design différent de l'étape 2 d'origine** (tranché
+avec l'utilisateur avant de coder — voir sa section) : le vitrage garde son maillage complet sur une
+aire réduite plutôt que d'être remplacé par un résistor unique, pour ne pas perdre le gain solaire.
+**Lot R livré le 2026-08-08** (cadré avec l'utilisateur avant de coder — formule Jürges, portée
+étendue à h_i par orientation — voir sa section) : le « point dur » performance anticipé par le texte
+d'origine (factorisation par valeur de vent) s'est avéré non bloquant une fois mesuré en réel
+(14-21 classes de vent sur un an réel, ~30 s de calcul dans le pire cas mesuré) ; généralise le
+patron de factorisation-par-valeur-distincte du Lot Q à `K_global` en entier plutôt qu'au seul nœud
+d'air, comme anticipé. **Lot N livré le 2026-08-08** (checklist de progression, page Bâtiment) — voir
+sa section, notamment l'écart assumé sur l'item « météo chargée » (aucun état persisté possible, Lot
+L). **Lot O livré le 2026-08-08** (générateur de boîte) — voir sa section, notamment la dérivation à
+la main des normales sortantes par groupe, vérifiée en réel via `api.geometry.compute_envelope_geometry`.
 **Lot T (mode simplifié, spécifié par
 l'utilisateur le 2026-08-07) livré le 2026-08-08** — recherche de bâtiment réel (IGN/OSM) + taux de
 vitrage par paroi + météo automatique (réutilise le préremplissage existant de Calcul 3D), pensé
@@ -329,8 +331,8 @@ clair plutôt qu'un crash. `manage.py test` → 28/28, `manage.py check` → pro
 ### Reste ouvert
 **PVGIS TMY** (année type) non ajouté — traité au Lot S, qui devient significativement plus simple
 maintenant que `weather_source.py` existe (juste une seconde fonction de fetch produisant le même
-format de sortie). `vent_m_s` (Lot R) non demandé à Open-Meteo pour l'instant (`wind_speed_10m` est
-disponible dans la même réponse API, en km/h — à convertir en m/s le jour où le Lot R est entrepris).
+format de sortie). `vent_m_s` (Lot R, livré depuis) est désormais demandé à Open-Meteo — voir la
+section du Lot R pour le détail (`wind_speed_unit=ms` explicite, le défaut étant km/h).
 Pas de vérification manuelle dans un navigateur (UI derrière Keycloak SSO, non testée en
 interactif) — vérifié uniquement en API directe + build de production ; à tester en réel dans le
 navigateur avant de recommander l'outil pour un vrai bâtiment.
@@ -512,45 +514,94 @@ non nul).
 
 ---
 
-## Lot R — Coefficient de convection extérieure dynamique (h_e)
+## Lot R — Coefficient de convection extérieure dynamique (h_e) ✅ livré le 2026-08-08
 
-### Constat
-`h_e` est aujourd'hui une valeur unique saisie par l'utilisateur, constante sur tout le run (25 W/m²K
-par défaut — c'est justement la valeur conventionnelle Rse=0,04 d'EN ISO 6946, pensée pour un calcul
-de U statique en régime permanent, pas pour une simulation dynamique heure par heure). Les outils de
-simulation dynamique (EnergyPlus, TRNSYS) recalculent h_e à partir du vent réel — un h_e peut varier
-d'un facteur 2 à 5 selon qu'il vente ou non, ce qui change directement la vitesse à laquelle un
-bâtiment perd/gagne de la chaleur. Axe indépendant des Lots G→K : ceux-là ajoutent des postes de perte
-manquants, celui-ci corrige la précision d'un poste déjà modélisé (la convection extérieure).
+### Ce qui a été fait
+Cadré avec l'utilisateur avant de coder (`AskUserQuestion`, deux questions) : formule **Jürges**
+(`h_e = 5,8 + 3,94·v`, retenue plutôt que McAdams comme pressenti — plus couramment citée en physique
+du bâtiment française) et **portée étendue** aux deux volets prévus (h_e dynamique ET h_i par
+orientation dans le même lot, plutôt que h_e seul).
 
-### Étapes — à cadrer avec l'utilisateur avant de coder (implication de performance significative)
-1. **Formule de corrélation** vitesse de vent → h_e : ex. Jürges (`h_e = 5,8 + 3,94·v`, v en m/s,
-   souvent citée en physique du bâtiment française) ou McAdams (`h_e = 5,7 + 3,8·v`) — à choisir et
-   documenter avec la même rigueur que les U indicatifs du catalogue de parois
-   (`seed_paroi_catalogue.py`), en citant la source. Version minimale : une seule valeur de vent pour
-   tout le bâtiment à une heure donnée, sans dépendance à l'orientation de la façade par rapport au
-   vent (une façade au vent et une façade sous le vent ont en réalité des coefficients différents —
-   simplification à assumer explicitement, pas un oubli).
-2. **Nouvelle donnée météo** `vent_m_s`, optionnelle sur `WeatherPointSerializer`/
-   `BuildingWeatherPointSerializer` — Open-Meteo Archive fournit déjà `wind_speed_10m` (Lot L), donc
-   alimentable automatiquement dès que ce lot est en place. Absent → comportement actuel inchangé
-   (h_e constant fourni par l'utilisateur).
-3. **Point dur — même famille de problème que le Lot Q, en plus sévère.** `h_e` est aujourd'hui posé
-   UNE FOIS dans `K[0,0]` de CHAQUE système de paroi (`_build_triangle_systems`, mis en cache par
-   `(paroi_model_id, dx_max)`), et `A_free`/`A_pinned` sont factorisés une seule fois pour tout le run
-   (`spla.splu`). Un `h_e` variable par heure touche la diagonale de TOUTES les parois extérieures à
-   la fois — pas seulement le nœud d'air partagé comme `g_vent` — donc une factorisation à chaque
-   heure serait inacceptable sur le worker à `--concurrency=1` du lab pour un run d'un an. Discrétiser
-   `vent_m_s` en un nombre borné de classes (ex. arrondi au m/s le plus proche — quelques dizaines de
-   valeurs distinctes au plus sur un historique réel) et factoriser une fois par classe rencontrée —
-   même stratégie que le Lot Q pour `g_vent`, mais à généraliser à `K_global` en entier, pas au seul
-   nœud d'air.
-4. **`h_i` : raffinement séparé, beaucoup moins coûteux.** Contrairement à `h_e` (dépend du vent, donc
-   du temps), `h_i` peut être raffiné PAR ORIENTATION du triangle (ISO 6946 : ≈7,7 W/m²K pour un mur
-   vertical, ≈10 pour un flux montant type plancher chauffant, ≈5,9 pour un flux descendant type
-   plafond) — une valeur PAR TRIANGLE mais CONSTANTE dans le temps (dérivée de `tilt_deg`, déjà
-   calculé), donc sans le problème de factorisation ci-dessus. Faisable indépendamment du reste de ce
-   lot si seul un raffinement de `h_i` est souhaité.
+**Le « point dur » performance a été mesuré empiriquement AVANT de coder, pas supposé** : appels curl
+réels à Open-Meteo Archive sur une année complète (2023) à Paris et à Brest (côte venteuse, cas
+défavorable) — le vent arrondi au m/s le plus proche ne donne que **14 à 21 valeurs distinctes** sur
+8760 heures, largement dans l'ordre de grandeur déjà géré par le Lot Q (24 valeurs). Combiné à un
+planning de ventilation (Lot Q) à 24 valeurs toutes distinctes (pire cas), le nombre de paires
+(heure_du_jour, classe_vent) réellement rencontrées sur une année reste **272-338** — mesuré, pas
+supposé. Benchmark réel d'une factorisation LU sur un bâtiment de taille réaliste (768 triangles,
+8449 DOF) : ~0,09 s chacune, donc ~30 s pour le pire cas mesuré — largement absorbable sur le worker
+`--concurrency=1` du lab. Le texte d'origine anticipait ce point comme bloquant ; la mesure a montré
+qu'il ne l'était pas, avec la même discrétisation (arrondi au m/s) déjà envisagée.
+
+**Restructuration de `building_solver.py`** : `h_e` (vent, varie par HEURE) et `h_i` (orientation,
+varie par TRIANGLE mais jamais dans le temps) ne peuvent plus être bakés une fois pour toutes dans
+`_build_triangle_systems` comme avant (Lots F→Q) — désormais construite « nue » (juste K/C par unité
+de surface du mur, cache purement `(paroi_model_id, dx_max)`). `_assemble_global_kc` pose maintenant
+`h_i_list` (une valeur par triangle) et retourne en plus `K_e_pattern` : la sensibilité de K à `h_e`
+est **linéaire** (`+area_i` sur la diagonale du nœud extérieur de chaque triangle), donc
+`K_global(h_e) = K_global_base + h_e * K_e_pattern` — pas besoin de reconstruire toute la matrice par
+valeur de `h_e`, juste une addition creuse bon marché. `_factorize_for_g_vent` généralisé en
+`_factorize_for(..., g_vent, h_e)`, appelé **paresseusement** (au premier usage, mis en cache) pour
+chaque combinaison `(g_vent, h_e)` RÉELLEMENT rencontrée pendant le run plutôt que le produit
+cartésien complet à l'avance — optimisation naturelle une fois la structure en place.
+`MAX_DISTINCT_BOUNDARY_COMBOS = 2000` en garde-fou (marge ~6x au-delà du pire cas mesuré).
+
+**h_e dynamique** (`payload.h_e_dynamic`, optionnel, défaut False) : dérive `h_e` heure par heure de
+`weather[h].wind_m_s` (nouveau champ optionnel, `BuildingWeatherPointSerializer`) via
+`h_e_from_wind` — vent arrondi au m/s AVANT la formule (c'est cet arrondi, pas la formule
+elle-même, qui borne le nombre de valeurs distinctes). Si activé, chaque point météo DOIT porter
+`wind_m_s` (validé côté serializer ET défensivement dans `run_building_simulation`, appelable
+directement). `h_e` (constante) reste requis dans le payload mais simplement ignoré si actif — pas
+d'exigence conditionnelle pour un gain marginal.
+
+**h_i par orientation** (`payload.interior.h_i_auto`, optionnel, défaut False) : dérive `h_i` de
+`tilt_deg` (déjà calculé par `api.geometry`) via `h_i_from_tilt` — classification ISO 6946 par TYPE
+d'élément (murs tilt∈]60°,120°[ → 7,7 ; toiture/plafond tilt≤60° → 10,0, flux montant ; sol/plancher
+tilt≥120° → 5,9, flux descendant), pas par le signe instantané du flux à un instant donné (comme la
+norme elle-même) — cohérent avec le fait que `h_i` n'a jamais varié dans le temps dans ce solveur,
+seulement, désormais, d'un triangle à l'autre. `h_i` (constante) devient optionnel si `h_i_auto` est
+actif (sinon requis comme avant).
+
+**Météo** : `weather_source.py` demande désormais `wind_speed_10m` (Open-Meteo, avec
+`wind_speed_unit=ms` explicite — le défaut est km/h) et lit `WS10m` (PVGIS TMY, déjà nativement en
+m/s) — vérifié en réel que les deux sources sont bien normalisées en m/s sans conversion
+supplémentaire nécessaire. Une heure sans vent (bord de couverture) n'annule PAS l'heure entière
+(contrairement à t_ext/e_dir/e_dif) : `h_e_dynamic` devient simplement inutilisable pour cette heure
+précise si le payload l'exige, sans dégrader le reste du bilan.
+
+**Frontend** (`Calcul3DComponent`) : case à cocher « h_e dynamique » (désactive le champ constant) et
+« h_i par orientation » (idem), symétriques. CSV météo étendu à une 6e colonne optionnelle
+(`vent_m_s`) — déjà remplie automatiquement par le fetch Lot L/S (le backend renvoie maintenant
+`wind_m_s` par point), modifiable à la main sinon. Garde-fou côté UI (`weatherMissingWind`) qui
+bloque le bouton de lancement tant qu'une heure manque de vent alors que le mode dynamique est actif,
+plutôt que de laisser échouer la requête.
+
+**Tests** (`backend/api/tests.py`, `DynamicConvectionTest` + `BuildingCalculRequestSerializerWindTest`,
+14 nouveaux) : formules pures (`h_e_from_wind`, `h_i_from_tilt`, bornes de bucket incluses/exclues),
+équivalence dynamique-avec-vent-constant ≡ constant-avec-h_e-manuel (oracle direct), arrondi du vent
+avant Jürges, validation (vent manquant → erreur), non-régression (comportement par défaut inchangé
+sans les deux nouveaux flags). **Piège identifié en écrivant les tests, avant tout bug réel — le plus
+instructif du lot** : une identité de conservation d'énergie (même famille que Lots F/Q) est
+**tautologique vis-à-vis de K** — elle re-dérive la ligne du nœud d'air du système linéaire
+RÉELLEMENT résolu, quel que soit le contenu de K, donc elle est satisfaite par construction même si
+un bundle est réutilisé à tort pour le mauvais `h_e` (confirmé par mutation : retirer `h_e` de la clé
+de cache du bundle laisse ce test intact). Remplacé par un test comparant à un oracle **indépendant du
+système résolu** (formule U(h_e) en régime permanent, méthode de `WallSteadyStateTest`) : vent
+constant sur une longue phase, puis vent constant DIFFÉRENT sur une seconde phase assez longue pour
+reconverger — le flux final doit correspondre au NOUVEAU h_e. Ce test-ci détecte bien la mutation
+(vérifié). Mutation testing complet : formule de Jürges (signe), buckets `h_i_from_tilt` (permutés),
+arrondi du vent (retiré), clé de cache du bundle (h_e retiré) — les 4 confirmées détectées après
+correction, aucune non détectée en survivant. 70/70 tests, `manage.py check` propre.
+
+**Vérifié en réel de bout en bout sur l'image rebuildée** : fetch réseau réel Open-Meteo (Paris, vent
+présent sur 100% des points) → validation `BuildingCalculRequestSerializer` avec `h_e_dynamic` ET
+`h_i_auto` actifs simultanément → simulation réelle (boîte 8×6×3, maillage réaliste, mode thermostat)
+aboutissant à un résultat physique cohérent. `ng build` propre.
+
+### Reste ouvert
+Orientation de la façade par rapport à la direction du vent (face au vent / sous le vent) non
+modélisée — une seule valeur de `h_e` pour tout le bâtiment à une heure donnée, simplification
+assumée dès le cadrage, pas un oubli. Non vérifié en navigateur réel (même réserve que L/S/Q/N/T).
 
 ---
 
@@ -599,9 +650,9 @@ heures `source: pvgis-tmy` ; océan Pacifique en mode TMY → repli automatique 
 avec avertissement clair, via le vrai worker Celery/Redis.
 
 ### Reste ouvert
-`vent_m_s` (Lot R) toujours pas demandé — PVGIS fournit aussi `WS10m` (à vérifier l'unité au moment du
-Lot R, PVGIS et Open-Meteo n'utilisent probablement pas la même). Pas de vérification dans un
-navigateur réel (même réserve qu'au Lot L).
+`vent_m_s` (Lot R, livré depuis) est désormais lu depuis `WS10m` — vérifié en réel : PVGIS l'exprime
+nativement en m/s, comme Open-Meteo avec `wind_speed_unit=ms`, aucune conversion nécessaire (voir la
+section du Lot R). Pas de vérification dans un navigateur réel (même réserve qu'au Lot L).
 
 ---
 
