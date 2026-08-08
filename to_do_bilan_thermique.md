@@ -14,10 +14,11 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F, G, H, I, K, L, M, P, Q, S et T livrés** (tests physiques automatisés, renouvellement d'air,
-apports internes, cadre de fenêtre, triangles au contact du sol, import météo automatique Open-Meteo
-+ PVGIS TMY, résultats normalisés kWh/m²/an, aide au calcul de `c_air_int`, plannings horaires, années
-type, mode simplifié pour un bâtiment réel existant) — voir leur section respective pour le détail.
+**Lots F, G, H, I, K, L, M, N, P, Q, S et T livrés** (tests physiques automatisés, renouvellement
+d'air, apports internes, cadre de fenêtre, triangles au contact du sol, import météo automatique
+Open-Meteo + PVGIS TMY, résultats normalisés kWh/m²/an, checklist de progression, aide au calcul de
+`c_air_int`, plannings horaires, années type, mode simplifié pour un bâtiment réel existant) — voir
+leur section respective pour le détail.
 Chaque lot qui touche `_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api`
 avant/après modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la
 découvrir en production (H, K, Q et I l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43 puis 48/48
@@ -30,8 +31,10 @@ unique, pour ne pas perdre le gain solaire. **Lot R peut démarrer maintenant qu
 bénéficie du patron de factorisation-par-valeur-distincte posé par le Lot Q pour `h_e` (généralisé à
 `K_global` en entier plutôt qu'au seul nœud d'air, cf. sa section). Lot J et Lot R restent à cadrer
 avec l'utilisateur avant de coder (voir leur section — Lot R en plus de son cadrage, cf. ci-dessus).
-Lots N et O (checklist de progression, générateur de boîte) restent aussi à faire — indépendants,
-purement frontend, aucun cadrage ni dépendance requis. **Lot T (mode simplifié, spécifié par
+**Lot N livré le 2026-08-08** (checklist de progression, page Bâtiment) — voir sa section, notamment
+l'écart assumé sur l'item « météo chargée » (aucun état persisté possible, Lot L). **Lot O (générateur
+de boîte) reste à faire** — indépendant, purement frontend, aucun cadrage ni dépendance requis.
+**Lot T (mode simplifié, spécifié par
 l'utilisateur le 2026-08-07) livré le 2026-08-08** — recherche de bâtiment réel (IGN/OSM) + taux de
 vitrage par paroi + météo automatique (réutilise le préremplissage existant de Calcul 3D), pensé
 comme point d'entrée pédagogique vers la méthode complète ; les deux décisions à trancher au moment
@@ -351,21 +354,44 @@ possible mais non fait faute de temps dans ce lot.
 
 ---
 
-## Lot N — Checklist de progression guidée (page Bâtiment)
+## Lot N — Checklist de progression guidée (page Bâtiment) ✅ livré le 2026-08-08
 
-### Constat
-Le parcours complet traverse 5 pages sans fil conducteur explicite : créer les modèles de paroi →
-importer un maillage OBJ groupé → assigner chaque groupe à un modèle → géoréférencer le bâtiment →
-générer/importer un environnement → précalculer l'ombrage → construire la météo → lancer le calcul.
-Le badge « ombrage périmé » (`calcul-3d.component.html:31-33`) est le seul repère d'état existant.
+### Ce qui a été fait
+Checklist compacte affichée en haut de la page Bâtiment (`batiment.component.ts`, getter `checklist`)
+dès qu'un bâtiment est chargé/créé — 4 items dérivés uniquement de l'état déjà présent côté client
+(aucun nouvel endpoint, comme requis) : **parois assignées** (`assignedCount === totalCount`),
+**géoréférencement** (`georefLat`/`georefLon` renseignés), **environnement lié**
+(`selectedEnvironmentId`), **ombrage à jour** (`!sunVisibilityStale()`). Chaque item est un lien
+(`<a href="#section-...">`) vers l'ancre de la section qui le résout sur la même page — trois nouveaux
+`id` posés sur les blocs existants (`#section-georef`, `#section-ombrage`, `#section-assignation`),
+pas de nouvelle UI dupliquée. Badge généralisé plutôt que dupliqué, comme demandé : l'ancien
+`.stale-badge` (couleur `--warning`/`--warning-tint`, un seul état) devient `.status-badge` avec deux
+variantes (`.done` → `--success`/`--success-tint`, `.todo` → l'ancien style inchangé) — l'usage
+existant du badge ombrage (`sunVisibilityStale()`) a été migré vers cette classe généralisée plutôt
+que d'en garder deux qui se ressemblent.
 
-### Étapes
-1. Sur la page Bâtiment, une checklist compacte (5-6 items : parois assignées / géoréférencement /
-   environnement lié / ombrage à jour / météo chargée) avec état coché/manquant par item, dérivée de
-   données déjà présentes côté client (pas de nouvel endpoint nécessaire).
-2. Chaque item non coché est un lien direct vers l'action qui le résout (ex. « ombrage périmé » →
-   bouton précalcul directement dans la checklist, pas seulement un badge d'avertissement).
-3. Généraliser le pattern du badge existant plutôt que le dupliquer.
+**Écart assumé par rapport au texte d'origine** : « météo chargée » listée comme 5ᵉ item n'a **aucun**
+état persisté à observer — Lot L a délibérément choisi de ne jamais stocker la météo côté serveur
+(`weather_source`, réponse renvoyée directement au client, jamais écrite sur `Building`), et la page
+Bâtiment n'a de toute façon aucun accès à l'état local de la page Calcul 3D. Ajouter un état factice
+aurait été trompeur (rien ne peut vraiment se « décocher » si l'utilisateur revient sur Calcul 3D sans
+rien construire). Remplacé par un item non trackable en fin de liste — toujours affiché, jamais coché
+— pointant vers Calcul 3D avec la mention explicite que cette étape n'est pas suivie ici. Item
+« parois assignées » également sans lien d'ancre séparé menant ailleurs : sa résolution est déjà sur
+cette même page, juste plus bas.
+
+Vérifié sur l'image rebuildée (`recompose_docker.sh --app bilan-thermique --force`) : le chunk lazy
+de la page Bâtiment contient bien le nouveau code (`grep checklist` sur le bundle nginx), build
+Angular sans erreur (`ng build` fait partie du `docker build`, un échec de template aurait fait
+échouer le build), `manage.py test` → 56/56 inchangé (lot purement frontend), `manage.py check`
+propre. **Non vérifié en navigateur réel** — même réserve que Lots L/S/Q/T (app derrière Keycloak SSO,
+non testée en interactif dans cette session).
+
+### Reste ouvert
+Pas de test frontend dédié (aucune infrastructure de test frontend dans cette app, cohérent avec les
+lots précédents à UI pure — P, T). Pas d'ancre pour l'item « parois assignées » si aucun triangle n'est
+encore importé (`#section-assignation` n'existe pas tant que `totalCount === 0`) — sans conséquence
+(le lien est simplement sans effet, le hint textuel dit déjà « importez un maillage »).
 
 ---
 
