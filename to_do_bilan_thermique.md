@@ -589,6 +589,23 @@ automatiquement `weatherFetchLat/Lon/NorthOffset` depuis `Building.georef_lat/lo
 (mécanisme du Lot L), donc un bâtiment créé par ce mode simplifié a sa météo déjà prête à récupérer
 sans code supplémentaire — il suffit à l'utilisateur de choisir l'année.
 
+**Entrée simplifiée ajoutée après coup (même jour, sur demande utilisateur) : renouvellement d'air.**
+Même schéma de préremplissage que la météo, généralisé : `Building.suggested_debit_vent_m3h`/
+`suggested_eta_recup_vent` (migration `0011`, nouveaux champs nullable, jamais lus par le solveur —
+une SUGGESTION uniquement) sont calculés à l'étape 2 de l'assistant à partir d'un profil du catalogue
+existant `ventilation-profiles.ts` (déjà utilisé par Calcul 3D, Lot G) appliqué au volume RÉEL du
+bâtiment — empreinte (aire des triangles du groupe `sol`) × hauteur, calculé côté client depuis la
+géométrie déjà récupérée, plus précis que la saisie manuelle du volume sur Calcul 3D. Repris par
+`Calcul3DComponent.onBuildingChange` au chargement du bâtiment pour préremplir `debitVentM3h`/
+`etaRecupVent`, exactement comme `georef_lat/lon` préremplit déjà le panneau météo — les deux champs
+restent modifiables ensuite sur Calcul 3D comme pour tout bâtiment. Optionnel : aucun profil choisi
+⇒ aucune suggestion envoyée, comportement inchangé pour un bâtiment créé sans passer par ce mode.
+Vérifié en réel (round-trip serializer + bornes de validation, dans le conteneur rebuildé) plutôt
+qu'ajouté aux tests automatisés du module `tests.py` — ce fichier est explicitement sans accès DB
+(`SimpleTestCase` partout, voir son docstring) et ces deux champs sont de purs passe-plats
+(`FloatField` sans logique propre) comme `georef_lat`/`surface_ref_m2`, qui n'ont eux non plus jamais
+eu de test dédié.
+
 **Backend** : `geodata.extrude_footprint_grouped` (triangles `{'v','group','boundary'}`, sol marqué
 `boundary='ground'` — Lot K — puisqu'un plancher bas issu d'une empreinte réelle touche le terrain
 par construction) + `geodata.search_nearby_buildings` (recherche, tri par distance existant réutilisé,
