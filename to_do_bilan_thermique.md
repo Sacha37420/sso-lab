@@ -2315,6 +2315,97 @@ seul point commun entre le bug 2.2.1 et le fait que personne ne l'a vu pendant u
 
 ---
 
+## Trous de logique et frictions d'usage restants — relevé du 2026-08-09 (après phase 3)
+
+Relevé demandé par l'utilisateur une fois la phase 3 close. **Rien n'est corrigé ici** : c'est un
+inventaire, à trancher lot par lot. Les « Reste ouvert » propres à chaque lot ne sont pas répétés.
+
+### Trous de logique
+
+**L1. Modifier un environnement n'invalide pas l'ombrage des bâtiments qui l'utilisent** ⚠️
+`EnvironmentSerializer.update()` remplace `instance.envelope` et sauvegarde — sans jamais toucher au
+`sun_visibility_stale` des `Building` qui pointent dessus. Ajouter de la végétation ou du relief à un
+environnement existant puis relancer un calcul donne donc un résultat calculé contre l'**ancienne**
+géométrie, sans aucun signe. Le mécanisme existe et fonctionne dans les deux autres cas (enveloppe
+modifiée, lien d'environnement changé) : il ne manque que la propagation environnement → bâtiments.
+Correctif : `Building.objects.filter(environment=instance).update(sun_visibility_stale=True)` dès que
+l'enveloppe change. Le plus grave de la liste — silencieux, et sur le chemin que les Lots Z et AA
+viennent justement de rendre attractif.
+
+**L2. Le mode simplifié promet un calcul immédiat que le serveur refusera** ⚠️
+L'étape 4 affiche « rien à faire de plus […] lancez le calcul ». Or un `Building` neuf a
+`sun_visibility_stale = True`, Calcul 3D part en `'precomputed'` par défaut, et `BuildingCalculView`
+renvoie **400 « L'ombrage précalculé est périmé »**. L'utilisateur suit l'assistant à la lettre et se
+heurte à un refus. Trois correctifs possibles, à trancher : lancer le précalcul depuis l'assistant ;
+basculer par défaut en temps réel pour un bâtiment sans environnement (auto-ombrage seul, peu
+coûteux) ; ou corriger le texte et ajouter l'étape manquante.
+
+**L3. Le planning horaire ignore le jour de la semaine, le calendrier d'occupation non**
+Depuis le Lot V, les consignes de thermostat distinguent jours ouvrés, week-ends et vacances. Le
+planning du Lot Q (ventilation, apports internes, volets) reste un « jour type » indexé
+`hour_index % 24`. Un bureau dont le thermostat passe en hors-gel le dimanche continue donc d'être
+**ventilé au débit d'occupation** et de recevoir ses apports internes ce jour-là. L'incohérence
+n'existait pas avant le Lot V — c'est lui qui a introduit un calendrier d'un seul côté. Correctif
+naturel : deux profils de planning (ouvré / non-ouvré), réutilisant le calendrier déjà saisi.
+
+**L4. La végétation est posée à z = 0, les bâtiments suivent le terrain**
+`generate_vegetation_mesh` place tous les volumes végétaux à l'altitude locale 0, alors que les
+bâtiments IGN sont calés sur `altitude_minimale_sol − ground_z_ref` et que le maillage de terrain
+(Lot AA) reproduit le relief. Sur un site en pente, les arbres flottent ou s'enterrent — l'ombrage en
+pâtit là où il compte le plus (soleil rasant). Le code porte une ligne morte à supprimer
+(`base_z = -(ground_z_ref or 0.0) * 0.0`). Se traite avec l'usage 2 du Lot AA, resté ouvert.
+
+**L5. Le garde-fou du mode temps réel ne compte pas la végétation**
+`MAX_REALTIME_RAYCAST_OPS` borne `triangles × heures`, ce qui reflétait le coût quand il n'y avait
+qu'une passe de rayons. Depuis le Lot Z il y en a une seconde (végétation, `multiple_hits`, plus
+chère par rayon) : le garde-fou sous-estime le coût réel, alors qu'il existe précisément pour
+protéger le worker partagé du lab.
+
+**L6. Chaque génération d'environnement en crée un nouveau, sans jamais nettoyer**
+`generate_environment_for_building` crée un `Environment` « Auto — <bâtiment> — <date> » et remplace
+le lien. Régénérer trois fois laisse deux environnements orphelins, indistinguables au nom près, et
+rien n'indique lequel est réellement lié.
+
+**L7. Le mode simplifié laisse un bâtiment incomplet si on l'abandonne**
+`createAndRefine` crée le `Building` dès l'étape 2. Quitter à l'étape 3 laisse un bâtiment sans
+aucune paroi assignée dans la liste. Sans conséquence physique, mais il encombre.
+
+### Frictions d'usage
+
+**U1. L'ombrage doit être relancé à la main, et rien ne le propose au bon moment.** Calcul 3D se
+contente de refuser ; il faut savoir revenir sur la page Bâtiment. Un bouton « relancer le précalcul »
+dans le message d'erreur supprimerait l'aller-retour — et couvrirait aussi L1 et L2.
+
+**U2. `surface_ref_m2` est saisie à la main alors que l'app connaît l'empreinte.** Pour un bâtiment
+issu de la recherche ou du générateur de boîte, l'aire au sol est calculable exactement (le mode
+simplifié la calcule déjà pour le volume). Sans elle, tout le dashboard kWh/m² — le seul repère
+chiffré de l'app — reste indisponible.
+
+**U3. Aucun historique des calculs.** Le `Job` est persisté, mais l'interface ne le retrouve que tant
+qu'on reste sur la page : quitter Calcul 3D perd le résultat, et il faut relancer (jusqu'à ~30 s)
+pour le revoir. Comparer deux variantes oblige à noter les chiffres à la main.
+
+**U4. Coordonnées à saisir au clavier, sans carte.** Toutes les entrées géographiques demandent une
+latitude/longitude décimale, à obtenir ailleurs ; une faute de frappe ne se voit qu'au résultat.
+
+**U5. Plusieurs paramètres physiques sans repère.** `c_air_int` a son aide (Lot P) ; `dx_max`,
+`r_ground`, `t_ground`, `h_e`/`h_i` constants n'ont qu'un défaut et une phrase. Rien ne dit lesquels
+sont sans conséquence et lesquels changent le résultat d'un facteur deux.
+
+**U6. Le mode « temps réel » n'est pas proposé au moment où il devient nécessaire.** C'est la réponse
+à la discrétisation à 15° (documentée au Lot AC), mais l'interface le présente comme une simple
+alternative plus lente.
+
+### Hors bilan-thermique — relevé en vérifiant les comptes E2E
+
+**7 des 14 apps du lab n'ont aucun `frontend/e2e/cloisonnement.spec.ts`** : `analyse-lora`,
+`app-builder`, `arbre-genealogique`, `atelier-3d`, `conciergerie`, `lab-admin`, `restauration`. Le
+runner répond `[]` pour elles — **sans erreur ni avertissement**, exactement comme une app dont tous
+les tests passeraient. Or `CLAUDE.md` décrit ce test comme le contrôle automatisé du cloisonnement, et
+le lab est exposé sur Internet. À traiter dans `dev/`, pas ici.
+
+---
+
 ## Hors scope — décisions déjà prises, à ne pas entreprendre sans en rediscuter
 
 La page Théorie (section « Portée et hypothèses ») exclut déjà explicitement, comme choix assumé et
