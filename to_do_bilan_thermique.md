@@ -1137,6 +1137,16 @@ la rédaction) :
     réaction instantanée, pas de bande morte au-delà de `t_min`/`t_max`). Aucun rendement de
     génération, d'émission, de distribution, ni COP. Le repère « RT2012 ≈ 50 kWh/m²/an » affiché sur
     le dashboard porte déjà cette réserve ; la page Théorie non.
+11bis. **Aucune paroi mitoyenne.** Tout triangle est soit face à l'air extérieur, soit au contact du
+    sol (`boundary`) : il n'existe aucun troisième cas « paroi partagée avec un bâtiment voisin
+    chauffé », qui devrait être adiabatique (ou couplée à une température de local voisin) plutôt
+    qu'exposée à `t_ext`. Constaté au Lot X : le filtrage y conserve délibérément les mitoyens comme
+    obstacles d'ombrage — mais le mur qu'ils partagent avec le bâtiment étudié continue de déperdre
+    comme s'il donnait sur l'extérieur. **Surestime les déperditions d'une maison de ville ou d'un
+    appartement**, d'autant plus que la part de surface mitoyenne est grande (jusqu'à deux façades
+    sur quatre pour une maison de rangée). Contournement possible aujourd'hui sans changer le
+    modèle : affecter à ces triangles un modèle de paroi très isolant. Une vraie prise en charge
+    demanderait un troisième `boundary` (voir Lot AC, étape 4).
 11. **Aucune physique de l'humidité.** Pas de chaleur latente (ni sur la ventilation, ni sur les
     occupants), pas de condensation, pas de transferts de vapeur dans les parois. Une VMC réelle
     évacue une part notable de son énergie en latent.
@@ -1759,7 +1769,7 @@ Quatre correctifs indépendants, regroupés parce qu'ils sont tous courts et tou
 faussant. **Chacun doit faire passer `python manage.py test api` avant/après** — c'est l'objet du
 Lot F, et AB1/AB3 touchent la boucle horaire et `_assemble_F_hour`.
 
-### AB1 — Dérive du planning et du calendrier sur heure météo manquante (C3)
+### AB1 — Dérive du planning et du calendrier sur heure météo manquante (C3) ✅ livré le 2026-08-09
 Le point le plus vicieux : silencieux, cumulatif, et il fausse à la fois la ventilation, les apports
 internes, les volets **et** les consignes de thermostat.
 
@@ -1775,6 +1785,62 @@ Deux corrections possibles, à trancher :
 
 Test : série avec un trou volontaire au milieu → le créneau de planning appliqué à la dernière heure
 doit être le bon (identité exacte, pas une convergence).
+
+#### Ce qui a été fait
+**Option (b) retenue**, comme recommandé — la décision du Lot L (« ne rien inventer, sauter l'heure »)
+reste intacte. Un seul champ ajouté au lieu des deux envisagés : **`hour_index`**, nombre d'heures
+écoulées depuis minuit du **premier jour** de la série. `% 24` donne l'heure du jour (serveur),
+`// 24` le numéro du jour (client, pour les week-ends et vacances) — c'est très exactement la
+grandeur que `heure_debut + hour_idx` tentait de reconstruire, mais mesurée au lieu d'être déduite.
+
+**Dérivé de la DATE de chaque ligne, jamais d'un compteur** : c'est ce qui le rend juste même quand
+une **journée entière** manque (un compteur incrémenté ligne à ligne aurait décalé les week-ends
+d'un jour). Deux dérivations, parce que les deux sources n'ont pas la même notion de date :
+- Open-Meteo Archive : `(date − première_date).days * 24 + heure`, exact ;
+- PVGIS TMY : comptage par **changement de (mois, jour)** — une TMY assemble des mois issus
+  d'**années source différentes** (déjà documenté dans `_parse_pvgis_timestamp`), donc une
+  soustraction de dates sauterait des années entières d'un mois à l'autre. Test dédié : 31 décembre
+  2011 suivi du 1ᵉʳ janvier 2007 doivent rester deux jours consécutifs de l'année type.
+
+Côté serveur, `slot` est calculé une fois en tête de boucle et sert au planning **et** aux volets
+(qui dupliquaient l'expression). Piège du Lot V réappliqué : `point.get('hour_index')` puis test
+`is not None` — le serializer (`default=None`) rend la clé toujours présente, donc `.get(clé, repli)`
+ne retomberait jamais sur le repli. `heure_debut` reste le repli pour une série collée à la main.
+
+**Le champ voyage dans le CSV (7e colonne), pas dans un tableau parallèle.** La série récupérée est
+aplatie en CSV puis relue par `parseWeather()` — c'est ce qui la rend éditable. Un tableau parallèle
+d'index se désaligne dès que l'utilisateur supprime une ligne, c'est-à-dire sous exactement
+l'opération qui cause le bug qu'on corrige. Attachée à sa ligne, l'information reste juste quoi
+qu'il arrive aux autres. Même précédent que `wind_m_s` (6e colonne, Lot R), même garde contre
+`Number('') === 0`.
+
+`computeThermostatSetpoints` prend désormais un **tableau d'heures absolues** au lieu du couple
+(`heureDebut`, `nHours`) : la signature elle-même interdit de reconstruire l'heure depuis la
+position. Et `heureDebut` est **désactivé dans l'interface** dès que la série porte ses propres
+heures, avec la raison affichée — plutôt que de laisser un réglage visible qui ne fait plus rien.
+
+#### Vérification
+**9 tests backend** : `hour_index` égal à la position quand rien ne manque, préservé avec 3 heures
+sautées (position 8 → heure 11, dernière → 23 et non 20), correct sur plusieurs jours, correct avec
+une journée entière absente (24ᵉ point → 48 et non 24), TMY insensible aux années source ; et côté
+solveur, planning non décalé sur série trouée, `hour_index` prioritaire sur un `heure_debut`
+incohérent, `heure_debut` toujours actif sans `hour_index` (non-régression du Lot Q), volets suivant
+le même créneau (test séparé : ils entrent dans `K`, pas seulement dans `F`).
+
+**Mutation testing** sur le point de correction (retour à l'indexation par position) : **3 des 4
+tests du solveur échouent**, le quatrième étant justement le test de non-régression qui doit rester
+vert. 117/117 au total depuis l'image reconstruite.
+
+**Vérifié en navigateur réel** (13/13) sur le cas du bug — série amputée de 3 heures : 7 colonnes
+dans le CSV, 3ᵉ ligne portant l'heure 5 et non sa position 2, dernière portant 23 et non 20,
+« Heure de début » désactivée avec explication, et surtout **inspection du payload réellement envoyé
+à `/calcul-3d/`** : la frontière jour/nuit du profil scolaire tombe à 7 h réelles (position 4) et
+non à la position 7. Tout le chemin client est donc exercé pour de vrai, pas seulement simulé.
+
+#### Reste ouvert
+`hour_index` est en **UTC**, comme la série météo — le décalage heure locale reste entier, c'est
+l'objet de l'AB4. Une série collée à la main ne porte pas d'heures et continue de dépendre de
+`heure_debut` : correct, mais l'utilisateur doit encore le régler à la main dans ce cas.
 
 ### AB2 — Bilan énergétique complet sur le dashboard (C2)
 Accumuler, dans la boucle horaire de `run_building_simulation`, les quatre canaux aujourd'hui absents
@@ -1831,6 +1897,13 @@ Dernier lot de la phase, une fois que les correctifs ci-dessus ont figé ce qui 
    h_e/h_i dynamiques, plannings horaires, calendrier d'occupation. Une section « Du modèle 1D au
    bâtiment complet » listant chaque terme, où il s'insère (`K` ou `F`, nœud de surface ou nœud
    d'air) et sous quelle hypothèse, serait plus utile que de disséminer les mentions.
+4bis. **Paroi mitoyenne** (limite 11bis, constatée au Lot X) : écrire explicitement qu'aucun
+   troisième `boundary` n'existe et que le mur partagé avec un mitoyen déperd comme une façade
+   extérieure. Si le sujet est un jour repris comme chantier et non comme limite documentée, il est
+   de la même famille que le couplage multi-locaux de la section « Hors scope » (un `boundary`
+   supplémentaire sans convection extérieure, soit adiabatique, soit vers une température de local
+   voisin donnée) — nettement plus léger que le multi-zone complet, puisqu'il n'introduit aucun
+   second nœud d'air.
 4. **Documenter les termes ajoutés en phase 3** : filtrage du bâtiment étudié (Lot X), végétation à
    transmittance constante et non saisonnière (Lot Z), terrain occultant sans albédo (Lot AA),
    résistance de sol (Lot AB3).
