@@ -9,6 +9,36 @@ raisonnement (règles, pièges, décisions déjà tranchées).
 
 ---
 
+## Chantiers ouverts (à traiter, pas encore faits)
+
+### Sept apps sur quatorze n'ont aucun test de cloisonnement ⚠️
+
+`analyse-lora`, `app-builder`, `arbre-genealogique`, `atelier-3d`, `conciergerie`, `lab-admin` et
+`restauration` n'ont **pas** de `frontend/e2e/cloisonnement.spec.ts` (constaté le 2026-08-09 en
+vérifiant les comptes E2E). Les sept autres l'ont.
+
+Ce qui rend le trou dangereux : **le runner répond `[]` pour ces apps, sans erreur ni
+avertissement** — une app sans spec est donc indiscernable, dans lab-admin comme en ligne de
+commande, d'une app dont tous les tests passent. Or ce test est présenté plus bas comme *le*
+contrôle automatisé du cloisonnement, et le lab est exposé sur Internet.
+
+C'est peu coûteux à combler : le spec est **copiable tel quel** depuis
+`_templates/django-angular/frontend/e2e/cloisonnement.spec.ts` (il ne doit dépendre d'aucun contenu
+propre à l'app — c'est sa règle de conception), et `e2e_member` porte désormais une adresse email,
+donc les tests peuvent aller au-delà du simple accès à la page. Vérifier ensuite app par app :
+
+```bash
+docker exec lab-runner sh -c "curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{\"app\":\"<app>\"}' http://localhost:4300/run"
+```
+
+Une réponse `[]` signifie « aucun test trouvé », jamais « tout va bien ».
+
+À envisager en même temps : faire échouer bruyamment `setup_unit.sh` (ou l'affichage de lab-admin)
+quand une app déployée n'expose aucun spec, pour que le trou ne puisse plus réapparaître en silence.
+
+---
+
 ## Infrastructure partagée entre cadriciels (`dev/` / `dev2/`)
 
 Cet hôte fait tourner **deux cadriciels indépendants** : `dev/` (ce dépôt, « lab1 ») et
@@ -609,8 +639,11 @@ chaud. `rotate-secrets-full.sh` termine lui-même par `recompose_docker.sh --for
 | `app-builder` | `Sacha37420/app-builder` | Django + Angular | 8087 / 4205 |
 | `arbre-genealogique` | `Sacha37420/arbre-genealogique` | Django + Angular | 8090 / 4208 |
 | `atelier-3d` | `Sacha37420/atelier-3d` | Django + Angular | 8092 / 4210 |
+| `bilan-thermique` | `Sacha37420/bilan-thermique` | Django + Angular (+ Celery) | 8099 / 4214 |
 | `carto-lab` | `Sacha37420/carto-lab` | Django + Angular | 8091 / 4209 |
+| `code-route` | `Sacha37420/code-route` | Django + Angular (+ Celery) | 8096 / 4200 |
 | `conciergerie` | `Sacha37420/conciergerie` | Django + Angular | 8084 / 4202 |
+| `craft-lab` | `Sacha37420/craft-lab` | Django + Angular (+ `relay/` WebSocket) | 8097 / 4213 |
 | `lab-admin` | `Sacha37420/lab-admin` | Django + Angular | 8083 / 4201 |
 | `restauration` | `Sacha37420/restauration` | Django + Angular | 8088 / 4206 |
 | `robot-lab` | `Sacha37420/robot-lab` | Django + Angular (+ `engine/` Playwright) | 8094 / 4212 |
