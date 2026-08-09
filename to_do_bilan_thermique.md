@@ -1692,7 +1692,7 @@ Après le Lot X (sinon la végétation s'ajoute à un environnement déjà faux)
 
 ---
 
-## Lot AA — Terrain / sol dans l'environnement
+## Lot AA — Terrain / sol dans l'environnement ✅ livré le 2026-08-09
 
 ### Constat (question 2.1.4)
 « Et pour finir dans l'environnement saurais-tu charger le sol ? »
@@ -1759,6 +1759,66 @@ suffisant pour une altitude de référence, insuffisant pour un micro-relief.
 ### Dépendance
 L'usage 1 est indépendant et peut être livré seul — à faire tôt, il corrige une erreur silencieuse
 existante. Les usages 2 et 3 gagnent à venir après le Lot X.
+
+### Ce qui a été fait
+Nouveau module pur `elevation.py` (même patron que `geodata.py`/`weather_source.py` : réseau isolé
+dans les `fetch_*`, assemblage testable sans réseau), avec la **même bascule IGN → mondial** que pour
+les bâtiments. `ElevationError`, batching (60 points par appel IGN — la valeur mesurée, 100 côté
+Open-Meteo) et délai entre lots pour respecter les 5 req/s annoncés.
+
+**Usage 1 — `georef_ground_z` prérempli**, endpoint synchrone `POST /api/altitude/` et bouton
+« Récupérer l'altitude » sur la page Bâtiment. C'était le gain le plus important pour le plus petit
+coût : ce champ pilote le calage vertical de **tous** les obstacles IGN
+(`base_z = altitude_minimale_sol − ground_z_ref`) et, laissé vide, il vaut 0 — les voisins se
+retrouvent alors à leur altitude NGF absolue, souvent 100 m au-dessus d'un bâtiment posé à z = 0, et
+l'ombrage est entièrement faux **sans le moindre signe visible**. L'aide du champ le dit maintenant
+explicitement.
+
+**Usage 3 — maillage de terrain**, opt-in (case à cocher + pas de grille) dans la génération
+d'environnement. Ajouté au **même** maillage d'obstacles que les bâtiments : `api.shadow` ne fait
+aucune différence entre les deux, seule compte la géométrie qui bloque les rayons — donc aucune
+modification de `shadow.py`, et le relief est pris en compte aussi bien par la grille de visibilité
+solaire que par le facteur de vue du ciel. Opt-in et non défaut parce que c'est de loin le plus gros
+contributeur en triangles (deux par maille).
+
+Deux pièges traités, tous deux signalés à l'étape 5 :
+- **Le terrain est aplani sous l'emprise du bâtiment** (réutilise `envelope_footprint_polygon` du
+  Lot X). Sans ça, une pente traverse les murs et bloque des rayons **depuis l'intérieur** de
+  l'enveloppe : on fausserait l'ombrage au lieu de l'améliorer.
+- **Garde-fous de charge** : `MAX_TERRAIN_POINTS` côté grille, et vérification que l'ajout ne
+  dépasse pas `MAX_VERTICES`/`MAX_TRIANGLES` — auquel cas le terrain est abandonné avec un
+  avertissement plutôt que d'évincer les bâtiments voisins, qui comptent bien davantage pour
+  l'ombrage. Tout le chargement du terrain est best-effort : une panne d'altimétrie ne fait pas
+  perdre les bâtiments déjà extrudés.
+
+`geodata.latlon_from_local_xy` (inverse exact de `local_xy` + `_rotate_xy`) a dû être ajouté : la
+grille est définie en coordonnées **locales** et l'altimétrie se demande en lat/lon. Une erreur de
+signe y aurait demandé l'altitude au mauvais endroit, en silence — le terrain aurait eu l'air
+plausible tout en étant celui d'à côté. D'où un test d'aller-retour à cinq caps.
+
+### Vérification
+**9 tests** sans réseau : géométrie de la grille (carrée, centrée, balayée ligne par ligne — l'ordre
+est un contrat entre `terrain_grid_local` et `build_terrain_mesh`), refus des grilles trop denses et
+des pas nuls, deux triangles par maille, indices tous valides, altitude relative à `ground_z_ref`,
+**aplanissement sous l'emprise avec relief conservé au-delà**, et rejet d'un nombre d'altitudes
+incohérent. Plus l'aller-retour `latlon_from_local_xy` à cinq caps et trois points.
+
+**Vérifié en réel contre les deux API** : altitude ponctuelle à Paris (33,8 m, IGN), Annecy
+(448,4 m, IGN) et Montréal (83,0 m, **Open-Meteo** — le repli hors de France fonctionne), en ~0,15 s.
+Maillage complet sur un site en pente réel (Annecy, rayon 150 m au pas de 15 m) : 441 points,
+800 triangles, **4,7 s**, amplitude de relief 4,5 m — contre 1,4 m sur un site plat (Orléans), ce qui
+confirme que le terrain reproduit bien du relief et pas du bruit. 150/150 depuis l'image
+reconstruite.
+
+### Reste ouvert
+**Usage 2 non fait** : les obstacles OpenStreetMap restent posés à z = 0 (`base_z = None`), donc hors
+de France le relief entre bâtiments n'est toujours pas reproduit — le maillage de terrain, lui,
+l'est. Le corriger demanderait une requête d'altitude par empreinte, facile à greffer sur
+`elevation.fetch_elevations` mais qui multiplie les appels. **Usage 4 (albédo) délibérément hors
+scope** : ajouter un maillage de terrain n'apporte PAS la réflexion solaire du sol, `shadow.py` ne
+calculant que de l'occultation — à ne pas laisser croire. Pas de transition douce entre la zone
+aplanie sous le bâtiment et le relief alentour (marche franche à la limite de l'emprise) : sans
+conséquence pour de l'occultation.
 
 ---
 
@@ -2095,7 +2155,7 @@ tiers peut juger de ce que vaut un résultat produit par cet outil.
    chiffré la surestimation des déperditions par le sol (−19 % sur un dallage RT2012 mesuré en réel)
    et ajouté les planchers bas au catalogue ; AB4 a été tranché avec l'utilisateur après mesure de
    ce que la source météo permet réellement.
-4. **Lot AA** (usage 1 d'abord, seul et immédiat ; usages 2-3 ensuite).
+4. ~~**Lot AA**~~ — ✅ livré le 2026-08-09 (usages 1 et 3 ; usage 2 laissé ouvert, voir sa section).
 5. **Lot Y** — ergonomie, réutilise l'existant, gagne à venir après AA.
 6. **Lot Z** — le plus lourd, et le seul qui demande un arbitrage d'architecture (Z1/Z2/Z3).
 7. **Lot AC** — en dernier, une fois que ce qui est vrai est stabilisé.
