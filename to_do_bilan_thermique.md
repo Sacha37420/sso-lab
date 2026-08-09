@@ -1842,7 +1842,7 @@ non à la position 7. Tout le chemin client est donc exercé pour de vrai, pas s
 l'objet de l'AB4. Une série collée à la main ne porte pas d'heures et continue de dépendre de
 `heure_debut` : correct, mais l'utilisateur doit encore le régler à la main dans ce cas.
 
-### AB2 — Bilan énergétique complet sur le dashboard (C2)
+### AB2 — Bilan énergétique complet sur le dashboard (C2) ✅ livré le 2026-08-09
 Accumuler, dans la boucle horaire de `run_building_simulation`, les quatre canaux aujourd'hui absents
 (solaire transmis, apports internes, ventilation, cadres), en plus de l'existant, et les renvoyer
 dans `job.result`. Puis remplacer les deux tuiles actuelles par un bilan par poste — et vérifier que
@@ -1854,6 +1854,63 @@ qui est ce qu'elle mesure réellement.
 Attention au piège documenté au Lot R : une identité de conservation peut être tautologique
 vis-à-vis du terme qu'elle est censée vérifier. Ici, les canaux ajoutés sont des termes de `F`, donc
 l'identité reste légitime (même raisonnement que le Lot U).
+
+#### Ce qui a été fait
+Six postes accumulés dans la boucle horaire, chacun une **puissance nette vers l'air évaluée en fin
+de pas** (cohérent avec le schéma implicite et avec `envelope_flux_w` existant) : surfaces
+d'enveloppe, solaire transmis (Lot U), apports internes (Lots H/Q), renouvellement d'air (Lots G/Q),
+cadres de fenêtre (Lot I), chauffage/climatisation. Plus la variation de stockage
+`c_air_int·(T_air,fin − T_air,début)` — qui télescope, donc seuls les deux bouts comptent.
+
+L'identité vérifiée est **la ligne du nœud d'air du système résolu** :
+
+```
+C_air/Δt·(T_air,n+1 − T_air,n) = Σ hᵢAᵢ(T_surf,i − T_air) + Σ frame_g(t_bound − T_air)
+                                 + g_vent(t_ext − T_air) + Q_int + Σ solaire_transmis + hvac
+```
+
+Elle n'est **pas tautologique** (piège du Lot R) : chaque poste est reconstruit à partir des
+températures résolues et des paramètres physiques, jamais relu depuis `F`. Le `hvac` du mode
+thermostat est exactement le résidu de cette ligne — c'est ce qui fait boucler l'ensemble par
+construction, et donc ce qui rend une valeur non nulle de `closure_error_kwh` significative.
+
+Deux termes ne sont connus que dans `_assemble_F_hour` (le solaire transmis, et la somme
+`Σ frame_g[i]·t_boundary[i]` — chaque cadre suivant le `t_boundary` de SON triangle) : remontés par
+un paramètre `diagnostics` optionnel plutôt qu'en changeant la valeur de retour, pour ne rien coûter
+quand il n'est pas demandé. Le reste se reconstitue dans la boucle, qui connaît déjà `g_vent`,
+`apports_internes_w` et `T_air`.
+
+**`balance` vaut `None` en mode « Imposée »** : la ligne du nœud d'air y est écrasée par Dirichlet,
+donc aucun de ces postes n'agit sur la solution (même raisonnement que `g_vent`/`apports_internes_w`,
+déjà ignorés dans ce mode). Afficher leurs valeurs nominales laisserait croire à un effet inexistant ;
+l'interface affiche à la place la raison et invite à passer en « Libre » ou « Thermostat ».
+
+Côté dashboard : tableau par poste (avec colonne kWh/m² quand la surface de référence est
+renseignée), pied de tableau portant la variation de stockage, et une ligne de contrôle qui annonce
+explicitement le bouclage — **un contrôle de conservation d'énergie visible par l'utilisateur**, pas
+seulement par la suite de tests. Les deux tuiles d'origine sont renommées « Enveloppe — flux
+entrant / sortant » : elles restent utiles, mais elles ne s'appellent plus « gains » et « pertes »
+alors qu'elles ne portent qu'un poste sur six.
+
+#### Vérification
+**8 tests** : bouclage exact (delta 1e-9 kWh) enveloppe seule, tous canaux actifs, thermostat en
+chauffage **et** en climatisation ; oracle indépendant sur les apports internes (300 W × 12 h =
+3,6 kWh exactement) ; non-régression stricte du poste « enveloppe » contre l'intégrale de
+`envelope_flux_w` et contre `flux_positive + flux_negative` ; `balance is None` en mode imposé ; et
+le solaire transmis dépassant le canal enveloppe sur une paroi vitrée ensoleillée — c'est-à-dire
+la démonstration que le poste caché jusqu'ici pouvait être le premier du bilan.
+
+Découverte au passage, en écrivant le test thermostat : avec 800 W/m² de direct derrière un vitrage
+τ = 0,87, le solaire transmis l'emporte largement sur les déperditions **même à −5 °C dehors**, et le
+thermostat doit **refroidir**. L'attente initiale (« il faut chauffer ») était fausse ; c'est
+exactement le genre de lecture que les deux tuiles d'origine rendaient impossible. Les deux sens sont
+désormais testés séparément. 125/125 depuis l'image reconstruite, vérifié en navigateur réel (12/12).
+
+#### Reste ouvert
+Le mode « Imposée » pourrait exposer un bilan lui aussi, en calculant le résidu de la ligne Dirichlet
+(exactement la puissance qu'il faut injecter pour tenir `t_int`) — c'est la même mécanique que le
+`hvac` du thermostat, non faite ici. Le bilan est global sur la période : pas de décomposition
+mensuelle ni de courbe temporelle par poste.
 
 ### AB3 — Plancher sur terre-plein : résistance de sol et découplage du vent (C4)
 1. Découpler `h_e` du sol : un triangle `boundary='ground'` ne doit **jamais** utiliser le `h_e`
