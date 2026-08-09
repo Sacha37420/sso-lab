@@ -2588,6 +2588,65 @@ scolaire y sera donc traité sans ses vacances. L'assistant ne propose pas de co
 
 ---
 
+## Lot AF — Vacances scolaires réelles + libellé du profil d'usage ✅ livré le 2026-08-09
+
+### Constat
+Deux questions de l'utilisateur sur le Lot AE, dont une a fait tomber un défaut de fond.
+
+**« Ça veut dire quoi ton "à quoi sert le bâtiment" ? »** — formulation trop vague de ma part pour
+un champ qui pilote quelque chose de précis : le **profil d'usage** (Lot V) fixe les consignes de
+thermostat heure par heure (19 °C en journée, 16 °C réduit la nuit, 7 °C hors gel à la fermeture,
+plafond de climatisation ou non).
+
+**« Pour le calendrier tu ne peux pas utiliser des vacances si on est scolaire ? »** — et là, un
+vrai défaut : `defaultOccupationCalendar()` pose `vacances: []`, donc la branche
+`if (profile.vacancesHorsGel && isVacation)` de `setpointsFor` **ne se déclenchait jamais**. Or le
+hors-gel du week-end est commun au scolaire et au tertiaire : les vacances sont le SEUL trait qui
+les distingue. **Choisir « Scolaire » donnait donc exactement le même résultat que « Tertiaire »** —
+le profil existait, était documenté, testé au Lot V… et restait inerte faute de dates.
+
+### Ce qui a été fait
+**Table des vacances scolaires françaises** (`usage-profiles.ts`) : Toussaint, Noël, hiver,
+printemps, été, avec les **trois zones** A/B/C pour les congés d'hiver et de printemps, qui seules
+en dépendent. Dates **typiques** (calendrier 2024-2025 pris comme représentatif) et non celles d'une
+année précise — elles glissent chaque année, et le mode simplifié travaille de toute façon sur une
+année type météo, qui n'a pas de millésime. Même statut assumé que le catalogue de parois.
+
+`schoolHolidayRanges(zone, startDayOfYear, nDays)` convertit ces dates en **indices de jour relatifs
+au début du run**, l'unité qu'attend `OccupationCalendar` — la décision du Lot V (aucune date
+calendaire côté serveur) est donc préservée. La conversion passe par l'ensemble des jours de
+l'année plutôt que par un découpage à la main : c'est ce qui gère sans cas particulier le
+chevauchement de Noël (21 décembre → 5 janvier, qui enjambe la fin d'année) et une période de départ
+quelconque.
+
+**Mode simplifié** : sélecteur de zone, affiché **uniquement** pour les profils scolaires — seuls
+concernés — et vacances appliquées automatiquement. Le libellé du champ passe de « Usage du
+bâtiment » à « **Régime d'occupation** », avec une phrase disant ce qu'il pilote réellement.
+
+**Calcul 3D** : bouton « Charger les vacances scolaires » + sélecteur de zone dans le bloc
+calendrier, à côté de la saisie manuelle de plages qui reste possible. Et un avertissement quand un
+profil scolaire est choisi **sans aucune plage de vacances** : l'interface dit alors explicitement
+qu'il se comportera comme un tertiaire — le piège dans lequel le mode simplifié était tombé.
+
+### Vérification
+Plages générées contrôlées zone par zone : **122 jours de vacances** dans chacune, chevauchement de
+Noël correctement coupé en deux plages ([0-4] et [354-364]), congés d'hiver et de printemps bien
+distincts d'une zone à l'autre.
+
+**Effet chiffré du correctif** : sur une année complète, les profils Scolaire et Tertiaire diffèrent
+désormais sur **2 136 heures (24,4 %)** — 4 632 heures de hors gel contre 2 496. Avant, la
+différence était de **0 heure**. Parcours complet du mode simplifié revérifié en navigateur (12/12),
+173/173 backend.
+
+### Reste ouvert
+Zone A/B/C à choisir à la main : la déduire des coordonnées demanderait une table
+académie → département, disproportionnée ici. Les jours fériés isolés (1er mai, 14 juillet…) ne sont
+pas traités — ils ne pèsent que quelques heures face aux 122 jours de vacances. Les vacances sont
+posées en hors gel intégral, sans distinction jour/nuit ce jour-là : cadrage confirmé par
+l'utilisateur au Lot V.
+
+---
+
 ## Hors scope — décisions déjà prises, à ne pas entreprendre sans en rediscuter
 
 La page Théorie (section « Portée et hypothèses ») exclut déjà explicitement, comme choix assumé et
