@@ -2321,7 +2321,7 @@ Relevé demandé par l'utilisateur une fois la phase 3 close. **Rien n'est corri
 inventaire, à trancher lot par lot. Les « Reste ouvert » propres à chaque lot ne sont pas répétés.
 
 > **Mis à jour le 2026-08-09** après les Lots AD, AE et AF : les entrées barrées sont traitées.
-> Restent ouverts L3, L5, L6, L7 et U3 à U6, plus le Lot Z3 (saisonnalité de la végétation) et la
+> Restent ouverts L5, L6, L7 et U3 à U6, plus le Lot Z3 (saisonnalité de la végétation) et la
 > paroi mitoyenne (limite 11bis, documentée en Théorie mais non implémentée).
 
 ### Trous de logique
@@ -2344,7 +2344,7 @@ heurte à un refus. Trois correctifs possibles, à trancher : lancer le précalc
 basculer par défaut en temps réel pour un bâtiment sans environnement (auto-ombrage seul, peu
 coûteux) ; ou corriger le texte et ajouter l'étape manquante.
 
-**L3. Le planning horaire ignore le jour de la semaine, le calendrier d'occupation non**
+**L3.** ~~Le planning horaire ignore le jour de la semaine, le calendrier d'occupation non~~ ✅ corrigé au Lot AG
 Depuis le Lot V, les consignes de thermostat distinguent jours ouvrés, week-ends et vacances. Le
 planning du Lot Q (ventilation, apports internes, volets) reste un « jour type » indexé
 `hour_index % 24`. Un bureau dont le thermostat passe en hors-gel le dimanche continue donc d'être
@@ -2648,6 +2648,67 @@ académie → département, disproportionnée ici. Les jours fériés isolés (1
 pas traités — ils ne pèsent que quelques heures face aux 122 jours de vacances. Les vacances sont
 posées en hors gel intégral, sans distinction jour/nuit ce jour-là : cadrage confirmé par
 l'utilisateur au Lot V.
+
+---
+
+## Lot AG — Le planning horaire suit le calendrier d'occupation ✅ livré le 2026-08-09
+
+### Constat (point L3 du relevé, signalé par l'utilisateur)
+« Il faut bien sûr que le planning de ventilation soit basé aussi sur le planning d'occupation. »
+
+Le Lot V n'a fait varier que les **consignes de thermostat** selon le calendrier. Ventilation,
+apports internes et volets sont restés sur un unique « jour type » indexé `hour_index % 24`. Un
+bureau dont le thermostat passait en hors gel le dimanche continuait donc d'être **ventilé au débit
+d'occupation** et de recevoir ses apports internes ce jour-là. L'incohérence n'existait pas avant le
+Lot V — c'est lui qui a introduit un calendrier d'un seul côté.
+
+### Ce qui a été fait
+**Un second planning « jours de fermeture »** (`planning_ferme`, 24 créneaux), appliqué aux heures
+dont le point météo porte `occupied: false`. L'occupation est résolue **côté client**, depuis le même
+calendrier que les consignes : le serveur reçoit un booléen par heure et ne connaît toujours aucune
+date, décision du Lot V préservée.
+
+**Le prédicat « fermé » est désormais partagé.** Il était enfoui dans `setpointsFor` ; il est extrait
+en `isClosed(profile, isWeekend, isVacation)`, utilisé par les consignes **et** par l'occupation. Les
+deux ne peuvent donc plus diverger — c'était précisément le défaut : deux notions de « fermé »
+implicites, dont une seule appliquée.
+
+**Non-régression stricte** : sans `planning_ferme`, `occupied` n'a aucun effet et un payload
+existant se comporte exactement comme au Lot Q. Le serializer refuse `planning_ferme` sans
+`planning` (il ne remplace que certaines heures, il ne peut pas porter tout le run).
+
+**Interface.** Calcul 3D : second bloc de saisie, avec un bouton « Déduire du planning ci-dessus »
+qui applique la convention usuelle — ventilation ramenée aux infiltrations (15 % du débit
+d'occupation), apports internes nuls puisque personne n'est là, volets inchangés. Point de départ
+modifiable, pas une règle imposée. Le bloc est désactivé tant qu'aucun régime d'occupation n'est
+choisi, puisque rien ne définirait alors quand le bâtiment est fermé. Le parsing des deux plannings
+est factorisé : même format, les dupliquer les ferait diverger.
+
+**Mode simplifié** : la réduction est automatique, dérivée du profil de ventilation de l'étape 2 —
+l'assistant connaît déjà le débit et le calendrier, il n'y a rien de plus à demander.
+
+### Vérification
+**10 tests** : jour fermé moins ventilé donc moins refroidi, absence de `planning_ferme` sans effet
+(non-régression du Lot Q), clé `occupied` absente retombant sur le planning normal, apports internes
+suivant l'occupation, semaine mixte basculant **heure par heure** et non une fois pour tout le run,
+volets pouvant différer (vérifié en mode `imposed`, où seul le canal K agit), plus quatre tests de
+validation. 183/183.
+
+**Effet mesuré** sur une école en année type (zone C, 600 m³/h en occupation, 90 en fermeture) :
+**14 945 → 13 368 kWh de chauffage, soit 10,6 % de moins**. L'ordre de grandeur est cohérent avec les
+4 632 heures de fermeture sur 8 760.
+
+**Navigateur réel, 16/16**, dont la preuve que le débit est réellement réduit (345,6 → 51,8 m³/h) et
+que l'occupation et les consignes basculent bien sur les mêmes heures. Une vérification était
+d'abord passée **pour la mauvaise raison** — le débit valait 0 des deux côtés, faute d'avoir choisi
+un profil de ventilation dans le scénario de test : corrigée, la clause d'échappement qui masquait
+le cas retirée (même leçon qu'au Lot I).
+
+### Reste ouvert
+La fraction de 15 % est une convention appliquée par le bouton, pas un réglage exposé : on modifie
+le résultat en éditant le planning déduit. Le mode simplifié ne l'expose pas du tout. Les jours de
+fermeture sont uniformes : pas de distinction entre un week-end et des vacances longues, où l'on
+pourrait couper davantage.
 
 ---
 
