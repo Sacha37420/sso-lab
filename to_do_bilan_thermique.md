@@ -14,25 +14,30 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Lots F, G, H, I, K, L, M, N, O, P, Q, R, S, T et U livrés** (tests physiques automatisés,
-renouvellement d'air, apports internes, cadre de fenêtre, triangles au contact du sol, import météo
-automatique Open-Meteo + PVGIS TMY, résultats normalisés kWh/m²/an, checklist de progression,
-générateur de boîte, aide au calcul de `c_air_int`, plannings horaires, convection dynamique (vent +
-orientation), années type, mode simplifié pour un bâtiment réel existant, rayonnement transmis
-intégralement à travers un vitrage) — voir leur section respective pour le détail. Seul **Lot J**
-reste non commencé, en attente de cadrage utilisateur (voir sa section — plusieurs designs possibles
-pour les occultations mobiles). **Lot U (2026-08-08) est un correctif, pas une nouvelle
-fonctionnalité** — signalé par l'utilisateur en testant manuellement des fenêtres en 1D, il touchait
-`solver._propagate_solar`, partagée par les deux solveurs : jusqu'à 87 % du rayonnement solaire
-incident sur tout le catalogue de vitrages disparaissait du bilan avant ce correctif (voir sa
-section) — le plus significatif en gravité de tous les correctifs de cette phase 2.
+**Tous les lots sont livrés : F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T et U** (tests physiques
+automatisés, renouvellement d'air, apports internes, cadre de fenêtre, occultations mobiles,
+triangles au contact du sol, import météo automatique Open-Meteo + PVGIS TMY, résultats normalisés
+kWh/m²/an, checklist de progression, générateur de boîte, aide au calcul de `c_air_int`, plannings
+horaires, convection dynamique (vent + orientation), années type, mode simplifié pour un bâtiment
+réel existant, rayonnement transmis intégralement à travers un vitrage) — voir leur section
+respective pour le détail. **Lot J livré le 2026-08-09**, dernier lot restant, cadré avec
+l'utilisateur avant de coder (patron de factorisation, puis valeurs des deux profils usuels) — voir
+sa section, notamment le design en calque (`shading_profile_id`) qui a résolu le dilemme des deux
+options d'origine sans les compromis d'aucune des deux. **Lot U (2026-08-08) est un correctif, pas
+une nouvelle fonctionnalité** — signalé par l'utilisateur en testant manuellement des fenêtres en
+1D, il touchait `solver._propagate_solar`, partagée par les deux solveurs : jusqu'à 87 % du
+rayonnement solaire incident sur tout le catalogue de vitrages disparaissait du bilan avant ce
+correctif (voir sa section) — le plus significatif en gravité de tous les correctifs de cette
+phase 2.
 Chaque lot qui touche `_assemble_F`/`_assemble_F_hour` doit faire passer `python manage.py test api`
 avant/après modification — c'est tout l'intérêt du Lot F : détecter une régression au lieu de la
-découvrir en production (H, K, Q, I, R et U l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43 puis
-48/48 puis 70/70 puis 78/78 OK à chaque étape ; Q et R touchaient la factorisation LU du solveur, I a
-fait remonter un vrai trou de couverture par mutation testing, R un piège d'identité tautologique
-(la conservation d'énergie ne peut pas détecter un bug dans K), U l'inverse — un bug dans **F**, où
-cette même identité redevient légitime — voir leurs sections respectives). **Lot I livré avec un
+découvrir en production (H, K, Q, I, R, U et J l'ont fait, 15/15 puis 28/28 puis 36/36 puis 43/43
+puis 48/48 puis 70/70 puis 78/78 puis 91/91 OK à chaque étape ; Q, R et J touchaient la
+factorisation LU du solveur, I a fait remonter un vrai trou de couverture par mutation testing, R un
+piège d'identité tautologique (la conservation d'énergie ne peut pas détecter un bug dans K), U
+l'inverse — un bug dans **F**, où cette même identité redevient légitime — et J une variante des
+deux (un test avec soleil restait aveugle à un bug dans K, masqué par un canal F correct ; corrigé en
+retirant le soleil pour isoler le canal K) — voir leurs sections respectives). **Lot I livré avec un
 design différent de l'étape 2 d'origine** (tranché
 avec l'utilisateur avant de coder — voir sa section) : le vitrage garde son maillage complet sur une
 aire réduite plutôt que d'être remplacé par un résistor unique, pour ne pas perdre le gain solaire.
@@ -228,24 +233,104 @@ Aucun.
 
 ---
 
-## Lot J — Occultations mobiles (volets, stores)
+## Lot J — Occultations mobiles (volets, stores) ✅ livré le 2026-08-09
 
-### Constat
-Aucun moyen de simuler un volet fermé la nuit (fort impact sur les pertes par les baies) ni un
-store extérieur qui limite les apports solaires d'été — seule la paroi statique existe.
+### Ce qui a été fait
+Cadré avec l'utilisateur avant de coder, sur deux échanges successifs : d'abord confirmation que le
+patron de factorisation-par-combinaison-distincte (Lot Q/R) s'applique aussi ici pour éviter de
+refactoriser heure par heure, puis fourniture de deux profils usuels concrets (valeurs indicatives,
+pas une table réglementaire officielle — même esprit que le catalogue de parois) :
 
-### Étapes — à cadrer avec l'utilisateur avant de commencer (plusieurs designs possibles)
-1. Option la plus simple : un champ additionnel dans `BuildingWeatherPointSerializer`
-   (`volet_ferme: bool`, par triangle-groupe ou global) qui, quand actif, ajoute une résistance
-   supplémentaire fixe (volet fermé ≈ R additionnel usuel 0,2-0,25 m²·K/W) et annule `e_glo` pour
-   les triangles concernés à cette heure.
-2. Option plus fidèle : un second `ParoiModel` "volet fermé" par fenêtre, sélectionné dynamiquement
-   heure par heure selon un planning fourni par l'utilisateur (plus lourd à implémenter — l'
-   assemblage `_build_triangle_systems` est aujourd'hui figé une fois pour tout le run, pas recalculé
-   heure par heure).
-3. Trancher entre les deux avant d'écrire du code — la deuxième change la structure de mise en cache
-   des systèmes triangle (actuellement un seul système par `(paroi_model_id, dx_max)` pour tout le
-   run, cf. `building_solver.py:61-91`).
+| | Volet roulant (PVC/alu) | Store extérieur (toile/brise-soleil) |
+|---|---|---|
+| ΔR ajoutée | 0,20 m²·K/W | 0,08 m²·K/W |
+| Fs,dir (fermé) | 0,0 (opaque) | 0,15 |
+| Fs,dif (fermé) | 0,0 | 0,40 |
+
+Toujours **entièrement fermés** quand actifs — pas de position intermédiaire modélisée, comme
+explicitement demandé.
+
+**Design retenu, résolvant le dilemme des deux options d'origine** : ni un champ résistance globale
+(option 1, imprécis — un seul volet pour tout le bâtiment) ni un second `ParoiModel` complet par
+fenêtre fermée (option 2 littérale, qui aurait nécessité de recalculer `_build_triangle_systems`
+heure par heure) — un dispositif est un **calque** (`shading_profile_id`, nouveau champ sur chaque
+triangle, indépendant de `paroi_model_id`) appliqué PAR-DESSUS le vitrage existant : résistance
+ajoutée en série avec `h_e` (`1/(1/h_e + deltaR)`, PAR TRIANGLE) et rayonnement réduit
+(`e_dir *= fs_dir`, `e_dif *= fs_dif`) AVANT propagation dans `_propagate_solar`. `paroi_model_id`
+et `_build_triangle_systems` restent totalement inchangés — aucune reconstruction de maillage,
+seulement K/F modifiés au moment de l'assemblage, exactement comme le cadre de fenêtre (Lot I) ou
+`g_vent` (Lot G).
+
+**Restructuration de `building_solver.py`** : puisque `h_e` peut désormais varier PAR TRIANGLE (pas
+seulement par heure comme au Lot R), le motif `K_e_pattern` du Lot R (scalaire `h_e * pattern`
+précalculé une fois) ne suffit plus — remplacé par `_h_e_diagonal(h_e_vec, ...)`, qui construit la
+contribution directement depuis un vecteur PAR TRIANGLE (uniforme = `h_e` de l'heure si aucun volet
+fermé, réduit pour les seuls triangles concernés sinon). Coût O(nb triangles), négligeable devant la
+factorisation elle-même — reconstruite seulement pour chaque combinaison DISTINCTE `(g_vent, h_e,
+volets_fermes)` rencontrée, toujours paresseusement (Lot R). `volets_fermes` réutilise le `planning`
+24h du Lot Q (`PlanningEntrySerializer.volets_fermes`) — **un seul planning pour toutes les fenêtres
+à dispositif**, comme demandé, pas un planning par fenêtre. Contrairement à
+`debit_vent_m3h`/`apports_internes_w`, s'applique dans **tous** les modes intérieurs (y compris
+`'imposed'`) : `h_e` touche l'équation de chaque triangle, pas seulement le nœud d'air libre.
+
+**Piège découvert empiriquement en écrivant les tests (avant tout bug réel), instructif** : un
+premier test comparant un run « ouvert puis fermé » à un run « toujours ouvert », AVEC soleil, ne
+détectait PAS une mutation qui retire `volets_fermes` de la clé de cache — parce que la réduction
+optique (F, appliquée fraîchement chaque heure indépendamment du cache) suffisait à elle seule à
+créer un écart, masquant l'absence de mise à jour du côté K (résistance). Corrigé en retirant tout
+soleil du test : sans lui, le SEUL effet possible d'un volet fermé est la résistance ajoutée — un
+bundle réutilisé à tort pour la mauvaise heure fait alors disparaître TOUT écart avec « toujours
+ouvert » (vérifié par mutation : les deux scénarios deviennent bit-à-bit identiques). Même famille de
+leçon que le piège du Lot R (une identité peut être aveugle à un bug situé dans une partie du système
+qu'elle ne teste pas assez directement) mais sous une forme différente : ici il fallait ÉLIMINER un
+canal (l'optique) pour isoler l'autre (la résistance), pas changer d'oracle.
+
+**Backend** — champs ajoutés : `TriangleInputSerializer.shading_profile_id` (choix parmi
+`building_solver.SHADING_PROFILES`, défaut `None`) ; `PlanningEntrySerializer.volets_fermes` (bool,
+défaut `False`). **Piège du Lot K appliqué par anticipation** : `BuildingSerializer._build_envelope`
+reconstruit les triangles existants lors d'un PATCH partiel (`triangles` absent) — `shading_profile_id`
+ajouté explicitement à cette liste de reconstruction dès l'écriture du champ, pas découvert après
+coup. `geometry.py` (pass-through générique par exclusion, pas par inclusion) n'a nécessité AUCUNE
+modification — vérifié en le relisant plutôt que supposé.
+
+**Frontend** : nouveau module d'affichage `shading-profiles.ts` (id/label/description SEULEMENT —
+les valeurs physiques elles-mêmes vivent uniquement côté backend, un seul point de vérité). Page
+Bâtiment : sélecteur d'occultation par groupe OBJ, même patron que l'assignation de paroi/condition
+limite déjà en place. Page Calcul 3D : 4e colonne optionnelle du planning existant
+(`volets_fermes`), et la condition qui limitait l'envoi du `planning` aux modes libre/thermostat a
+été retirée (les 3 champs ventilation restent ignorés en mode imposé côté backend, mais
+`volets_fermes` doit désormais passer dans tous les cas). **Écart UI assumé** : le panneau
+« Planning horaire » reste visible seulement en modes libre/thermostat (même gating que le
+renouvellement d'air) — un utilisateur en mode imposé ne peut donc pas configurer de volets depuis
+l'UI, bien que l'API le permette (vérifié directement) ; cohérent avec le fait qu'aucun réglage
+n'est exposé pour le mode imposé de toute façon (T_int fixée artificiellement, cas déjà secondaire
+dans cette app).
+
+**Tests** (`backend/api/tests.py`, `MovableShadingTest` + `TriangleShadingSerializerTest`, 17
+nouveaux) : catalogue sain, formule série indépendante, volet roulant fermé ≡ h_e réduit à la main +
+rayonnement nul (équivalence exacte), store extérieur ≡ identité de conservation étendue à un terme
+calculé à la main (transmission partielle, pas nulle), deux triangles à dispositifs différents
+divergent, effet en mode imposé confirmé, non-régression (triangle sans dispositif jamais affecté),
+préservation lors d'un PATCH partiel (`_build_envelope` appelé directement sur une instance
+`Building()` non sauvegardée — aucun accès DB, cohérent avec le reste de `tests.py`), validation des
+deux nouveaux champs de serializer. Mutation testing : clé de cache (voir piège ci-dessus), formule
+de résistance série, réduction optique — les 3 confirmées détectées après correction du test de
+transition. 91/91 tests au total, `manage.py check` propre.
+
+**Vérifié en réel de bout en bout sur l'image rebuildée**, via le chemin API public complet (pas
+seulement `run_building_simulation` directement) : création d'un bâtiment avec un triangle vitrage
++ volet-roulant (`BuildingSerializer`), sauvegarde en base, rechargement, **PATCH partiel
+(vertices seul) confirmant `shading_profile_id` survit** (piège du Lot K vérifié sur le vrai flux
+DB, pas seulement l'instance non sauvegardée des tests), validation `BuildingCalculRequestSerializer`
+avec un planning `volets_fermes`, puis simulation complète réussie. `ng build` propre.
+
+### Reste ouvert
+Orientation de la façade par rapport au vent toujours pas modélisée pour `h_e` de base (simplification
+du Lot R, inchangée). Pas de planning volets par groupe/fenêtre (un seul planning global, comme
+demandé — une évolution possible si le besoin apparaît). Pas d'indicateur visuel dans le viewer 3D
+pour les triangles ayant un dispositif assigné (seul le compteur du groupe le confirme). Panneau
+« Planning horaire » invisible en mode imposé (voir ci-dessus). Non vérifié en navigateur réel (même
+réserve que les autres lots récents).
 
 ---
 
