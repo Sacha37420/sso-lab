@@ -1,4 +1,4 @@
-# bilan-thermique — to_do.md (Phase 2 : fiabilité, physique manquante, ergonomie)
+# bilan-thermique — to_do.md (Phase 2 : fiabilité, physique manquante, ergonomie · Phase 3 : correctifs + environnement fin)
 
 Lots A→E livrés (`git log` du sous-module) : scaffold, page Théorie + Calcul 1D, bibliothèque de
 parois, catalogue de départ (vitrages/murs ITE-ITI/toitures RT2005-RT2012-RE2020), maillage
@@ -62,6 +62,15 @@ comme point d'entrée pédagogique vers la méthode complète ; les deux décisi
 de coder (regroupement des faces par mur, distinction paroi opaque/vitrage) ont été résolues sans
 cadrage utilisateur supplémentaire — voir sa section pour le détail et les découvertes en réel
 (limite `MAX_WALLS_SIMPLIFIED_MODE`, cascade de raffinement).
+
+**La phase 2 est close.** La suite du document ouvre une **phase 3** (section « Phase 3 — analyse de
+relecture + demandes utilisateur », plus bas), issue d'une relecture complète de l'application le
+2026-08-09 et de quatre demandes d'évolution + un bug bloquant signalés par l'utilisateur : Lots W
+(correctif bloquant du mode simplifié), X (écarter le bâtiment étudié de son propre environnement),
+Y (créer un bâtiment depuis ses coordonnées hors mode simplifié), Z (végétation), AA (terrain/sol),
+AB (correctifs physiques et de restitution), AC (mise à jour des limites de la page Théorie). La
+section d'analyse qui les précède (A/B/C) est à lire avant d'attaquer n'importe lequel d'entre eux —
+plusieurs lots corrigent des choses affirmées à tort dans les sections de la phase 2 ci-dessous.
 
 À lire intégralement avant tout lot, comme pour tout cahier des charges du lab. Mêmes règles que le
 reste de `dev/` (CLAUDE.md racine) : mémoire tenue à jour, demander avant tout commit/push et avant
@@ -996,6 +1005,696 @@ normale → pincé exactement à 16°C.
 Pas de vérification en navigateur réel (même réserve que les autres lots récents). Les six profils
 sont des valeurs indicatives usuelles (GTB/GTC, ADEME), pas une table réglementaire officielle —
 même statut que le catalogue de parois.
+
+---
+
+# Phase 3 — analyse de relecture + demandes utilisateur (2026-08-09)
+
+Relecture complète de l'application demandée par l'utilisateur une fois la phase 2 terminée
+(`solver.py`, `building_solver.py`, `shadow.py`, `geometry.py`, `geodata.py`, `weather_source.py`,
+`serializers.py`, `views.py`, `tasks.py`, `seed_paroi_catalogue.py`, et tout le parcours Angular
+Mode simplifié → Bâtiment → Environnement → Calcul 3D), en trois volets : **ce qui mérite d'être
+souligné**, **ce qui manque à la page Théorie côté limites**, **les erreurs physiques ou
+méthodologiques réelles** (au-delà des simplifications déjà assumées). S'y ajoutent quatre demandes
+d'évolution et un bug bloquant signalés par l'utilisateur.
+
+Les sources de données externes citées plus bas (couches IGN, tags OSM, API d'altimétrie) ont
+toutes été **vérifiées par appel réel** pendant cette analyse, jamais reprises de mémoire — voir
+les résultats chiffrés dans chaque lot concerné.
+
+---
+
+## A — Ce qu'il faut souligner de l'analyse
+
+**A1. L'architecture tient.** Le pari de départ (« un triangle = une paroi 1D, toutes couplées à un
+nœud d'air unique ») a absorbé sans refonte : le renouvellement d'air, les apports internes, le
+cadre de fenêtre, le contact au sol, les occultations mobiles, la convection dynamique, les
+plannings horaires et le calendrier d'occupation. Chacun s'est ajouté comme un terme sur `K` ou sur
+`F`, jamais comme une réécriture. Le seul point dur récurrent (des paramètres qui entrent dans `K`
+et non seulement dans `F`) a été traité une bonne fois par la factorisation-par-combinaison-distincte
+mise en cache paresseusement (`_factorize_for`/`bundles`), qui a ensuite servi telle quelle aux Lots
+R et J. C'est le point le plus solide du code.
+
+**A2. La séparation « modules purs » est réellement respectée.** `solver.py`, `building_solver.py`,
+`geometry.py`, `shadow.py`, `geodata.py`, `weather_source.py` ne dépendent d'aucun modèle Django et
+sont testables sans base ni réseau (les parties réseau sont systématiquement isolées de leur partie
+assemblage — `fetch_*` vs `_assemble_*`). C'est ce qui rend les 91 tests possibles et rapides.
+À préserver dans tout lot de la phase 3.
+
+**A3. Le partage de `_propagate_solar` entre 1D et 3D est un multiplicateur, dans les deux sens.**
+Le Lot U l'a montré : un seul bug dans cette fonction faussait *simultanément* les deux solveurs, et
+un seul correctif a réparé les deux. C'est un bon design, mais il implique que **toute modification
+de ce module doit être considérée comme touchant les deux solveurs**, jamais « juste le 1D ».
+
+**A4. Les garde-fous de charge sont cohérents entre eux** (`MAX_NODES`, `MAX_TOTAL_DOF`,
+`MAX_TRIANGLES`, `MAX_WEATHER_POINTS`, `MAX_REALTIME_RAYCAST_OPS`, `MAX_DISTINCT_BOUNDARY_COMBOS`,
+mutex lab-wide sur `Job`) et chacun échoue avec un message qui dit quoi faire. Sur un hôte 2 vCPU /
+16 Go partagé par tout le lab, c'est ce qui empêche un run pathologique de bloquer les autres apps.
+
+**A5. En revanche, la couverture « chemin réel » est asymétrique.** Le backend est testé finement
+(91 tests, plusieurs vérifiés par mutation testing) ; le frontend ne l'est pas du tout, et **aucun
+lot de la phase 2 n'a été vérifié dans un navigateur réel** — chaque section « Reste ouvert » le
+répète. Le bug 2.2.1 signalé par l'utilisateur (voir Lot W) en est la conséquence directe et
+mesurable : le mode simplifié n'a jamais pu dépasser sa première étape depuis sa livraison, alors
+que ses 56 tests backend passaient. **Toute la phase 3 doit se terminer par une vérification en
+navigateur, pas par un `ng build` propre.**
+
+**A6. Le géoréférencement est devenu le pivot silencieux de l'application.** `georef_lat/lon`
+conditionne la météo réelle (position solaire), la génération d'environnement et l'alignement des
+obstacles ; `georef_north_offset_deg` conditionne l'orientation de toutes les façades ;
+`georef_ground_z` conditionne l'altitude des obstacles IGN. Les trois sont des champs de formulaire
+optionnels sans aide à la saisie, et deux d'entre eux (offset nord, altitude sol) n'ont **aucun**
+retour visuel permettant de détecter une erreur. Une erreur de 90° sur l'offset nord fausse tout le
+bilan solaire sans qu'aucun garde-fou ne se déclenche. À traiter (Lot AA pour `georef_ground_z`, à
+part pour l'offset nord).
+
+---
+
+## B — Limites : ce qui manque à la page Théorie
+
+La page Théorie (section 01 « Portée et hypothèses », encadré « Hors périmètre », et section 12
+« Extensions possibles ») décrit correctement le modèle **tel qu'il était à la fin du Lot E**. Elle
+n'a été retouchée depuis que pour le Lot U (section 05). Deux problèmes distincts :
+
+### B1 — Deux affirmations sont devenues fausses
+
+- Section 01 : « Hypothèse assumée : une valeur **constante sur toute la durée du calcul** [pour les
+  apports internes] […] un profil horaire est une extension possible (section 12) ». **Le Lot Q a
+  livré ce profil horaire** (`planning`, 24 entrées). Le texte décrit donc une limite qui n'existe
+  plus.
+- Section 12 : « **Couplage multizone** — en cas 2, le nœud d'air intérieur ne voit ici qu'une seule
+  paroi ; un bâtiment réel somme les contributions `hᵢ·(Tₙ − T_air,int)` de chaque paroi du local sur
+  la même ligne du système ». C'est exactement ce que fait `_assemble_global_kc` depuis le Lot D. Ce
+  qui reste une vraie limite, c'est le **mono-zone** (un seul nœud d'air pour tout le bâtiment), pas
+  la sommation multi-parois — le paragraphe désigne la mauvaise limite.
+
+### B2 — Onze limites réelles ne sont écrites nulle part
+
+Aucune n'est un bug : ce sont des simplifications légitimes, mais **non déclarées**, donc invisibles
+pour quiconque lit la page Théorie pour savoir ce que vaut un résultat. À ajouter (voir Lot AC pour
+la rédaction) :
+
+1. **`h_e` est un coefficient global convection + rayonnement.** La corrélation de Jürges
+   (5,8 + 3,94·v) inclut l'échange radiatif grande longueur d'onde avec l'environnement supposé à
+   `t_ext`. Conséquence concrète, jamais dite : **une surface ne peut jamais descendre sous la
+   température de l'air**. Le refroidissement radiatif nocturne par ciel clair (une toiture réelle
+   descend 3 à 6 K sous `t_ext`) est structurellement impossible dans ce modèle — ce qui sous-estime
+   les déperditions nocturnes et surestime la surchauffe d'été.
+2. **`h_e` est identique pour toutes les façades**, quelle que soit leur orientation par rapport à la
+   direction du vent (déjà écrit dans le code, jamais sur la page). Face au vent / sous le vent, un
+   écart d'un facteur 2 sur `h_e` est courant.
+3. **Les propriétés optiques τ/r/α sont à incidence normale et constantes**. Sur un vitrage réel, τ
+   s'effondre au-delà de ~60° d'incidence (≈ 0,87 à 0° → ≈ 0,4 à 75°). Le modèle applique 0,87 à
+   toutes les incidences : **surestimation des apports solaires par les vitrages**, maximale en
+   façade est/ouest le matin/soir et en mi-saison, exactement là où le confort d'été se joue.
+4. **Le solaire transmis (Lot U) chauffe l'air instantanément et intégralement.** Dans un local réel,
+   il frappe d'abord le sol et les parois intérieures, y est absorbé, stocké, puis restitué avec un
+   déphasage de plusieurs heures. Ici il n'y a ni absorption intérieure, ni stockage, ni
+   re-rayonnement, ni fraction ressortant par la fenêtre. C'est la simplification la plus lourde de
+   conséquence sur la dynamique jour/nuit d'un bâtiment vitré.
+5. **L'inertie intérieure est une capacité pure sans résistance.** `c_air_int` est censé représenter
+   « air + mobilier » (et, en pratique, cloisons et planchers intermédiaires — c'est le seul endroit
+   possible). Or elle est branchée directement sur le nœud d'air, sans surface ni résistance
+   superficielle : cette masse réagit **instantanément**. Une inertie réelle est séparée de l'air par
+   1/hᵢ puis diffuse lentement. Le modèle surestime donc l'amortissement rapide et sous-estime le
+   déphasage.
+6. **Aucune inertie ni résistance de sol sous un plancher `boundary='ground'`.** Voir C4 — c'est à la
+   fois une limite à déclarer et une erreur à corriger.
+7. **Le diffus est isotrope.** Pas de renforcement circumsolaire ni de bande d'horizon (modèles de
+   Hay/Perez). Écart usuel de 5 à 15 % sur l'irradiation reçue par une façade verticale.
+8. **Les obstacles sont parfaitement noirs.** Le facteur de vue du ciel occulté (`compute_sky_view_factors`)
+   *retire* la fraction de ciel masquée sans que l'obstacle ne réémette ni ne réfléchisse quoi que ce
+   soit. Combiné à l'albédo du sol absent (déjà déclaré), le modèle **sous-estime systématiquement les
+   apports diffus en milieu dense** — précisément le cas d'usage de la génération automatique
+   d'environnement.
+9. **L'ombrage précalculé est discrétisé à 15°** en azimut et en élévation (`lookup_visibility` prend
+   la case la plus proche). Un obstacle fin ou un bord de bâtiment fait basculer une heure entière de
+   « ombré » à « ensoleillé ». En particulier, tout soleil entre 0° et 7,5° d'élévation est évalué à
+   0° — rayon rasant, presque toujours bloqué. Le mode `realtime` existe précisément pour ça, mais
+   rien sur la page ne dit quand il devient nécessaire.
+10. **Les résultats sont des besoins, pas des consommations.** `heating_kwh`/`cooling_kwh` sont
+    l'énergie qu'il faut fournir *à l'air du local*, avec un thermostat idéal (puissance illimitée,
+    réaction instantanée, pas de bande morte au-delà de `t_min`/`t_max`). Aucun rendement de
+    génération, d'émission, de distribution, ni COP. Le repère « RT2012 ≈ 50 kWh/m²/an » affiché sur
+    le dashboard porte déjà cette réserve ; la page Théorie non.
+11. **Aucune physique de l'humidité.** Pas de chaleur latente (ni sur la ventilation, ni sur les
+    occupants), pas de condensation, pas de transferts de vapeur dans les parois. Une VMC réelle
+    évacue une part notable de son énergie en latent.
+
+À noter aussi, plus mineur : la page Théorie ne mentionne **aucun** des Lots G à V par leur effet
+(ventilation, apports internes, cadre, sol, volets, h_e/h_i dynamiques, plannings, calendrier
+d'occupation). Un lecteur qui s'en tient à la page ignore que ces termes existent.
+
+---
+
+## C — Erreurs physiques ou méthodologiques réelles
+
+Distinctes de B : ici, le modèle ne fait pas ce qu'il prétend faire, ou le restitue mal.
+
+### C1 — Le bâtiment étudié est chargé comme obstacle de son propre environnement ⚠️
+
+`geodata.generate_environment_mesh` extrude **tous** les bâtiments trouvés dans le rayon, sans
+exception. Le bâtiment étudié étant lui-même un bâtiment réel présent dans BD TOPO / OSM, il est
+importé une seconde fois dans le maillage d'obstacles — et `shadow.build_occluder_mesh` fusionne
+ensuite enveloppe + environnement, donc le solveur voit **deux exemplaires superposés** du même
+bâtiment. Pour un bâtiment issu du mode simplifié (créé depuis la même empreinte IGN), c'est un
+doublon exact. C'est la réponse à la question 2.1.3 : **non, rien n'est écarté aujourd'hui.** Détail,
+conséquences et correctif : **Lot X**.
+
+### C2 — Le dashboard appelle « gains » un flux qui n'inclut pas les gains principaux ⚠️
+
+`envelope_flux_w` (et donc `flux_positive_kwh`/`flux_negative_kwh`, affichés « Flux entrant total
+(gains) » / « Flux sortant total (pertes) ») vaut exactement `Σᵢ hᵢ·Aᵢ·(T_surface,i − T_air)` : le
+seul canal *surface d'enveloppe → air*. Il **exclut**, alors que tous alimentent le même nœud d'air :
+
+- le **rayonnement solaire transmis par les vitrages** (`F[air_idx] += value·area`, Lot U) — qui peut
+  être le premier poste de gain d'un bâtiment vitré, et qui a justement été ajouté pour ne plus
+  disparaître du bilan… mais reste invisible du dashboard ;
+- les **apports internes** (Lot H/Q) ;
+- le **renouvellement d'air** (`g_vent·(T_ext − T_air)`, Lot G/Q) ;
+- la **conductance des cadres de fenêtre** (Lot I).
+
+Les tuiles « Besoin chauffage / climatisation » restent justes (le résidu HVAC intègre bien tout).
+Ce sont donc les deux tuiles de flux qui sont mal nommées **et** incomplètes. Correctif proposé :
+**Lot AB**, avec un vrai bilan par poste plutôt qu'un simple renommage.
+
+### C3 — Dérive du planning et du calendrier d'occupation dès qu'une heure météo manque ⚠️
+
+`weather_source._assemble_weather_series` **saute** toute heure dont une donnée manque
+(`n_missing += 1; continue`) — décision volontaire et correcte en soi (ne rien inventer). Mais en
+aval, **deux mécanismes indexent le temps par la position dans le tableau** :
+
+- serveur : `slot = (heure_debut + hour_idx) % 24` (`building_solver`) pour la ventilation, les
+  apports internes et les volets (Lots Q et J) ;
+- client : `computeThermostatSetpoints(profile, calendar, heureDebut, nHours)` (Lot V) pour t_min/t_max,
+  qui dérive `hourOfDay = (heureDebut + h) % 24` et `dayIdx = ⌊(heureDebut + h)/24⌋`.
+
+Une seule heure manquante décale donc **définitivement** tout le reste du run d'une heure : la
+ventilation nocturne se déclenche à 23 h, les volets ferment une heure trop tôt, le week-end glisse.
+Deux heures manquantes réparties dans l'année suffisent à décaler la fin d'année de 2 h. Et c'est
+**silencieux** : `n_missing` n'apparaît que dans le message du `Job`. Correctif : **Lot AB**.
+
+### C4 — Le plancher au contact du sol échange comme s'il était en plein vent ⚠️
+
+Un triangle `boundary='ground'` (Lot K) échange avec `t_ground` **à travers `h_e`** — la même
+conductance que l'air extérieur, et depuis le Lot R **la même conductance dérivée du vent**. Deux
+problèmes distincts :
+
+- **Physiquement absurde depuis le Lot R** : le couplage d'un dallage à la terre se met à osciller
+  avec la vitesse du vent à 10 m. Le Lot K avait noté « un h_e distinct pour le sol reste une
+  extension possible » ; le Lot R a transformé cette approximation acceptable en incohérence.
+- **Quantitativement faux même à `h_e` constant** : `h_e = 25` → R = 0,04 m²·K/W, c'est-à-dire un
+  contact quasi parfait avec une source à 12 °C. Un plancher sur terre-plein réel voit s'ajouter la
+  résistance du sol lui-même et l'effet de bord (ISO 13370) : l'ordre de grandeur est 0,5 à 3 m²·K/W
+  selon la géométrie. Le modèle **surestime donc fortement les déperditions par le sol**, d'autant
+  plus que le plancher est bien isolé (la résistance manquante est en série avec celle de la paroi :
+  plus la paroi est isolée, plus l'écart relatif est important).
+
+S'y ajoute un manque côté catalogue : **il n'existe aucun modèle de plancher bas / dallage** dans
+`seed_paroi_catalogue.py`. Le mode simplifié impose pourtant de choisir un « modèle opaque » pour le
+groupe `sol` — l'utilisateur y met nécessairement un mur ou une toiture. Correctif : **Lot AB**.
+
+### C5 — Décalage UTC / heure locale sur toute la temporalité d'usage
+
+`weather_source` demande explicitement `timezone=UTC` à Open-Meteo, et PVGIS fournit `time(UTC)` —
+c'est **correct et nécessaire** pour la position solaire. Mais `heure_debut` et `jourDebut` (Lot V)
+sont des champs saisis à la main qui valent 0 et « lundi » par défaut, et **rien ne les préremplit
+depuis la période effectivement chargée**, que l'application connaît pourtant (`start_date`). Deux
+conséquences :
+
+- un profil d'occupation « 7 h – 19 h » s'applique en réalité de 8 h à 20 h en hiver et de 9 h à
+  21 h en été, en France ;
+- `jourDebut` demande à l'utilisateur de savoir quel jour de la semaine tombait le 1ᵉʳ janvier de
+  l'année choisie — sans quoi week-ends et vacances tombent au mauvais endroit.
+
+Ce n'est pas une erreur de code mais une erreur de conception d'interface, avec un effet physique
+réel sur le résultat. Correctif : **Lot AB**.
+
+### C6 — Le mode simplifié est bloqué à sa première étape 🔴
+
+Le bug signalé par l'utilisateur (2.2.1). Cause exacte identifiée, une ligne. Voir **Lot W**.
+
+### C7 — Fragilités mineures relevées au passage (à traiter en marge, sans lot dédié)
+
+- `geodata.extrude_footprint`/`extrude_footprint_grouped` : `polygon.buffer(0)` sur une empreinte
+  invalide peut retourner un **MultiPolygon**, sur lequel `.exterior` lève `AttributeError` — non
+  couvert par le `except GeodataError` de `search_nearby_buildings`, donc 500 au lieu d'un candidat
+  ignoré. Prendre la plus grande composante après `buffer(0)`.
+- `_first_exterior_ring` ne garde que l'anneau extérieur du premier polygone : les **cours
+  intérieures** (trous) sont comblées, et une empreinte multi-parties est tronquée. Acceptable pour de
+  l'occultation, faux pour un bâtiment étudié issu du mode simplifié (surface et volume surestimés,
+  donc débit de ventilation suggéré surestimé).
+- `search_nearby_buildings` trie par **distance au centroïde** de l'empreinte, pas par « empreinte
+  contenant le point cliqué » : sur une parcelle allongée ou en angle, le voisin peut sortir premier.
+- La lame d'air du double vitrage utilise un λ équivalent (0,094) intégrant convection et
+  rayonnement — bon choix en régime permanent, mais son `alpha = 0,02` fait absorber 2 % du
+  rayonnement **volumétriquement dans l'air**, alors que cette énergie est en réalité absorbée aux
+  faces de verre. Effet négligeable, à noter seulement.
+
+---
+
+## Lot W — 🔴 Correctif bloquant : le mode simplifié ne dépasse jamais l'étape 1
+
+### Constat (signalé par l'utilisateur, 2.2.1)
+« J'ai testé le mode simplifié mais après avoir repéré le bon bâtiment j'ai beau le choisir il ne se
+passe rien. »
+
+### Cause exacte
+`frontend/src/app/pages/mode-simplifie/mode-simplifie.component.ts` — `selectCandidate(i)` ne fait
+que `this.selectedCandidateIndex.set(i)`. Or le signal `step` est initialisé à `'recherche'` et
+**aucun code ne le fait jamais passer à `'creation'`** : les deux seuls `step.set()` du composant
+sont `'configuration'` (dans `loadRefinedBuilding`, ligne 236) et `'termine'` (dans `save`, ligne
+299). Côté template, la section 2 est gardée par
+`@if (selectedCandidate && step() !== 'recherche')` (ligne 73) et son formulaire par
+`@if (step() === 'creation')` (ligne 81).
+
+Cliquer « Choisir » applique donc uniquement la classe `.active` sur la ligne du candidat — rien
+d'autre ne peut se produire. **L'état `'creation'` est inatteignable, donc les étapes 2, 3 et 4 du
+mode simplifié n'ont jamais été utilisables dans un navigateur depuis la livraison du Lot T** (le
+2026-08-08). Les 56 tests backend du Lot T passaient parce qu'ils testent l'API, pas le parcours ;
+la section « Reste ouvert » du Lot T annonçait d'ailleurs « pas de vérification dans un navigateur
+réel ». C'est la démonstration la plus nette du point A5.
+
+### Étapes
+1. `selectCandidate(i)` doit faire avancer l'étape : `this.selectedCandidateIndex.set(i)` **puis**
+   `this.step.set('creation')`. C'est le correctif minimal et suffisant.
+2. Proposer un nom de bâtiment par défaut au passage (`buildingName` est vide et le bouton
+   « Créer et subdiviser » est `[disabled]` tant qu'il l'est — sinon l'utilisateur voit apparaître
+   une étape 2 dont le seul bouton est grisé, ce qui reproduit le même sentiment de « rien ne se
+   passe »). Quelque chose comme `Bâtiment ${distance} m — ${source}`, modifiable.
+3. Permettre de **revenir** au choix du bâtiment : une fois `step === 'creation'`, la liste des
+   candidats disparaît (elle est sous `@if (step() === 'recherche')`) et il n'existe aucun moyen de
+   changer d'avis sans recharger la page. Ajouter un bouton « Changer de bâtiment » qui repasse à
+   `'recherche'` en conservant `candidates()` (ne pas relancer la recherche réseau).
+4. Vérifier au passage que le reste de l'enchaînement fonctionne réellement en navigateur —
+   c'est la première fois qu'il sera exécuté : création → `refineBuildingMesh` → rechargement →
+   configuration par paroi → `generateAssignment` → aperçu 3D → sauvegarde → étape 4. Les étapes 3
+   et 4 n'ont, elles non plus, jamais tourné dans un navigateur.
+5. Contrôler en particulier deux points repérés à la lecture, qui ne se manifesteront qu'une fois le
+   parcours débloqué :
+   - `generateAssignment` répartit le vitrage par `pos % step === 0` avec
+     `step = round(1/ratio)` : à 20 % demandé, `step = 5` → exactement 20 % ; mais à 30 %,
+     `step = 3` → 33 % ; à 40 %, `step = round(2,5) = 2` → 50 %. L'écart peut atteindre 10 points.
+     Afficher le taux **réellement obtenu** à côté du taux demandé plutôt que de laisser croire à
+     une valeur exacte (le calcul est déjà disponible : `assignedCount` par groupe).
+   - le groupe `sol` se voit imposer un « modèle opaque » choisi dans une liste qui ne contient que
+     des murs et des toitures (cf. C4) — à relier au Lot AB, qui ajoute un modèle de plancher bas.
+
+### Portée
+Uniquement `mode-simplifie.component.ts/.html`. Aucun changement backend, aucun impact sur les 91
+tests existants. À faire **en premier** : c'est un blocage total d'une fonctionnalité livrée, et
+c'est aussi la page que l'utilisateur voudra rouvrir pour tester les lots suivants.
+
+---
+
+## Lot X — Écarter le bâtiment étudié du maillage d'environnement
+
+### Constat (question 2.1.2 de l'utilisateur → 2.1.3)
+« Comment traites-tu les éléments d'environnement (type bâtiments) qui ont une intersection non
+nulle avec notre bâtiment, les supprimes-tu bien pour passer à l'étape de modélisation 3D ? »
+
+**Réponse : non, aucun filtrage n'existe.** `geodata.generate_environment_mesh` extrude tous les
+bâtiments retournés par IGN/OSM dans la bbox, y compris celui qui est étudié — qui est, par
+construction, un bâtiment réel présent dans ces bases. `tasks.generate_environment_for_building`
+enregistre le tout comme `Environment` et le lie au `Building`. Puis
+`shadow.build_occluder_mesh(building_envelope, environment_envelope)` fusionne les deux : le solveur
+travaille avec **deux exemplaires superposés** du bâtiment étudié.
+
+### Pourquoi ce n'est pas anodin
+- Bâtiment issu du **mode simplifié** : le doublon est *exact* (même empreinte IGN, même hauteur).
+- Bâtiment issu d'un **import OBJ ou du générateur de boîte** : le doublon est *approximatif* et
+  décalé — deux volumes qui s'interpénètrent partiellement, ce qui est le pire cas (des façades
+  réelles se retrouvent à l'intérieur d'un obstacle).
+- Effet sur l'**ombrage direct** : les rayons partent à 1 mm au-dessus du centroïde, vers l'extérieur,
+  donc un doublon exact d'une forme **convexe** est majoritairement raté par les rayons — l'erreur est
+  donc *faible mais silencieuse*, ce qui est plus dangereux qu'un plantage. Sur une empreinte
+  **concave** (L, U, cour), les ailes du doublon bloquent bel et bien les ailes réelles, en plus de
+  l'auto-ombrage déjà correctement pris en compte : l'ombrage est compté deux fois.
+- Effet sur le **facteur de vue du ciel** : `compute_sky_view_factors` tire 128 directions par
+  triangle dans tout l'hémisphère visible ; les directions rasantes touchent le doublon. `F_ciel` est
+  sous-estimé, donc les apports diffus aussi, sur *tous* les triangles.
+- Effet sur les **limites de maillage** : le doublon consomme des sommets/triangles sur
+  `MAX_VERTICES`/`MAX_TRIANGLES` et peut, via le `break` de la boucle d'extrusion, **évincer un vrai
+  voisin** plus éloigné.
+
+### Étapes
+1. Construire l'**empreinte 2D du bâtiment étudié** dans le repère où l'environnement est généré :
+   union (shapely, déjà une dépendance) des projections XY de ses triangles — le plus simple et le
+   plus robuste étant l'union des triangles `boundary='ground'` s'il y en a, avec repli sur
+   l'enveloppe convexe de tous les sommets sinon (un OBJ importé peut n'avoir aucun triangle marqué
+   `ground`). Attention : cette empreinte est dans le repère **local** du bâtiment, alors que les
+   empreintes candidates sont converties par `local_xy` puis `_rotate_xy(north_offset_deg)` — donc
+   comparer dans le repère local, après rotation, jamais avant.
+2. Écarter tout candidat dont l'intersection avec cette empreinte est significative. **Ne pas utiliser
+   `intersects`** : en tissu urbain, des mitoyens réels *touchent* légitimement l'empreinte étudiée et
+   doivent rester des obstacles. Critère proposé : aire d'intersection / aire du candidat > un seuil
+   (0,3 par exemple), ou `overlaps` avec un `buffer(-0.5)` pour tolérer les écarts de digitalisation
+   entre la modélisation de l'utilisateur et la donnée IGN.
+3. Faire remonter le résultat explicitement : `stats['buildings_self']` et un warning
+   « 1 bâtiment écarté — il correspond au bâtiment étudié », affiché comme les warnings existants.
+   Silencieux = invérifiable ; c'est justement ce qui a permis au problème de passer inaperçu.
+4. Ne câbler ce filtrage **que** sur `generate_environment_for_building` (qui connaît un `Building`).
+   La génération autonome (`generate_environment`, page Environnement) n'a aucun bâtiment de
+   référence : y ajouter un filtrage n'aurait pas de sens. Passer l'empreinte en paramètre optionnel
+   de `generate_environment_mesh`, défaut `None` = comportement actuel.
+5. Cas limites à trancher pendant l'implémentation :
+   - **Aucun candidat écarté** alors qu'on en attendait un (bâtiment absent d'OSM, ou empreinte
+     manuelle très éloignée de la réalité) : le signaler comme warning plutôt que de laisser croire au
+     filtrage.
+   - **Plusieurs candidats écartés** : signe probable d'un `georef_north_offset_deg` ou d'un
+     `georef_lat/lon` faux — c'est un excellent détecteur d'erreur de géoréférencement (cf. A6), à
+     exploiter comme tel dans le message.
+   - Un **mitoyen conservé** reste un obstacle, mais la paroi mitoyenne du bâtiment étudié devrait
+     physiquement être adiabatique plutôt qu'exposée à `t_ext`. Hors scope de ce lot (ce serait un
+     troisième `boundary`, après `exterior_air` et `ground`) — à mentionner dans le message et dans
+     les limites de la page Théorie.
+6. Tests : empreintes synthétiques, sans réseau (comme tout le reste de `geodata` — la partie réseau
+   reste isolée). Doublon exact → écarté. Mitoyen partageant une arête → conservé. Voisin disjoint →
+   conservé. Recouvrement partiel à 50 % → écarté. Rotation `north_offset_deg = 90°` → même résultat
+   (vérifie l'étape 1, le piège de repère).
+
+### Dépendance
+Aucune. À faire juste après le Lot W : c'est le correctif qui a le plus d'effet sur la justesse d'un
+calcul avec environnement automatique, et tous les lots suivants (Z végétation, AA terrain) ajoutent
+des obstacles dans le même maillage — autant que le filtrage existe avant.
+
+---
+
+## Lot Y — Créer un bâtiment depuis ses coordonnées, hors mode simplifié
+
+### Constat (question 2.1.2)
+« Pour le chargement du bâtiment hors mode simplifié on ne peut pas commencer par sélectionner le
+bâtiment à partir de ses coordonnées ? »
+
+**Aujourd'hui : non.** La page Bâtiment n'offre que deux points de départ — import d'un fichier
+OBJ/STL (`parseMeshFile`) et générateur de boîte (Lot O). La recherche par coordonnées existe
+pourtant déjà **entièrement** côté backend (`POST /api/batiments/rechercher/` →
+`geodata.search_nearby_buildings`, qui renvoie chaque candidat **déjà extrudé** en enveloppe groupée
+`sol`/`toiture`/`mur_1..N` avec les `boundary` corrects), mais elle n'est appelée que par le mode
+simplifié. C'est un chaînon manquant d'interface, pas une fonctionnalité à écrire.
+
+### Ce que ça change par rapport au mode simplifié
+Le mode simplifié impose son propre parcours (subdivision fine forcée, puis taux de vitrage par
+paroi). Sur la page Bâtiment, la recherche ne serait qu'une **troisième source de maillage** : elle
+remplit `vertices`/`triangles`/`groups` exactement comme un import OBJ, puis tout l'outillage
+existant s'applique tel quel (assignation par groupe, sélection manuelle au clic,
+`boundary`/`shading_profile_id` par groupe, raffinement à la demande, ombrage, environnement).
+
+### Étapes
+1. **Factoriser la recherche** en un composant partagé (formulaire lat/lon/rayon + liste de
+   candidats + bouton « Choisir »), utilisé par la page Bâtiment **et** par le mode simplifié. Ne pas
+   dupliquer : les deux pages divergeraient à la première évolution (et le mode simplifié vient
+   justement de montrer qu'un parcours non testé pourrit en silence). Émettre le `Candidate` choisi
+   en `output()`.
+2. Sur la page Bâtiment, brancher la sortie comme `onFileSelected`/`generateBox` le font déjà :
+   `currentBuildingId = null`, remplir `vertices`/`triangles`/`groups`, réinitialiser les
+   assignations, et — c'est le vrai gain par rapport à un import OBJ — **préremplir
+   `georefLat`/`georefLon` avec les coordonnées du candidat** et `georefNorthOffset = 0` (l'empreinte
+   est produite dans le repère est/nord réel, donc l'offset nord est nul **par construction** — ce
+   qui supprime d'un coup la principale source d'erreur silencieuse identifiée en A6).
+3. Préremplir aussi `georefGroundZ` si le Lot AA est déjà fait (altitude du terrain au point choisi) ;
+   sinon laisser vide et le brancher au Lot AA.
+4. **Relever `MAX_WALLS_SIMPLIFIED_MODE`** (30) ou le rendre paramétrable : cette limite existe parce
+   que le mode simplifié génère *un menu déroulant par paroi* (« inutilisable au-delà », 515 murs
+   observés en plein Paris). La page Bâtiment, elle, assigne par groupe avec sélection multiple et
+   dispose du sélecteur manuel au clic — la contrainte n'a pas lieu d'être. Passer le plafond en
+   paramètre de `search_nearby_buildings` (défaut inchangé pour le mode simplifié) plutôt que de le
+   supprimer.
+5. Ne **pas** forcer de raffinement : sur la page Bâtiment, `refineMesh` est déjà un contrôle
+   explicite. Un bâtiment issu de la recherche arrive avec 2 triangles par mur, ce qui est le bon
+   point de départ pour une assignation par groupe.
+6. Signaler dans l'interface ce que la source implique — mêmes réserves que le mode simplifié :
+   toiture toujours plate, hauteur parfois estimée depuis le nombre d'étages, cours intérieures
+   comblées (cf. C7).
+
+### Dépendance
+Aucune bloquante. Meilleur après le Lot W (le composant partagé sortira du code du mode simplifié
+une fois celui-ci vérifié en navigateur) et idéalement après AA (pour `georefGroundZ`).
+
+---
+
+## Lot Z — Végétation dans l'environnement (arbres, haies, bois)
+
+### Constat (question 2.1.1)
+« Pour le chargement de l'environnement j'aimerais qu'on puisse charger des éléments plus fins comme
+les arbres — y a-t-il une source utilisable ? »
+
+**Oui, deux, complémentaires — vérifiées par appel réel le 2026-08-09**, et qui reproduisent
+exactement la bascule IGN/OSM déjà en place dans `geodata.py` :
+
+| Source | Objet | Géométrie | Hauteur | Vérifié |
+|---|---|---|---|---|
+| `BDTOPO_V3:zone_de_vegetation` (IGN, WFS déjà utilisé) | zones boisées, haies | MultiPolygon | **absente** | 2000 features échantillonnées : `nature` ∈ Haie (929), Bois (929), Forêt fermée de feuillus (97), Lande ligneuse (18), Forêt fermée de conifères (14), Forêt fermée mixte (12), Forêt ouverte (1) |
+| `BDTOPO_V3:haie` (IGN, couche distincte) | haies seules | — | — | couche présente au GetCapabilities |
+| OSM `natural=tree` (nœuds) | **arbres individuels** | point | partielle | 337 arbres dans une bbox de ~800 × 700 m à Paris 10ᵉ ; `leaf_type` sur 294, `height` sur 134, `circumference` sur 127, `leaf_cycle` sur 76 |
+| OSM `natural=tree_row`, `natural=wood`, `landuse=forest` | alignements, bois | ligne / polygone | partielle | — |
+
+Points structurants qui en découlent :
+- **Seul OSM connaît l'arbre individuel.** IGN ne fournit que des zones. Pour « les arbres devant ma
+  maison », c'est donc OSM, y compris en France — l'inverse de la règle actuelle (IGN prioritaire).
+  Les deux sources sont **complémentaires, pas alternatives** : IGN pour les masses boisées, OSM pour
+  les sujets isolés.
+- **Aucune des deux ne donne une hauteur fiable.** IGN : pas d'attribut hauteur du tout (vérifié).
+  OSM : `height` sur 40 % des arbres au mieux, et en zone rurale bien moins. Une table de hauteurs par
+  type est donc inévitable — même statut assumé que le catalogue de parois : valeurs indicatives, pas
+  une référence. Le repli `circumference` → hauteur (relation allométrique) est possible mais ajoute
+  une approximation sur une approximation ; à ne faire que si l'utilisateur le demande.
+- Piste écartée après vérification : dériver la hauteur de végétation d'un modèle numérique de surface
+  (MNS − MNT). L'API d'altimétrie de la Géoplateforme **refuse** la ressource `ign_rge_mns_wld`
+  (`BAD_PARAMETER: 'ign_rge_mns_wld' is not an accepted resource`, testé) ; seul `ign_rge_alti_wld`
+  (le terrain) est exposé. Le LiDAR HD classifié (classe 5 = haute végétation) donnerait la vraie
+  hauteur, mais impose de télécharger des dalles LAZ de plusieurs centaines de Mo par km² — hors de
+  proportion avec cet hôte, à exclure explicitement.
+
+### Le vrai point dur : un arbre n'est pas une boîte opaque
+`shadow.py` ne connaît aujourd'hui que **bloqué / pas bloqué** (`intersects_any` → `int8` dans
+`per_triangle`). Un arbre à feuilles caduques transmet environ 10-20 % du rayonnement en été et
+40-70 % en hiver, feuilles tombées — précisément la saison où l'apport solaire compte le plus. Le
+modéliser en obstacle opaque **surestime lourdement les besoins de chauffage** ; l'ignorer surestime
+la surchauffe d'été. Trois niveaux de réalisation, à trancher avec l'utilisateur **avant de coder** :
+
+- **Z1 — géométrie seule, opaque.** Zones IGN extrudées et arbres OSM en volumes simples (prisme
+  octogonal ou sphère grossière sur tronc), injectés dans le même maillage d'obstacles. Aucun
+  changement à `shadow.py`, aucun changement au solveur. Faux en hiver, mais honnête si c'est écrit.
+- **Z2 — occulteur à transmittance.** `compute_visibility_grid` passe de `intersects_any` à un
+  test qui identifie **quel** triangle est touché (`intersects_first`/`intersects_id`), afin
+  d'appliquer un facteur (1 − k) au lieu d'un 0/1. `per_triangle` devient un tableau de flottants —
+  attention au poids du `JSONField` (`Building.sun_visibility`) : pour 1024 triangles × 24 azimuts ×
+  7 élévations, on passe de ~172 k entiers 0/1 à autant de flottants, soit un JSON plusieurs fois
+  plus gros. À mesurer avant de s'engager. Il faut aussi que le maillage occulteur porte une
+  transmittance **par triangle**, donc que `build_occluder_mesh` cesse d'être un simple concaténateur.
+- **Z3 — saisonnalité.** Deux grilles d'ombrage (feuillu en feuilles / hors feuilles) et une bascule
+  par heure selon la date. Suppose une notion de **date calendaire côté serveur**, que l'application a
+  jusqu'ici délibérément refusée (Lot V : « aucune notion de date calendaire réelle côté serveur »).
+  C'est donc une décision d'architecture, pas un réglage — à ne pas prendre en marge d'un autre lot.
+
+**Recommandation** : livrer Z1 et Z2 ensemble (Z2 sans Z1 n'a pas d'objet, Z1 sans Z2 donne un
+résultat qu'on sait faux), en traitant tout arbre comme persistant si `leaf_cycle`/`leaf_type` ne dit
+rien ; garder Z3 comme lot séparé, à décider ensuite.
+
+### Étapes (Z1 + Z2)
+1. `geodata.fetch_ign_vegetation(bbox)` et `geodata.fetch_osm_vegetation(bbox)` sur le modèle exact
+   des fonctions bâtiments existantes (mêmes `_request_with_retry`, mêmes `GeodataError`, même
+   séparation fetch / assemblage pour rester testable sans réseau).
+2. Table `VEGETATION_PROFILES` : hauteur par défaut et transmittances (feuilles / sans feuilles) par
+   `nature` IGN et par `leaf_type`/`leaf_cycle` OSM. Documenter la provenance des valeurs comme pour
+   `SHADING_PROFILES`.
+3. Volume : réutiliser `extrude_footprint` pour les zones IGN ; pour un arbre OSM ponctuel, un
+   prisme octogonal (rayon depuis `diameter_crown`, sinon `circumference`, sinon défaut) est
+   largement suffisant et évite d'introduire une primitive sphérique.
+4. **Poser une limite de comptage dédiée** : 337 arbres dans une seule bbox urbaine ×
+   (8 à 16 triangles chacun) mange `MAX_TRIANGLES` (20 000) à lui seul. Prévoir un garde-fou et un
+   tri par distance analogue à celui des bâtiments, et un warning explicite quand ça coupe.
+5. Option d'interface : cases à cocher « bâtiments / végétation » sur la génération d'environnement,
+   plutôt qu'un chargement systématique — le coût de calcul d'ombrage croît avec le nombre de
+   triangles occulteurs.
+6. Écrire la limite correspondante sur la page Théorie (Lot AC) : la végétation est un écran à
+   transmittance constante, sans saisonnalité tant que Z3 n'est pas fait.
+
+### Dépendance
+Après le Lot X (sinon la végétation s'ajoute à un environnement déjà faux) et de préférence après AA
+(un arbre doit être posé sur le terrain réel, pas à z = 0).
+
+---
+
+## Lot AA — Terrain / sol dans l'environnement
+
+### Constat (question 2.1.4)
+« Et pour finir dans l'environnement saurais-tu charger le sol ? »
+
+**Oui.** `geodata.py` note aujourd'hui « Terrain supposé plat : pas d'appel séparé à l'API Altimétrie
+IGN (limitée à 5 req/s, sans intérêt vu la faible variation de relief sur un rayon de ce type) ». Ce
+raisonnement tient pour une parcelle plate, pas pour un bâtiment en pente, en fond de vallée ou en
+contrebas d'un talus — et il ne couvre de toute façon pas les trois autres usages du terrain
+ci-dessous.
+
+**Sources vérifiées par appel réel le 2026-08-09 :**
+
+| API | Couverture | Résultat testé |
+|---|---|---|
+| `data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json` (`resource=ign_rge_alti_wld`) | France | **60 points en un seul appel** avec `delimiter=\|` et `zonly=true` → `{"elevations":[106.9, …]}`. RGE ALTI, pas de clé |
+| `api.open-meteo.com/v1/elevation` | monde | `{"elevation":[108.0, 109.0]}` — 1 m d'écart avec l'IGN sur les mêmes points, gratuit, sans clé |
+
+Les deux se recoupent à 1 m près là où elles se superposent, et la bascule IGN → Open-Meteo reproduit
+exactement le couple IGN/OSM déjà en place. Open-Meteo (Copernicus DEM ~90 m) est plus grossier :
+suffisant pour une altitude de référence, insuffisant pour un micro-relief.
+
+### Quatre usages distincts, à ne pas confondre
+1. **Préremplir `georef_ground_z`** (un seul point, un seul appel). Aujourd'hui ce champ est saisi à
+   la main, sans aide, et il pilote le calage vertical de **tous** les obstacles IGN
+   (`base_z = altitude_minimale_sol − ground_z_ref`). Laissé vide, il vaut 0 : tous les voisins issus
+   d'IGN sont placés à leur altitude NGF absolue (100 m et plus) au-dessus d'un bâtiment posé à z = 0.
+   L'ombrage est alors totalement faux, **sans aucun signe visible**. C'est le gain le plus important
+   du lot pour le plus petit coût — à faire en premier, indépendamment du reste.
+2. **Poser les obstacles OSM sur le terrain réel.** `fetch_osm_buildings` met `base_z = None` → z = 0
+   pour tous : hors de France, tous les voisins sont au même niveau quel que soit le relief. Une
+   requête d'altitude par empreinte résout le problème.
+3. **Maillage de terrain comme occulteur.** Grille régulière sur le rayon d'environnement (10 m de
+   pas sur 150 m = 31 × 31 = 961 points → 16 appels IGN de 60 points, ou 10 appels Open-Meteo de 100),
+   triangulée et ajoutée au maillage d'obstacles. Effet réel : masquage du soleil rasant par un relief
+   amont, correctement pris en compte par `compute_visibility_grid` et par `compute_sky_view_factors`
+   sans aucune modification de `shadow.py`.
+4. **Sol comme surface réfléchissante (albédo).** Ajouter un maillage de terrain ne le fait **pas** :
+   `shadow.py` ne calcule que de l'occultation. L'albédo est explicitement hors scope aujourd'hui
+   (page Théorie) et le rester ; ne pas laisser croire que « charger le sol » l'apporte.
+
+### Étapes
+1. Nouveau module pur `elevation.py` (même patron que `weather_source.py`/`geodata.py` : `fetch_*`
+   réseau séparé de l'assemblage, `ElevationError`, `_request_with_retry`), avec bascule
+   IGN → Open-Meteo sur le même test `is_in_france` que `geodata`.
+2. Batcher les points (60 par appel côté IGN, vérifié) et respecter la limite de débit annoncée
+   (5 req/s) — un `time.sleep` entre lots, pas de parallélisme.
+3. Endpoint `POST /api/altitude/` (synchrone, un point) pour l'usage 1, appelé depuis la page Bâtiment
+   au moment où lat/lon sont renseignés : un bouton « récupérer l'altitude » plutôt qu'un appel
+   automatique, pour rester cohérent avec la façon dont la météo est chargée.
+4. Usages 2 et 3 dans la tâche Celery existante `generate_environment_for_building` (déjà
+   asynchrone, déjà porteuse d'une barre de progression et de warnings).
+5. Pièges à surveiller :
+   - **Ne pas faire traverser le bâtiment par le terrain.** Le bâtiment est modélisé avec sa base à
+     z = 0 ; le terrain doit être décalé de `georef_ground_z` et, autour de l'emprise du bâtiment,
+     forcé au niveau de sa base (sans quoi un terrain en pente coupe les murs et bloque des rayons de
+     l'intérieur).
+   - **Coût du lancer de rayons** : le terrain est le plus gros contributeur en triangles. Pas de
+     grille fine par défaut ; rendre le pas paramétrable et le compter dans les warnings.
+   - Le terrain ne doit **jamais** devenir un triangle du `Building` : c'est de la géométrie
+     d'occultation, comme les obstacles (`Environment.envelope`, aucun `paroi_model_id`).
+6. Tests sans réseau sur la partie assemblage (grille → sommets/triangles, décalage vertical,
+   aplanissement sous l'emprise), comme pour `_assemble_weather_series`.
+
+### Dépendance
+L'usage 1 est indépendant et peut être livré seul — à faire tôt, il corrige une erreur silencieuse
+existante. Les usages 2 et 3 gagnent à venir après le Lot X.
+
+---
+
+## Lot AB — Correctifs physiques et méthodologiques (issus de la section C)
+
+Quatre correctifs indépendants, regroupés parce qu'ils sont tous courts et tous dans la même famille
+(le modèle ne fait pas ce que l'interface annonce). À faire dans cet ordre, du plus faussant au moins
+faussant. **Chacun doit faire passer `python manage.py test api` avant/après** — c'est l'objet du
+Lot F, et AB1/AB3 touchent la boucle horaire et `_assemble_F_hour`.
+
+### AB1 — Dérive du planning et du calendrier sur heure météo manquante (C3)
+Le point le plus vicieux : silencieux, cumulatif, et il fausse à la fois la ventilation, les apports
+internes, les volets **et** les consignes de thermostat.
+
+Deux corrections possibles, à trancher :
+- **(a) Combler les trous** dans `_assemble_weather_series` par interpolation, en signalant les heures
+  interpolées. Rétablit l'alignement, mais contredit la décision explicite du Lot L (« on saute
+  l'heure plutôt que d'inventer une valeur qui fausserait silencieusement le bilan »).
+- **(b) Transporter l'heure réelle** : ajouter un champ `hour_of_day` (0-23) — et, pour le Lot V, un
+  `day_index` — à chaque point météo, rempli par `weather_source` depuis le `datetime` qu'il possède
+  déjà, puis l'utiliser à la place de `(heure_debut + hour_idx) % 24`. `heure_debut` devient un repli
+  pour les séries collées à la main. **Recommandé** : ça respecte la décision du Lot L, ça supprime
+  aussi le problème C5 côté serveur, et ça retire un champ manuel à l'utilisateur.
+
+Test : série avec un trou volontaire au milieu → le créneau de planning appliqué à la dernière heure
+doit être le bon (identité exacte, pas une convergence).
+
+### AB2 — Bilan énergétique complet sur le dashboard (C2)
+Accumuler, dans la boucle horaire de `run_building_simulation`, les quatre canaux aujourd'hui absents
+(solaire transmis, apports internes, ventilation, cadres), en plus de l'existant, et les renvoyer
+dans `job.result`. Puis remplacer les deux tuiles actuelles par un bilan par poste — et vérifier que
+la somme des postes + variation de stockage ≈ HVAC, ce qui donne en prime un **contrôle de
+conservation d'énergie visible par l'utilisateur** (le Lot F a montré que c'est le meilleur détecteur
+de régression disponible). Renommer la tuile actuelle « Flux entrant par les surfaces d'enveloppe »,
+qui est ce qu'elle mesure réellement.
+
+Attention au piège documenté au Lot R : une identité de conservation peut être tautologique
+vis-à-vis du terme qu'elle est censée vérifier. Ici, les canaux ajoutés sont des termes de `F`, donc
+l'identité reste légitime (même raisonnement que le Lot U).
+
+### AB3 — Plancher sur terre-plein : résistance de sol et découplage du vent (C4)
+1. Découpler `h_e` du sol : un triangle `boundary='ground'` ne doit **jamais** utiliser le `h_e`
+   dérivé du vent. Correctif minimal dans `_h_e_diagonal`/`_assemble_F_hour` : forcer une valeur
+   propre au sol pour ces triangles.
+2. Introduire une **résistance de sol** `r_ground` (m²·K/W) en série, paramètre du payload avec une
+   valeur par défaut documentée (ordre de grandeur ISO 13370). Conductance résultante
+   `1/(1/h_sol + r_ground)`, exactement le même patron que le `delta_r` d'un volet fermé (Lot J) —
+   le mécanisme existe déjà, il n'y a pas de nouvelle structure à inventer.
+3. Ajouter au catalogue (`seed_paroi_catalogue.py`) au moins un **plancher bas sur terre-plein**
+   (dalle béton + isolant sous chape + revêtement) par génération réglementaire, `is_glazing=False`.
+   Sans ça, le mode simplifié et le Lot Y continuent d'imposer un mur au groupe `sol`.
+4. Test : identité exacte entre un triangle `ground` avec `r_ground` et un mur 1D dont on a ajouté
+   manuellement la même résistance — même méthode que le test `GroundBoundaryTest` du Lot K.
+
+### AB4 — Temporalité d'usage : préremplir heure et jour depuis la période chargée (C5)
+Une fois AB1(b) fait, `hour_of_day` est déjà transporté ; reste le **jour de la semaine** du premier
+point (`jourDebut`, Lot V) et la question **UTC vs heure locale**. L'application connaît la
+`start_date` demandée et les coordonnées : elle peut déduire les deux. À trancher : convertir la série
+en heure locale à l'affichage/à l'usage (en gardant l'UTC pour la position solaire, qui doit le
+rester), ou afficher explicitement « heures en UTC » et laisser l'utilisateur décaler. La première
+option est la bonne pour un utilisateur, la seconde est plus honnête vis-à-vis de la donnée —
+demander avant de coder.
+
+---
+
+## Lot AC — Page Théorie : mettre les limites à jour
+
+Dernier lot de la phase, une fois que les correctifs ci-dessus ont figé ce qui est vrai.
+
+### Étapes
+1. **Corriger les deux affirmations devenues fausses** (B1) : le profil horaire d'apports internes
+   existe (Lot Q) ; la sommation multi-parois sur le nœud d'air existe (Lot D) — la limite réelle est
+   le **mono-zone**, à reformuler comme telle.
+2. **Ajouter les onze limites de B2**, dans l'encadré « Hors périmètre » pour celles qui sont des
+   exclusions nettes, et dans le corps des sections concernées pour celles qui qualifient un terme
+   existant (h_e global convection+rayonnement en section 06 ; τ/α à incidence normale en section 05 ;
+   solaire transmis instantané en section 05 ; `c_air_int` sans résistance en section 08).
+3. **Documenter les termes livrés en phase 2** qui n'apparaissent nulle part sur la page :
+   renouvellement d'air, apports internes, cadre de fenêtre, contact au sol, occultations mobiles,
+   h_e/h_i dynamiques, plannings horaires, calendrier d'occupation. Une section « Du modèle 1D au
+   bâtiment complet » listant chaque terme, où il s'insère (`K` ou `F`, nœud de surface ou nœud
+   d'air) et sous quelle hypothèse, serait plus utile que de disséminer les mentions.
+4. **Documenter les termes ajoutés en phase 3** : filtrage du bâtiment étudié (Lot X), végétation à
+   transmittance constante et non saisonnière (Lot Z), terrain occultant sans albédo (Lot AA),
+   résistance de sol (Lot AB3).
+5. Distinguer clairement, dans l'encadré, **trois catégories** plutôt qu'une liste unique — c'est ce
+   qui manque le plus aujourd'hui : (i) hors périmètre définitif (ponts thermiques, multi-zone,
+   humidité), (ii) approximation quantifiée et assumée (diffus isotrope, τ à incidence normale,
+   grille d'ombrage à 15°), (iii) extension identifiée et chiffrable (albédo, IR ciel, saisonnalité
+   de la végétation).
+
+### Portée
+Uniquement `theorie.component.html`. Aucun code, aucun test — mais c'est le lot qui détermine si un
+tiers peut juger de ce que vaut un résultat produit par cet outil.
+
+---
+
+## Ordre recommandé
+
+1. **Lot W** — bloquant, une ligne de cause, remet en service une fonctionnalité livrée.
+2. **Lot X** — le correctif de justesse le plus important ; à faire avant d'ajouter quoi que ce soit
+   au maillage d'obstacles.
+3. **Lot AB1** puis **AB2**, **AB3**, **AB4** — correctifs physiques/restitution, indépendants entre
+   eux, tous courts.
+4. **Lot AA** (usage 1 d'abord, seul et immédiat ; usages 2-3 ensuite).
+5. **Lot Y** — ergonomie, réutilise l'existant, gagne à venir après AA.
+6. **Lot Z** — le plus lourd, et le seul qui demande un arbitrage d'architecture (Z1/Z2/Z3).
+7. **Lot AC** — en dernier, une fois que ce qui est vrai est stabilisé.
+
+Et, transversalement à toute la phase : **vérifier en navigateur réel**, systématiquement. C'est le
+seul point commun entre le bug 2.2.1 et le fait que personne ne l'a vu pendant un jour et demi.
 
 ---
 
