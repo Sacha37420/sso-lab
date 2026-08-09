@@ -1253,7 +1253,7 @@ Le bug signalé par l'utilisateur (2.2.1). Cause exacte identifiée, une ligne. 
 
 ---
 
-## Lot W — 🔴 Correctif bloquant : le mode simplifié ne dépasse jamais l'étape 1
+## Lot W — Correctif bloquant : le mode simplifié ne dépasse jamais l'étape 1 ✅ livré le 2026-08-09
 
 ### Constat (signalé par l'utilisateur, 2.2.1)
 « J'ai testé le mode simplifié mais après avoir repéré le bon bâtiment j'ai beau le choisir il ne se
@@ -1304,6 +1304,81 @@ réel ». C'est la démonstration la plus nette du point A5.
 Uniquement `mode-simplifie.component.ts/.html`. Aucun changement backend, aucun impact sur les 91
 tests existants. À faire **en premier** : c'est un blocage total d'une fonctionnalité livrée, et
 c'est aussi la page que l'utilisateur voudra rouvrir pour tester les lots suivants.
+
+### Ce qui a été fait
+Les cinq étapes ci-dessus, plus un correctif supplémentaire découvert **grâce à** l'étape 5 une fois
+le parcours débloqué (voir plus bas).
+
+1. **`selectCandidate` passe désormais à `'creation'`** — le correctif de fond, une ligne.
+2. **Nom proposé par défaut** : `Bâtiment <lat>, <lon>` (coordonnées et non distance/source :
+   `Building.name` est UNIQUE côté serveur, deux bâtiments cherchés depuis deux points différents
+   doivent pouvoir coexister). Ne réécrit jamais une saisie manuelle — il n'est reposé que si le
+   champ est vide ou contient encore le nom proposé pour le candidat précédent.
+3. **Bouton « Changer de bâtiment »**, limité à l'étape `'creation'` (au-delà, le `Building` existe
+   côté serveur et changer de candidat le laisserait orphelin). Ne relance pas la recherche réseau.
+4. `stride` au lieu de `step` comme variable locale dans `generateAssignment` — `step` est le signal
+   d'étape de l'assistant, qu'une locale homonyme masquait dans toute la portée. Sans effet
+   fonctionnel, mais c'est précisément l'ambiguïté au cœur du bug.
+5. **Taux de vitrage réellement obtenu affiché** sous chaque paroi, mesuré **en aire** et non en
+   nombre de triangles (deux triangles d'un même groupe n'ont pas la même aire — la cascade de
+   raffinement ne descend pas partout au même niveau, cf. Lot T), calculé une fois par génération
+   et non à chaque cycle de détection de changement.
+
+### Correctif supplémentaire — la répartition du vitrage elle-même était fausse
+L'étape 5 devait « afficher le taux obtenu plutôt que de laisser croire à une valeur exacte ». Une
+fois affiché en navigateur, il a montré que l'écart n'était pas l'inconvénient mineur annoncé dans le
+texte d'origine de ce lot (« jusqu'à 10 points ») :
+
+- `stride = round(1/ratio)` étant un **entier**, seuls les taux 1/N étaient atteignables. Pire, les
+  arrondis rendaient deux consignes différentes indiscernables : **30 % et 40 % donnaient tous deux
+  ≈ 33 %** (`1/0,4` vaut exactement 2,5 et `Math.round` arrondit au supérieur — l'estimation « 40 %
+  → 50 % » du texte d'origine était fausse, elle supposait un arrondi vers le bas).
+- Surtout, **au-delà de 50 % demandés, `stride` tombait à 1 et TOUS les triangles de la paroi
+  devenaient du vitrage** : une façade réglée à 75 % ou 95 % devenait 100 % vitrée, sans aucune
+  partie opaque. Écart maximal mesuré sur la grille des taux/maillages usuels : **25 points**.
+
+Remplacé par une répartition par **accumulateur** (Bresenham) :
+`round((pos+1)·ratio) > round(pos·ratio)`. Elle pose exactement `round(n·ratio)` triangles, également
+espacés — donc le comptage le **plus proche** du taux demandé pour un maillage donné (`round` et non
+`floor` : sur 16 triangles, 10 % donne 2 triangles = 12,5 % et non 1 = 6,25 %). Écart maximal
+ramené à **5 points** (cas d'une paroi de 8 triangles seulement) et **< 0,5 point** dès 256 triangles
+par paroi, c'est-à-dire dans tous les cas réels du mode simplifié. Aucun risque de régression : le
+mode étant bloqué depuis sa livraison, aucun bâtiment n'a jamais pu être produit par ce chemin.
+
+Le texte d'aide de l'étape 3 a été réécrit en conséquence (il annonçait « 20 % donne bien 20 % » —
+faux : cela dépend aussi du nombre de triangles de la paroi) et renvoie désormais vers l'étape 2 pour
+subdiviser plus finement si l'écart gêne.
+
+### Vérification
+**Première vérification en navigateur réel de toute cette application** (c'est le point A5 de
+l'analyse). Chromium via `lab-runner`, login Keycloak réel (`e2e_member`), bundle Angular réel servi
+par nginx derrière Caddy sur le domaine public, script jetable — délibérément PAS un second spec dans
+`frontend/e2e/` (CLAUDE.md impose un fichier unique par app, et le pipeline runner/lab-admin suppose
+ce format). **20/20 vérifications**, dont : étape 2 invisible avant le clic puis visible après (le
+bug lui-même), nom par défaut posé, nom manuel non écrasé, retour arrière sans second appel réseau,
+parcours complet jusqu'à l'étape 4, aperçu 3D rendu, et les trois taux obtenus (37,5 % pour 40 %
+demandés sur 16 triangles, 18,8 % pour 20 %, et surtout **75 % pour 75 %** au lieu de 100 %).
+
+Les réponses de l'API sont **stubbées** dans ce script : `e2e_member` n'a pas d'attribut `mail` dans
+`sso-lab/ldap/init.ldif`, donc pas de claim `email`, donc **403 sur tout appel API authentifié**
+(`api/authentication.py`) — le compte passe le flow de page mais pas l'API, limitation connue et
+valable pour toutes les apps du lab. Ce qui est vérifié ici est donc exactement ce que le bug
+cassait : la machine à états côté client (signal `step` + gardes `@if` du template), sur le vrai
+bundle dans un vrai navigateur. Les endpoints eux-mêmes restent couverts par les tests backend.
+`manage.py test api` → **95/95**, `manage.py check` propre, `ng build --configuration production`
+propre, déployé via `setup2.sh bilan-thermique --yes`.
+
+Détail relevé au passage, sans conséquence pour l'app : un attribut `name="opaque_{{g}}"`
+**interpolé** est lié à l'`@Input name` de `NgModel` et n'atteint jamais le DOM, contrairement à un
+`name` statique. Sans effet ici (aucun `<form>`, aucune soumission native), mais c'est ce qui rend
+ces champs non sélectionnables par `[name=…]` dans un test.
+
+### Reste ouvert
+Le groupe `sol` se voit toujours imposer un « modèle opaque » choisi dans une liste qui ne contient
+que des murs et des toitures — traité au **Lot AB3**, qui ajoute un plancher bas au catalogue. Le
+parcours n'a pas été exercé contre l'API réelle de bout en bout (voir la limitation `e2e_member`
+ci-dessus) ; le rendre possible supposerait d'ajouter un attribut `mail` au compte E2E dans
+`sso-lab/ldap/init.ldif`, ce qui concerne **toutes** les apps du lab et doit être décidé à part.
 
 ---
 
@@ -1683,7 +1758,8 @@ tiers peut juger de ce que vaut un résultat produit par cet outil.
 
 ## Ordre recommandé
 
-1. **Lot W** — bloquant, une ligne de cause, remet en service une fonctionnalité livrée.
+1. ~~**Lot W**~~ — ✅ livré le 2026-08-09. A remis en service le mode simplifié **et** corrigé au
+   passage une répartition du vitrage qui vitrait intégralement toute paroi réglée au-delà de 50 %.
 2. **Lot X** — le correctif de justesse le plus important ; à faire avant d'ajouter quoi que ce soit
    au maillage d'obstacles.
 3. **Lot AB1** puis **AB2**, **AB3**, **AB4** — correctifs physiques/restitution, indépendants entre
