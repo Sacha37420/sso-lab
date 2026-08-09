@@ -2406,6 +2406,74 @@ le lab est exposé sur Internet. À traiter dans `dev/`, pas ici.
 
 ---
 
+## Lot AD — Continuité de l'UI : chaque page son rôle, aucune redondance (proposé, non commencé)
+
+Audit demandé le 2026-08-09, après le constat que la végétation était introuvable depuis la page
+Environnement. **Rien n'est modifié ici** : constat + plan, à valider avant d'exécuter.
+
+### Cible énoncée par l'utilisateur
+- **Mode simplifié** : tout le parcours sur UNE page. ✅ déjà le cas.
+- **Parcours avancé** : une page pour le **bâtiment**, une page pour l'**environnement**, puis une
+  page qui **les regroupe** — en évitant les redondances entre les deux (le bâtiment étudié ne doit
+  pas se retrouver aussi dans l'environnement, ni intersecter ses obstacles) — et qui porte les
+  variables de calcul, la météo et le calendrier.
+
+### Constat : le découpage actuel ne correspond pas
+
+| Page | Ce qu'elle contient aujourd'hui | Où ça devrait être |
+|---|---|---|
+| **Bâtiment** | liste, édition, géoréférencement, recherche, boîte, raffinage, assignation | ✅ à sa place |
+| **Bâtiment** | **« Ombrage » : choix de l'environnement lié + lancement du précalcul** | ➜ Calcul 3D (c'est l'étape qui REGROUPE bâtiment et environnement) |
+| **Bâtiment** | **« Générer l'environnement pour ce bâtiment »** (aligné, filtre le bâtiment étudié, terrain, végétation) | ➜ Environnement |
+| **Environnement** | liste, import de fichier, **« Ou générer depuis des coordonnées »** (non aligné, sans filtrage, sans terrain) | ➜ à fusionner avec le générateur ci-dessus |
+| **Calcul 3D** | sélection du bâtiment, paramètres, intérieur, calendrier, ventilation, apports, planning, **mode d'ombrage**, météo, résultats | ✅ à sa place |
+
+### Les trois redondances réelles
+
+**R1. Deux générateurs d'environnement, dans deux pages, dont un strictement inférieur.**
+Celui de la page Bâtiment aligne sur le repère du bâtiment, écarte le bâtiment étudié (Lot X),
+sait charger terrain et végétation, crée l'`Environment` et le lie. Celui de la page Environnement
+ne fait rien de tout ça — son propre texte annonce « ne garantit **pas** l'alignement ». Deux
+chemins pour la même intention, avec des résultats de qualité différente et aucune indication de
+lequel choisir. **C'est la redondance principale.**
+
+**R2. Le filtrage du bâtiment étudié n'existe que sur un des deux chemins.**
+Conséquence directe de R1 : un environnement produit depuis la page Environnement contient le
+bâtiment étudié en double (il est lui-même dans IGN/OSM), puisque `self_envelope` n'y est pas fourni
+— exactement ce que le Lot X corrige sur l'autre chemin. C'est le point que l'utilisateur soulève
+(« éviter que le bâtiment soit dans bâtiment ET dans environnement »).
+
+**R3. L'étape qui regroupe les deux est éclatée sur deux pages.**
+Le lien bâtiment↔environnement et le précalcul d'ombrage — qui n'ont de sens que pour un COUPLE
+(bâtiment, environnement) — vivent sur la page Bâtiment, tandis que le mode d'ombrage
+(précalculé/temps réel) vit sur Calcul 3D. D'où le parcours actuel : Bâtiment (lier + précalculer)
+→ Calcul 3D (choisir le mode) → refus si périmé → retour Bâtiment. C'est la cause commune des
+points L1, L2 et U1 du relevé ci-dessus.
+
+### Plan proposé
+1. **Déplacer la génération d'environnement vers la page Environnement**, en gardant la version
+   complète (alignée, filtrante, terrain + végétation) et en supprimant l'autre. Elle a besoin d'un
+   bâtiment de référence : un sélecteur « aligner sur le bâtiment … » sur cette page, avec le cas
+   « aucun » qui redonne le comportement autonome actuel — et dit alors explicitement ce qu'on perd.
+2. **Déplacer le lien bâtiment↔environnement et le précalcul d'ombrage vers Calcul 3D**, dans le
+   bloc « Ombrage » qui existe déjà et ne porte que le mode. Le précalcul s'y lance donc là où son
+   absence bloque — ce qui règle L2 et U1 sans texte d'excuse.
+3. **Propager l'invalidation** (L1) : modifier un environnement doit périmer l'ombrage de tous les
+   bâtiments qui l'utilisent.
+4. **Généraliser le filtrage d'intersection** (R2) : aujourd'hui seul le bâtiment ÉTUDIÉ est écarté,
+   au-delà de 30 % de recouvrement. Un voisin qui chevauche partiellement l'enveloppe modélisée (OBJ
+   approximatif) reste interpénétré. À trancher : signaler, écarter, ou laisser.
+5. La page Bâtiment ne garde alors que le bâtiment ; la checklist du Lot N est à réaligner sur le
+   nouveau découpage (« environnement lié » et « ombrage à jour » ne s'y jugent plus).
+
+### Coût et risque
+Essentiellement du déplacement de blocs existants entre trois composants, sans changement de
+solveur ni d'API — sauf le point 3 (une ligne côté serializer) et le point 4 (à trancher). Le risque
+est surtout de casser un parcours en le déplaçant : à vérifier en navigateur réel page par page,
+comme les lots W à AC.
+
+---
+
 ## Hors scope — décisions déjà prises, à ne pas entreprendre sans en rediscuter
 
 La page Théorie (section « Portée et hypothèses ») exclut déjà explicitement, comme choix assumé et
