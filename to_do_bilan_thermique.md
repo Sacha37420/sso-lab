@@ -2534,6 +2534,60 @@ plus, et rien n'indique lequel est lié. Le générateur ne propose pas de carte
 
 ---
 
+## Lot AE — Le mode simplifié va jusqu'au résultat ✅ livré le 2026-08-09
+
+### Constat
+Question de l'utilisateur : « le mode simplifié fait bien tout de A à Z en simplifié ? » **Non.**
+Son étape 4 s'intitulait « Météo et calcul » et ne faisait **ni l'un ni l'autre** : elle affichait
+« rien à faire de plus » et renvoyait sur Calcul 3D. Manquaient donc l'environnement, l'ombrage, la
+météo, le calcul et le résultat — plus de la moitié du parcours. Pire, le calcul y aurait été
+**refusé** : un bâtiment neuf a son ombrage marqué périmé et Calcul 3D part en mode précalculé
+(point L2 du relevé). L'assistant conduisait donc l'utilisateur droit dans un mur.
+
+### Ce qui a été fait
+Deux étapes ajoutées, l'assistant va maintenant jusqu'au chiffre.
+
+**Étape 4 — Voisinage et ombrage.** Une case à cocher (voisins, végétation, rayon) puis un
+enchaînement complet sans autre intervention : génération des obstacles **alignés sur ce bâtiment**
+(donc sans lui-même et sans obstacle qui l'empiète, cf. Lot AD) → enregistrement → association →
+précalcul d'ombrage. Le précalcul est lancé **même sans voisins**, sinon le calcul serait refusé.
+Les avertissements du filtrage (bâtiment écarté, obstacles rognés, hauteurs estimées) restent
+affichés une fois l'étape franchie : ils qualifient le résultat final, pas seulement l'étape.
+
+**Étape 5 — Météo et calcul.** Une seule question — l'usage du bâtiment — et tout le reste est
+dérivé de ce que l'assistant connaît déjà : année type PVGIS aux coordonnées du bâtiment, capacité
+thermique déduite du volume réel (× 1200, aide du Lot P), renouvellement d'air issu du profil choisi
+à l'étape 2, `h_e` suivant le vent réel et `h_i` suivant l'orientation de chaque paroi (Lot R),
+consignes de thermostat suivant le profil d'usage (Lot V). Tous ces choix sont **listés dans
+l'interface**, pas cachés — et restent modifiables ensuite sur Calcul 3D.
+
+**Résultat affiché** : besoins de chauffage et de climatisation en kWh **et en kWh/m²/an**, avec la
+température intérieure moyenne. La `surface_ref_m2` est renseignée automatiquement depuis l'emprise
+réelle au sol — ce qui répond aussi au point U2 du relevé, où elle était saisie à la main alors que
+l'application connaît l'empreinte. Le libellé rappelle que ce sont des **besoins** et non des
+consommations, et que les simplifications du mode se répercutent directement sur ces chiffres.
+
+**Correctif de localisation trouvé en vérifiant** : Angular formatait tous les nombres en `en-US`,
+donc « 4,210 kWh » là où il faut lire « 4 210 kWh » — dans un affichage de résultats chiffrés, cette
+virgule se lit comme un séparateur décimal, soit un facteur 1000. `LOCALE_ID` passé à `fr-FR` pour
+toute l'application (défaut Angular jamais changé depuis le scaffold, donc toutes les pages étaient
+concernées).
+
+### Vérification
+**Navigateur réel, 12/12, parcours complet de bout en bout** : recherche → création → subdivision →
+assignation → surface de référence posée automatiquement → génération d'environnement alignée sur le
+bâtiment → association → précalcul d'ombrage → météo en année type → calcul en thermostat avec
+consignes horaires, `h_e` dynamique et `h_i` par orientation, capacité déduite du volume → résultat
+chiffré au format français. Les cinq étapes sont bien présentes au bout du parcours. 173/173 backend.
+
+### Reste ouvert
+Le calendrier d'occupation utilise le calendrier par défaut (semaine type commençant un lundi, sans
+vacances) : le mode simplifié ne demande pas de dates, cohérent avec son objet, mais un bâtiment
+scolaire y sera donc traité sans ses vacances. L'assistant ne propose pas de comparer deux variantes
+(c'est le point U3, l'absence d'historique des calculs).
+
+---
+
 ## Hors scope — décisions déjà prises, à ne pas entreprendre sans en rediscuter
 
 La page Théorie (section « Portée et hypothèses ») exclut déjà explicitement, comme choix assumé et
