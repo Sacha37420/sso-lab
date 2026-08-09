@@ -530,6 +530,15 @@ ci-dessous) suppose un seul fichier, ce nom précis.
   `e2e_outsider`, membre d'**aucun** groupe (toujours le cas « non-membre » négatif — aucune
   maintenance requise). Leurs mots de passe rotent normalement avec `rotate-ldap-user-passwords.sh`
   — le runner relit toujours la valeur courante dans `sso-lab/.env`, jamais de cache.
+  - `e2e_member` porte une adresse **factice** `e2e_member@ssolab.local` (2026-08-09). Elle est
+    indispensable : `api/authentication.py` refuse tout token sans claim `email`, donc sans elle ce
+    compte passait le flow de page mais prenait un **403 sur le moindre appel API** — il ne
+    permettait de tester que l'accès à la page, jamais un parcours applicatif réel. Le domaine
+    `.local` est ce qui rend l'ajout sûr : `notify-password-email.sh` n'envoie rien à ces
+    adresses, et `verify-existing-emails.sh` les marque `emailVerified` **d'office et sans
+    garde-fou** — sans quoi, `VERIFY_EMAIL` étant actif sur le realm, donner une adresse à ce
+    compte le **bloquerait** à l'écran de vérification (constaté en réel avant correction).
+    `e2e_outsider` n'en a délibérément pas : il n'a jamais à dépasser le refus de cloisonnement.
 - **Catalogue vs exécution**, deux choses bien distinctes :
   - *Catalogue* (`GET /list` sur le runner, **pas de navigateur**) : à chaque déploiement d'une app
     (`scripts/setup_unit.sh`, étape best-effort en toute fin), liste les tests du fichier

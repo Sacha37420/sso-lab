@@ -174,6 +174,15 @@ uid: e2e_member
 cn: E2E Member
 sn: Member
 givenName: E2E
+# Adresse FACTICE (@ssolab.local) et non une vraie boîte : le claim `email` est
+# exigé par l'authentification de toutes les APIs du lab (api/authentication.py
+# refuse un token sans lui), donc sans `mail` ce compte passe le flow de page
+# mais prend un 403 sur le moindre appel API — ce qui interdit de vérifier un
+# parcours applicatif de bout en bout. Deux conséquences du domaine .local :
+# notify-password-email.sh n'enverra jamais de mail de rotation à ce compte, et
+# verify-existing-emails.sh le marque emailVerified d'office (sans quoi, si
+# VERIFY_EMAIL est actif, lui donner une adresse le BLOQUERAIT au login).
+mail: e2e_member@ssolab.local
 userPassword: CHANGE_ME
 
 # ── Utilisateur (synthétique) : e2e_outsider ───────────────────────
