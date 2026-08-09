@@ -1912,7 +1912,7 @@ Le mode « Imposée » pourrait exposer un bilan lui aussi, en calculant le rés
 `hvac` du thermostat, non faite ici. Le bilan est global sur la période : pas de décomposition
 mensuelle ni de courbe temporelle par poste.
 
-### AB3 — Plancher sur terre-plein : résistance de sol et découplage du vent (C4)
+### AB3 — Plancher sur terre-plein : résistance de sol et découplage du vent (C4) ✅ livré le 2026-08-09
 1. Découpler `h_e` du sol : un triangle `boundary='ground'` ne doit **jamais** utiliser le `h_e`
    dérivé du vent. Correctif minimal dans `_h_e_diagonal`/`_assemble_F_hour` : forcer une valeur
    propre au sol pour ces triangles.
@@ -1925,6 +1925,57 @@ mensuelle ni de courbe temporelle par poste.
    Sans ça, le mode simplifié et le Lot Y continuent d'imposer un mur au groupe `sol`.
 4. Test : identité exacte entre un triangle `ground` avec `r_ground` et un mur 1D dont on a ajouté
    manuellement la même résistance — même méthode que le test `GroundBoundaryTest` du Lot K.
+
+#### Ce qui a été fait
+Les quatre étapes. La conductance côté extérieur d'un triangle `ground` vaut désormais **`1/r_ground`
+seule** — pas `h_e`, pas un `h_e` corrigé : un dallage est en contact direct avec la terre, il n'y a
+aucun film convectif à modéliser. Elle est donc **constante dans le temps** : ni vent (Lot R), ni
+planning de volets (Lot J, dont l'application à un plancher n'avait aucun sens et est désormais
+impossible par construction). `h_e_vec` est construit en une seule expression qui traite les trois
+cas (sol / volet fermé / exposé), au lieu de deux branches auxquelles il aurait fallu en greffer une
+troisième.
+
+`DEFAULT_R_GROUND = 0.5` m²·K/W — le **bas** de la fourchette usuelle ISO 13370 (~0,5 à 3 selon la
+dimension caractéristique B' = A/(0,5·P) et la conductivité du sol), choix volontairement
+conservateur. Réglable page Calcul 3D, à côté de la température de sol. Minimum 0,05 côté serializer
+plutôt que 0 : la conductance vaut `1/r_ground`, et un contact « parfait » avec la terre n'a pas de
+sens physique.
+
+Trois **planchers bas sur terre-plein** ajoutés au catalogue (RT2005/RT2012/RE2020 : dalle béton
+15 cm + polystyrène extrudé 40/80/120 mm + chape 5 cm, U indicatifs 0,51 / 0,32 / 0,23 W/m²·K).
+C'était le manque signalé au Lot W : le mode simplifié impose de choisir un modèle opaque pour le
+groupe `sol`, et la liste n'offrait que des murs et des toitures. Couches ordonnées de l'extérieur
+(côté terre) vers l'intérieur, comme partout ailleurs.
+
+**Ampleur du correctif, mesurée en réel** (dallage 100 m², RT2012, 30 jours à −5 °C dehors / 20 °C
+dedans / sol à 12 °C) : 210,1 kWh de déperditions avec l'ancien couplage (`h_e = 25`, soit
+R = 0,04 m²·K/W) contre **170,4 kWh** au défaut actuel — **19 % de moins**, et 60 % de moins si l'on
+retient le haut de la fourchette ISO. La surestimation était donc réelle et loin d'être marginale.
+
+#### Vérification
+**9 tests.** Le cœur : un triangle `ground` donne des flux **identiques** entre un vent nul et un
+vent de 25 m/s en `h_e_dynamic` — accompagné du test miroir (une paroi `exterior_air` doit, elle,
+toujours réagir au vent), sans lequel le premier passerait pour la mauvaise raison. Idem pour `h_e`
+constant (5 contre 90 : aucun effet sur un triangle au sol). Identité **exacte** (1e-9) entre un
+triangle `ground` à `r_ground` et un triangle `exterior_air` à `h_e = 1/r_ground` sous météo
+constante à `t_ground` — la définition d'une résistance en série, vérifiée hors du code qui la pose.
+Plus : sens physique (plus de résistance ⇒ moins de pertes), quantification de l'écart avec l'ancien
+comportement, et volet sans effet sur un plancher. Deux tests de catalogue (ordre des couches,
+`tau + r + alpha = 1`, passage du serializer).
+
+**Un test existant a dû être corrigé, et c'est le bon signe** : `GroundBoundaryTest`
+(Lot K) construisait sa référence 1D avec `h_e = 25`, ce qu'un triangle au sol ne voit plus. Sa
+référence utilise désormais `h_e = 1/r_ground`, en gardant `h_e = 25` dans le payload 3D — le test
+vérifie donc **en plus**, maintenant, que `h_e` est bien ignoré pour ce triangle. 134/134 depuis
+l'image reconstruite, catalogue rejoué (14 modèles).
+
+#### Reste ouvert
+`r_ground` est un paramètre saisi, pas un calcul : ISO 13370 le fait dépendre de la géométrie réelle
+du plancher (B' = A/(0,5·P)), que l'application pourrait dériver de ses triangles `ground` (aire
+connue, périmètre calculable depuis les arêtes de bord). Ce serait la suite naturelle, non faite ici.
+Pas de variation saisonnière de `t_ground` (déjà noté au Lot K), ni de déphasage : la terre est une
+source à température constante et sans inertie. Le vitrage d'un cadre de fenêtre posé sur un triangle
+`ground` (combinaison absurde mais possible) suit toujours `t_ground` via `frame_g`.
 
 ### AB4 — Temporalité d'usage : préremplir heure et jour depuis la période chargée (C5)
 Une fois AB1(b) fait, `hour_of_day` est déjà transporté ; reste le **jour de la semaine** du premier
