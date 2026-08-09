@@ -1977,7 +1977,7 @@ Pas de variation saisonnière de `t_ground` (déjà noté au Lot K), ni de déph
 source à température constante et sans inertie. Le vitrage d'un cadre de fenêtre posé sur un triangle
 `ground` (combinaison absurde mais possible) suit toujours `t_ground` via `frame_g`.
 
-### AB4 — Temporalité d'usage : préremplir heure et jour depuis la période chargée (C5)
+### AB4 — Temporalité d'usage : préremplir heure et jour depuis la période chargée (C5) ✅ livré le 2026-08-09
 Une fois AB1(b) fait, `hour_of_day` est déjà transporté ; reste le **jour de la semaine** du premier
 point (`jourDebut`, Lot V) et la question **UTC vs heure locale**. L'application connaît la
 `start_date` demandée et les coordonnées : elle peut déduire les deux. À trancher : convertir la série
@@ -1985,6 +1985,62 @@ en heure locale à l'affichage/à l'usage (en gardant l'UTC pour la position sol
 rester), ou afficher explicitement « heures en UTC » et laisser l'utilisateur décaler. La première
 option est la bonne pour un utilisateur, la seconde est plus honnête vis-à-vis de la donnée —
 demander avant de coder.
+
+#### Ce qui a été fait
+**Arbitrage tranché avec l'utilisateur** : décalage **fixe**, prérempli automatiquement (option A des
+trois proposées), après vérification empirique de ce que la source offre réellement.
+
+Mesuré avant de choisir : Open-Meteo `timezone=auto` renvoie **un seul `utc_offset_seconds`**,
+identique pour une requête de janvier et une de juillet (+7200 pour Paris), et une année complète y
+compte 8784 heures continues — **pas de journée de 23 h ni de 25 h**. La vraie heure civile aurait
+donc imposé un mapping lat/lon → fuseau (dépendance supplémentaire) *et* cassé l'hypothèse d'un
+planning à 24 créneaux deux fois par an, pour une heure d'écart. Écarté sur cette base, pas de
+principe.
+
+`hour_index` est désormais en **heure locale** ; `dt_utc` reste l'instant physique utilisé pour la
+position solaire, qui n'est pas concernée — c'est la propriété à ne pas casser, et elle est testée
+explicitement. Le décalage est détecté par une **sonde minimale** (`api.open-meteo.com/v1/forecast`,
+un jour, dont seul l'en-tête est lu) plutôt qu'en changeant la requête d'archive : elle sert **aussi**
+au chemin PVGIS TMY, qui n'expose aucune notion de fuseau. Best-effort — si elle échoue, repli sur
+UTC avec un avertissement, plutôt que d'annuler toute la récupération météo.
+
+`utc_offset_h` est **optionnel** côté API : `null` = détection automatique, une valeur = imposée. Le
+job renvoie celui qu'il a effectivement utilisé, que le client reprend dans son champ — donc
+prérempli **et** modifiable ensuite, sans endpoint supplémentaire ni valeur dupliquée.
+
+`jourDebut` du calendrier d'occupation est aligné automatiquement sur la date de début chargée
+(`getUTCDay()` remis en base 0 = lundi) : l'utilisateur n'a plus à savoir quel jour de la semaine
+tombait le 1ᵉʳ janvier de l'année choisie.
+
+**Limite assumée et écrite dans l'interface** : la valeur détectée est le décalage en vigueur
+*aujourd'hui* à cet endroit, pas à la date de la série — demandée en août pour Paris, elle vaut +2, si
+bien qu'une série de janvier est étiquetée une heure en avance sur l'heure civile de l'époque. L'écart
+reste **borné à une heure sur la moitié de l'année**, contre **une à deux heures en permanence** avant
+ce lot ; et le champ est là pour trancher autrement.
+
+#### Vérification
+**7 tests** : décalage appliqué à `hour_index` (00:00 UTC → 01:00 locale, et la dernière heure qui
+bascule au jour suivant), offset nul = comportement du Lot AB1 inchangé, décalage négatif ne
+produisant jamais d'index négatif (le serializer exige ≥ 0), **position solaire strictement identique
+avec et sans décalage** (12 décimales — la propriété centrale), année complète restant dans les
+bornes du serializer (relevées de 8783 à 8807, un décalage positif reportant les dernières heures sur
+un jour de plus), TMY décalée de la même façon, et validation du champ.
+
+Un test existant a dû être mis à jour, et c'est le bon signe : `TmyFallbackTest` assertait la
+signature complète de l'appel de repli — il a immédiatement signalé que le nouveau paramètre devait
+traverser ce chemin aussi. L'assertion reste stricte, enrichie du nouveau paramètre.
+
+**Vérifié en réel** contre l'API : offsets corrects sur trois continents (Paris +2, Montréal −4,
+Sydney +10) et série réelle du 10 janvier à Paris étiquetée en local, position solaire inchangée.
+141/141 depuis l'image reconstruite ; navigateur réel 6/6 (champ vide par défaut, `utc_offset_h: null`
+réellement envoyé, valeur utilisée reprise dans le champ, heures décalées dans le CSV, jour de la
+semaine prérempli sur « Mercredi » pour le 13 mars 2024).
+
+#### Reste ouvert
+Pas de changement d'heure (décision assumée ci-dessus). Une série collée à la main ne porte pas
+d'heures et dépend toujours de `heure_debut`, réglé manuellement. Le décalage n'est appliqué qu'aux
+séries récupérées automatiquement : il n'existe aucun moyen de re-décaler après coup une série déjà
+chargée, sinon en la récupérant à nouveau.
 
 ---
 
@@ -2034,8 +2090,11 @@ tiers peut juger de ce que vaut un résultat produit par cet outil.
 2. ~~**Lot X**~~ — ✅ livré le 2026-08-09. Vérifié en réel contre l'IGN sur deux zones : le bâtiment
    étudié écarté, et lui seul. A aussi fait afficher les avertissements de génération
    d'environnement, que le frontend jetait depuis toujours.
-3. **Lot AB1** puis **AB2**, **AB3**, **AB4** — correctifs physiques/restitution, indépendants entre
-   eux, tous courts.
+3. ~~**Lot AB1**, **AB2**, **AB3**, **AB4**~~ — ✅ tous livrés le 2026-08-09. AB2 a fait apparaître
+   le solaire transmis, qui pouvait être le premier gain du bilan sans jamais s'afficher ; AB3 a
+   chiffré la surestimation des déperditions par le sol (−19 % sur un dallage RT2012 mesuré en réel)
+   et ajouté les planchers bas au catalogue ; AB4 a été tranché avec l'utilisateur après mesure de
+   ce que la source météo permet réellement.
 4. **Lot AA** (usage 1 d'abord, seul et immédiat ; usages 2-3 ensuite).
 5. **Lot Y** — ergonomie, réutilise l'existant, gagne à venir après AA.
 6. **Lot Z** — le plus lourd, et le seul qui demande un arbitrage d'architecture (Z1/Z2/Z3).
