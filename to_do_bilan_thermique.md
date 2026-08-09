@@ -2320,9 +2320,13 @@ seul point commun entre le bug 2.2.1 et le fait que personne ne l'a vu pendant u
 Relevé demandé par l'utilisateur une fois la phase 3 close. **Rien n'est corrigé ici** : c'est un
 inventaire, à trancher lot par lot. Les « Reste ouvert » propres à chaque lot ne sont pas répétés.
 
+> **Mis à jour le 2026-08-09** après les Lots AD, AE et AF : les entrées barrées sont traitées.
+> Restent ouverts L3, L5, L6, L7 et U3 à U6, plus le Lot Z3 (saisonnalité de la végétation) et la
+> paroi mitoyenne (limite 11bis, documentée en Théorie mais non implémentée).
+
 ### Trous de logique
 
-**L1. Modifier un environnement n'invalide pas l'ombrage des bâtiments qui l'utilisent** ⚠️
+**L1.** ~~Modifier un environnement n'invalide pas l'ombrage des bâtiments qui l'utilisent~~ ✅ corrigé au Lot AD
 `EnvironmentSerializer.update()` remplace `instance.envelope` et sauvegarde — sans jamais toucher au
 `sun_visibility_stale` des `Building` qui pointent dessus. Ajouter de la végétation ou du relief à un
 environnement existant puis relancer un calcul donne donc un résultat calculé contre l'**ancienne**
@@ -2332,7 +2336,7 @@ Correctif : `Building.objects.filter(environment=instance).update(sun_visibility
 l'enveloppe change. Le plus grave de la liste — silencieux, et sur le chemin que les Lots Z et AA
 viennent justement de rendre attractif.
 
-**L2. Le mode simplifié promet un calcul immédiat que le serveur refusera** ⚠️
+**L2.** ~~Le mode simplifié promet un calcul immédiat que le serveur refusera~~ ✅ corrigé aux Lots AD et AE
 L'étape 4 affiche « rien à faire de plus […] lancez le calcul ». Or un `Building` neuf a
 `sun_visibility_stale = True`, Calcul 3D part en `'precomputed'` par défaut, et `BuildingCalculView`
 renvoie **400 « L'ombrage précalculé est périmé »**. L'utilisateur suit l'assistant à la lettre et se
@@ -2348,7 +2352,7 @@ planning du Lot Q (ventilation, apports internes, volets) reste un « jour type 
 n'existait pas avant le Lot V — c'est lui qui a introduit un calendrier d'un seul côté. Correctif
 naturel : deux profils de planning (ouvré / non-ouvré), réutilisant le calendrier déjà saisi.
 
-**L4. La végétation est posée à z = 0, les bâtiments suivent le terrain**
+**L4.** ~~La végétation est posée à z = 0, les bâtiments suivent le terrain~~ ✅ corrigé le 2026-08-09 (résout aussi l'usage 2 du Lot AA)
 `generate_vegetation_mesh` place tous les volumes végétaux à l'altitude locale 0, alors que les
 bâtiments IGN sont calés sur `altitude_minimale_sol − ground_z_ref` et que le maillage de terrain
 (Lot AA) reproduit le relief. Sur un site en pente, les arbres flottent ou s'enterrent — l'ombrage en
@@ -2372,11 +2376,11 @@ aucune paroi assignée dans la liste. Sans conséquence physique, mais il encomb
 
 ### Frictions d'usage
 
-**U1. L'ombrage doit être relancé à la main, et rien ne le propose au bon moment.** Calcul 3D se
+**U1.** ~~L'ombrage doit être relancé à la main~~ ✅ corrigé au Lot AD (bouton sur Calcul 3D) et au Lot AE (automatique en simplifié). Calcul 3D se
 contente de refuser ; il faut savoir revenir sur la page Bâtiment. Un bouton « relancer le précalcul »
 dans le message d'erreur supprimerait l'aller-retour — et couvrirait aussi L1 et L2.
 
-**U2. `surface_ref_m2` est saisie à la main alors que l'app connaît l'empreinte.** Pour un bâtiment
+**U2.** ~~`surface_ref_m2` saisie à la main~~ ✅ corrigé au Lot AE (renseignée depuis l'emprise réelle). Pour un bâtiment
 issu de la recherche ou du générateur de boîte, l'aire au sol est calculable exactement (le mode
 simplifié la calcule déjà pour le volume). Sans elle, tout le dashboard kWh/m² — le seul repère
 chiffré de l'app — reste indisponible.
