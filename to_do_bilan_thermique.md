@@ -2406,7 +2406,7 @@ le lab est exposé sur Internet. À traiter dans `dev/`, pas ici.
 
 ---
 
-## Lot AD — Continuité de l'UI : chaque page son rôle, aucune redondance (proposé, non commencé)
+## Lot AD — Continuité de l'UI : chaque page son rôle, aucune redondance ✅ livré le 2026-08-09
 
 Audit demandé le 2026-08-09, après le constat que la végétation était introuvable depuis la page
 Environnement. **Rien n'est modifié ici** : constat + plan, à valider avant d'exécuter.
@@ -2471,6 +2471,66 @@ Essentiellement du déplacement de blocs existants entre trois composants, sans 
 solveur ni d'API — sauf le point 3 (une ligne côté serializer) et le point 4 (à trancher). Le risque
 est surtout de casser un parcours en le déplaçant : à vérifier en navigateur réel page par page,
 comme les lots W à AC.
+
+### Ce qui a été fait
+Les cinq points, avec les deux arbitrages tranchés par l'utilisateur.
+
+**Un seul générateur d'obstacles, sur la page Environnement.** `POST /api/environnements/generer/`
+accepte désormais `building_id` (optionnel), `include_vegetation` et `terrain_spacing_m` : fourni, le
+bâtiment de référence apporte l'alignement, la mise à l'écart du bâtiment étudié et le rognage ;
+absent, on retombe sur l'exploration libre, **et l'interface dit alors explicitement que le bâtiment
+se retrouvera en double**. `generate_environment_for_building`, son endpoint, son serializer et son
+bloc d'interface ont été supprimés — c'était la redondance R1, et son existence expliquait aussi
+pourquoi la végétation restait introuvable depuis la page Environnement.
+
+**Rognage plutôt que suppression** (choix de l'utilisateur). `resolve_against_self()` remplace le
+booléen du Lot X par trois issues : `kept`, `self` (écarté), `clipped` (différence géométrique). Un
+voisin qui interpénètre l'enveloppe modélisée — cas courant quand elle est approximative — garde
+donc la partie qui existe vraiment au lieu d'être perdue en entier ou de s'enfoncer dans le
+bâtiment. Le rognage peut couper un obstacle en deux (d'où une **liste** de polygones en retour) ou
+créer un **trou** (bâtiment entièrement à l'intérieur d'un obstacle), les deux gérés nativement par
+trimesh. Un reste inférieur à 1 m² est écarté : un copeau extrudé sur toute la hauteur coûte des
+triangles sans rien masquer.
+
+**Le critère « c'est le bâtiment étudié » a dû changer de forme.** Il rapportait l'intersection au
+**minimum** des deux aires — ce qui vaut 1 dès que l'une contient l'autre, confondant deux
+situations opposées : un pâté de maisons digitalisé d'un seul tenant CONTIENT le logement étudié
+sans être lui, et se retrouvait donc écarté en entier alors que tout le reste du pâté masque
+réellement le soleil. Remplacé par un rapport à l'**union** (indice de Jaccard, donc une mesure de
+ressemblance) : doublon exact ≈ 1, bloc englobant ≈ 0,1 — le premier est écarté, le second rogné.
+Les tests du Lot X ont survécu au changement sans retouche, ce qui confirme qu'ils testaient bien un
+comportement et non une implémentation.
+
+**L'étape qui regroupe est passée sur Calcul 3D** : sélection de l'environnement (qui `PATCH` le
+bâtiment) et bouton de précalcul d'ombrage, avec le badge d'état. C'est là que leur absence bloque —
+la page se contentait auparavant de refuser en renvoyant l'utilisateur en arrière. Règle du même coup
+L2 et U1.
+
+**Propagation de l'invalidation (L1)** : `EnvironmentSerializer.update` périme l'ombrage de tous les
+bâtiments liés dès que la géométrie change — et **seulement** alors : un simple renommage ne doit pas
+imposer un recalcul de plusieurs minutes.
+
+La page Bâtiment ne porte plus que le bâtiment ; sa checklist perd les deux items qui ne s'y jugent
+plus.
+
+### Vérification
+**8 tests** de rognage (doublon écarté, disjoint et mitoyen intacts, chevauchement partiel rogné au
+m² près et sans intersection résiduelle, bloc englobant rogné **avec trou**, obstacle coupé en deux,
+copeau écarté, parts réellement extrudables par trimesh) et **2 tests avec base de données** pour
+l'invalidation (tous les bâtiments liés périmés, les autres intacts ; renommage sans effet).
+173/173.
+
+**Vérifié en réel** : sur un bâtiment volontairement décalé de 3 m à Orléans, 1 obstacle rogné et 42
+conservés — et l'avertissement « vérifiez son géoréférencement » se déclenche, ce qui est le bon
+signal pour un décalage de cette taille. **Navigateur réel 12/12** : la page Bâtiment ne porte plus
+ni ombrage ni générateur mais garde ses outils, la page Environnement expose le sélecteur de
+bâtiment avec le bon texte dans les deux cas et transmet bien les trois options, et Calcul 3D
+associe l'environnement puis lance le précalcul et voit le badge passer à jour.
+
+### Reste ouvert
+Les environnements orphelins s'accumulent toujours (L6) — chaque génération enregistrée en crée un de
+plus, et rien n'indique lequel est lié. Le générateur ne propose pas de carte (U4). Le mode
+« temps réel » n'est toujours pas suggéré au moment où la discrétisation à 15° devient gênante (U6).
 
 ---
 
