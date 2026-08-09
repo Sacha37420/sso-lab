@@ -2207,7 +2207,7 @@ chargée, sinon en la récupérant à nouveau.
 
 ---
 
-## Lot AC — Page Théorie : mettre les limites à jour
+## Lot AC — Page Théorie : mettre les limites à jour ✅ livré le 2026-08-09
 
 Dernier lot de la phase, une fois que les correctifs ci-dessus ont figé ce qui est vrai.
 
@@ -2244,6 +2244,44 @@ Dernier lot de la phase, une fois que les correctifs ci-dessus ont figé ce qui 
 Uniquement `theorie.component.html`. Aucun code, aucun test — mais c'est le lot qui détermine si un
 tiers peut juger de ce que vaut un résultat produit par cet outil.
 
+### Ce qui a été fait
+Les cinq étapes.
+
+**Les deux affirmations fausses corrigées** : le paragraphe « apports internes constants sur toute la
+durée du calcul » a disparu (le Lot Q l'a livré) et renvoie désormais à la nouvelle section 12 ; le
+point « couplage multizone » de la section Extensions désignait la mauvaise limite — la sommation
+multi-parois est faite depuis le Lot D, ce qui reste une limite c'est le **mono-zone**, reformulé
+comme tel avec ce qu'il faudrait pour en sortir (découpage en zones, et un type de paroi qui n'existe
+pas : un refend, sans face extérieure).
+
+**L'encadré de portée réécrit en trois catégories**, qui est le vrai apport de ce lot : *hors
+périmètre* (demanderait une autre structure de modèle), *approximation quantifiée* (le terme existe,
+sa valeur est simplifiée), *extension identifiée* (chiffrable, pas faite) — plus un quatrième bloc,
+« et ce que les résultats ne sont pas ». Une liste unique et indifférenciée, comme avant, ne
+permettait pas de distinguer ce qui est un choix définitif de ce qui est une valeur approchée. Les
+douze limites de la section B y figurent, chacune avec **le sens de l'erreur** plutôt qu'une simple
+mention : refroidissement radiatif nocturne structurellement impossible, apports solaires par vitrage
+surestimés au-delà de 60° d'incidence, apports diffus sous-estimés en milieu dense, besoins d'une
+maison mitoyenne surestimés, ombrage hivernal surestimé sous couvert végétal…
+
+**Nouvelle section 12 « Du modèle 1D au bâtiment complet »** : un tableau de **14 termes** — pour
+chacun, où il entre (`[K]`, `{F}`, nœud d'air, nœud de surface) et sous quelle hypothèse. C'est ce
+qui manquait le plus : un lecteur qui s'en tenait à la page ignorait que la ventilation, les apports
+internes, le cadre, le sol, les volets, les plannings, le calendrier, la végétation ou le relief
+existaient. Le sommaire est renuméroté (12 → 13 → 14).
+
+### Vérification
+**26/26 en navigateur réel** : disparition des deux affirmations fausses, présence des trois
+catégories, et présence individuelle des douze limites et du bloc « besoins ≠ consommations » ;
+tableau de synthèse à 14 lignes avec ses termes clés ; sommaire à 14 entrées. Rendu contrôlé
+visuellement (encadré et section 12). `ng build --configuration production` propre.
+
+### Reste ouvert
+La page reste un document sur le **modèle**, pas un mode d'emploi : elle ne dit pas quelle valeur
+saisir ni comment interpréter un écart. Les valeurs indicatives (catalogue de parois, profils
+d'occultation, de ventilation, d'usage, de végétation) n'y sont pas reproduites — elles vivent dans
+les pages qui les proposent.
+
 ---
 
 ## Ordre recommandé
@@ -2264,7 +2302,13 @@ tiers peut juger de ce que vaut un résultat produit par cet outil.
 6. ~~**Lot Z**~~ — ✅ Z1+Z2 livrés le 2026-08-09 (occulteurs à transmittance). **Z3 (saisonnalité)
    laissé ouvert** : il introduirait une notion de date calendaire côté serveur, refusée
    délibérément depuis le Lot V — décision d'architecture à prendre à part.
-7. **Lot AC** — en dernier, une fois que ce qui est vrai est stabilisé.
+7. ~~**Lot AC**~~ — ✅ livré le 2026-08-09. Encadré de portée réécrit en trois catégories avec le
+   sens de l'erreur pour chaque limite, et nouvelle section 12 recensant les 14 termes ajoutés
+   depuis le modèle 1D.
+
+**Phase 3 terminée.** Seuls restent ouverts, explicitement et par décision : le **Lot Z3**
+(saisonnalité de la végétation — introduirait une date calendaire côté serveur), l'**usage 2 du
+Lot AA** (obstacles OSM posés sur le relief réel), et les points « Reste ouvert » de chaque lot.
 
 Et, transversalement à toute la phase : **vérifier en navigateur réel**, systématiquement. C'est le
 seul point commun entre le bug 2.2.1 et le fait que personne ne l'a vu pendant un jour et demi.
