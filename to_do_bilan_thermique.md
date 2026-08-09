@@ -14,18 +14,23 @@ existant (Lot F), combler des manques physiques qui faussent le résultat (Lots 
 travail de l'utilisateur (Lots L→P, S) — Lot Q à cheval sur les deux dernières familles (généralise
 G/H à un planning, ce qui est autant une correction physique qu'une simplification de saisie).
 
-**Tous les lots sont livrés : F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T et U** (tests physiques
-automatisés, renouvellement d'air, apports internes, cadre de fenêtre, occultations mobiles,
-triangles au contact du sol, import météo automatique Open-Meteo + PVGIS TMY, résultats normalisés
-kWh/m²/an, checklist de progression, générateur de boîte, aide au calcul de `c_air_int`, plannings
-horaires, convection dynamique (vent + orientation), années type, mode simplifié pour un bâtiment
-réel existant, rayonnement transmis intégralement à travers un vitrage) — voir leur section
-respective pour le détail. **Lot J livré le 2026-08-09**, dernier lot restant, cadré avec
-l'utilisateur avant de coder (patron de factorisation, puis valeurs des deux profils usuels) — voir
-sa section, notamment le design en calque (`shading_profile_id`) qui a résolu le dilemme des deux
-options d'origine sans les compromis d'aucune des deux. **Lot U (2026-08-08) est un correctif, pas
-une nouvelle fonctionnalité** — signalé par l'utilisateur en testant manuellement des fenêtres en
-1D, il touchait `solver._propagate_solar`, partagée par les deux solveurs : jusqu'à 87 % du
+**Tous les lots sont livrés : F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U et V** (tests
+physiques automatisés, renouvellement d'air, apports internes, cadre de fenêtre, occultations
+mobiles, triangles au contact du sol, import météo automatique Open-Meteo + PVGIS TMY, résultats
+normalisés kWh/m²/an, checklist de progression, générateur de boîte, aide au calcul de
+`c_air_int`, plannings horaires, convection dynamique (vent + orientation), années type, mode
+simplifié pour un bâtiment réel existant, rayonnement transmis intégralement à travers un vitrage,
+calendrier d'occupation pour le mode thermostat) — voir leur section respective pour le détail.
+**Lot V livré le 2026-08-09**, dernier lot restant, cadré avec l'utilisateur avant de coder
+(six profils d'usage scolaire/tertiaire/habitation × climatisé ou non, calendrier jour de la
+semaine + jours ouvrés + plages de vacances) — voir sa section, notamment la correction de cadrage
+en cours de route (le hors-gel « vacances » est propre au scolaire, jamais au tertiaire) tranchée
+avec l'utilisateur avant implémentation. **Lot J livré le 2026-08-09**, cadré avec l'utilisateur
+avant de coder (patron de factorisation, puis valeurs des deux profils usuels) — voir sa section,
+notamment le design en calque (`shading_profile_id`) qui a résolu le dilemme des deux options
+d'origine sans les compromis d'aucune des deux. **Lot U (2026-08-08) est un correctif, pas une
+nouvelle fonctionnalité** — signalé par l'utilisateur en testant manuellement des fenêtres en 1D,
+il touchait `solver._propagate_solar`, partagée par les deux solveurs : jusqu'à 87 % du
 rayonnement solaire incident sur tout le catalogue de vitrages disparaissait du bilan avant ce
 correctif (voir sa section) — le plus significatif en gravité de tous les correctifs de cette
 phase 2.
@@ -903,6 +908,94 @@ vitrage reste à ~44°C, conforme à l'intuition physique de l'utilisateur.
 
 ### Reste ouvert
 Pas de vérification en navigateur réel (même réserve que les autres lots récents).
+
+---
+
+## Lot V — Calendrier d'occupation (mode thermostat) ✅ livré le 2026-08-09
+
+### Constat
+Le mode thermostat (Lot précédent à celui-ci dans la conversation, pas un lot numéroté) n'avait
+que deux constantes `t_min`/`t_max` pour tout le run — aucun moyen d'exprimer qu'un bâtiment
+scolaire tombe en hors-gel pendant les vacances et le week-end, qu'un bureau se réduit la nuit, ou
+qu'un logement n'a pas cette notion de fermeture. L'utilisateur a demandé de définir ces plages par
+jour et par heure, avec quatre profils d'usage détaillés (scolaire, scolaire climatisé, tertiaire,
+tertiaire climatisé) et deux profils supplémentaires proposés pour l'habitation.
+
+**Cadrage** : la question clé, soulevée par l'utilisateur avant tout code, était de savoir si les
+occultations mobiles (Lot J) avaient déjà établi un précédent d'équation-par-configuration pour
+éviter de réinverser la factorisation heure par heure — non applicable ici puisque `t_min`/`t_max`
+n'entrent **jamais dans K** (seulement dans la décision de pincement du second membre F, comme
+`g_vent`/`apports_internes_w`), donc aucun souci de factorisation à anticiper, contrairement au
+calque de Lot J. Un aller-retour de cadrage a corrigé ma première lecture du besoin : le hors-gel
+« vacances » est un concept **propre au scolaire** (jamais au tertiaire, climatisé ou non) et
+s'applique **également aux deux variantes scolaires** — confirmé explicitement par l'utilisateur
+avant implémentation. Sur un jour classé hors-gel ou week-end entier, la consigne résultante
+remplace les 24 heures de ce jour (pas de sous-distinction jour/nuit ce jour-là) ; le cycle
+jour/nuit (19°C/16°C, frontière 7h-19h — même convention que l'exemple de planning du Lot Q) ne
+s'applique que sur les jours normaux — confirmé également.
+
+### Ce qui a été fait
+**Backend** (`building_solver.py`) : chaque point météo peut désormais porter `t_min`/`t_max`
+optionnels (`BuildingWeatherPointSerializer`, `FloatField(required=False, allow_null=True,
+default=None)` — même modèle que `wind_m_s` du Lot R). En mode thermostat, l'heure courante utilise
+ces valeurs si fournies, sinon replie sur les constantes du run (`interior.t_min`/`t_max`). Piège
+DRF retrouvé et corrigé **avant** tout bug utilisateur (vérifié empiriquement en shell Django avant
+d'écrire le code définitif) : `default=None` rend la clé **toujours présente** dans
+`validated_data` avec la valeur `None` quand rien n'est fourni — un `point.get('t_min',
+repli)` ne retombe alors **jamais** sur le repli (`.get()` ne consulte le défaut que si la clé est
+absente, pas si sa valeur est `None`), ce qui aurait fait planter tout calcul thermostat en
+production dès qu'un point réel passait par le serializer (`t_air < None` → `TypeError`). Corrigé
+avec un test explicite (`is not None`), même convention déjà en place pour `wind_m_s` (Lot R).
+Aucun changement de factorisation requis (contrairement à g_vent/h_e/volets_fermes) — confirmé par
+le cadrage puis par l'implémentation elle-même : `t_min`/`t_max` ne touchent que la décision de
+pincement du second membre, jamais `K_global`.
+
+**Frontend** — nouveau catalogue `core/usage-profiles.ts` (résolu entièrement côté client, même
+patron que `ventilation-profiles.ts`/`shading-profiles.ts` : le backend ne reçoit que deux nombres
+optionnels par heure, jamais d'identifiant de profil ni de date calendaire). Six profils
+(`UsageProfile[]`) : `scolaire`/`scolaire-clim` (hors-gel 7°C vacances+week-end, réduit 16°C la
+nuit, normal 19°C/100°C ou 19°C/26°C le jour), `tertiaire`/`tertiaire-clim` (hors-gel week-end
+seulement, jamais lié aux vacances), `habitation`/`habitation-clim` (aucune notion de fermeture,
+seul le cycle jour/nuit 19°C/16°C compte). `OccupationCalendar` (jour de la semaine du premier
+point météo, 7 booléens jours ouvrés, liste de plages de vacances en **indice de jour relatif au
+début du run** — jamais de vraie date, cohérent avec le fait qu'aucun concept de date calendaire
+n'existe ailleurs dans le solveur, seulement des séquences horaires pures, valable aussi bien pour
+des données Open-Meteo Archive datées que pour un TMY composite non daté). `computeThermostatSetpoints()`
+dérive un tableau `{t_min, t_max}[]` de même longueur que la météo. Vérifié par un script Node.js
+autonome (arithmétique jour/semaine/vacances) avant intégration, puis par un script Python miroir
+exécuté dans le conteneur backend contre le vrai solveur (`building_solver.run_building_simulation`)
+sur un scénario 4 jours incluant un jour de vacances : le jour hors-gel reste sous 19°C toute la
+journée (jamais pincé à la consigne normale), l'heure de jour normal se pince exactement à 19°C,
+l'heure de nuit réduite se pince exactement à 16°C — comportement conforme au cadrage validé.
+
+**UI** (`pages/calcul-3d/`) : section « Calendrier d'occupation (optionnel) », visible uniquement
+en mode thermostat — sélecteur de profil, jour de la semaine du premier point météo, cases à cocher
+jours ouvrés, liste de plages de vacances (ajout/retrait), bouton « Générer le calendrier ».
+`submit()` fusionne les consignes générées dans chaque point météo avant envoi, uniquement si un
+calendrier a été généré pour la longueur exacte de la météo actuelle ; toute modification de la
+météo invalide le calendrier généré (`thermostatSetpoints.set(null)` dans `parseWeather()`) pour
+éviter un calendrier périmé silencieusement réappliqué à une autre série. Aucune nouvelle classe
+CSS introduite — réutilise uniquement `field-grid`/`mode-option`/`weather-actions`/`weather-count`/
+`hint`/`btn-primary`/`btn-secondary`, déjà présentes dans `calcul-3d.component.scss`.
+
+**Tests** (`backend/api/tests.py`, `ThermostatCalendarTest`, 4 nouveaux) : défaut inchangé sans
+calendrier, `None` explicite dans le point météo retombe bien sur la constante du run, une
+suspension ponctuelle (une heure hors-gel au milieu d'une série chaude) fait chuter le
+`cooling_kwh` par rapport au run constant témoin et laisse l'air dépasser `t_max` pendant l'heure
+suspendue puis se re-pincer normalement l'heure suivante, bornes invalides (`t_min >= t_max` pour
+une heure donnée) lèvent bien `BuildingSimulationError`. Mutation testing sur le point de correction
+(retour au `.get(key, repli)` fautif) : détecté immédiatement (`TypeError`), exactement le test de
+retombée sur repli explicite qui échoue. 95/95 tests au total, `manage.py check` propre.
+
+Vérifié en réel dans le conteneur (script Python miroir de la logique `usage-profiles.ts`, profil
+`scolaire`, 4 jours dont un jour de vacances) : jour de vacances → air entre 7°C et 16°C toute la
+journée (jamais pincé à 19°C), heure de jour normal → pincé exactement à 19°C, heure de nuit
+normale → pincé exactement à 16°C.
+
+### Reste ouvert
+Pas de vérification en navigateur réel (même réserve que les autres lots récents). Les six profils
+sont des valeurs indicatives usuelles (GTB/GTC, ADEME), pas une table réglementaire officielle —
+même statut que le catalogue de parois.
 
 ---
 
