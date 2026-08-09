@@ -1382,9 +1382,9 @@ ci-dessus) ; le rendre possible supposerait d'ajouter un attribut `mail` au comp
 
 ---
 
-## Lot X — Écarter le bâtiment étudié du maillage d'environnement
+## Lot X — Écarter le bâtiment étudié du maillage d'environnement ✅ livré le 2026-08-09
 
-### Constat (question 2.1.2 de l'utilisateur → 2.1.3)
+### Constat (question 2.1.3 de l'utilisateur)
 « Comment traites-tu les éléments d'environnement (type bâtiments) qui ont une intersection non
 nulle avec notre bâtiment, les supprimes-tu bien pour passer à l'étape de modélisation 3D ? »
 
@@ -1452,6 +1452,96 @@ travaille avec **deux exemplaires superposés** du bâtiment étudié.
 Aucune. À faire juste après le Lot W : c'est le correctif qui a le plus d'effet sur la justesse d'un
 calcul avec environnement automatique, et tous les lots suivants (Z végétation, AA terrain) ajoutent
 des obstacles dans le même maillage — autant que le filtrage existe avant.
+
+### Ce qui a été fait
+Les six étapes ci-dessus, plus un correctif d'interface sans lequel tout le lot serait resté
+invisible (voir « Avertissements » plus bas).
+
+**Deux fonctions pures dans `geodata.py`**, où vit toute la décision — `generate_environment_mesh`
+ne fait que les câbler :
+
+- `envelope_footprint_polygon(envelope)` — empreinte 2D du bâtiment étudié. **Projette TOUS les
+  triangles** plutôt que les seuls `boundary='ground'` : les murs verticaux se projettent en
+  segments d'aire nulle (éliminés par le seuil), le sol et la toiture donnent la silhouette réelle,
+  concavités et cours intérieures comprises. Décision prise en écrivant le code, contre l'étape 1
+  d'origine qui prévoyait « les triangles `ground`, avec repli sur l'enveloppe convexe » : le repli
+  convexe aurait comblé les creux (un voisin logé dans le renfoncement d'un bâtiment en L aurait été
+  écarté à tort), et surtout un OBJ importé n'a **aucun** triangle marqué `ground` par défaut — le
+  filtrage n'aurait donc protégé que les bâtiments issus du mode simplifié, exactement ceux qui en
+  ont le moins besoin puisque leur doublon est exact et donc facile à repérer autrement.
+- `_is_studied_building(footprint_xy, self_polygon)` — critère de recouvrement.
+
+**Critère** : `aire(intersection) / min(aire_candidat, aire_étudié) > 0,3`. Rapporté au **minimum**
+des deux aires et non à celle du candidat, pour détecter le même bâtiment que la modélisation de
+l'utilisateur soit plus petite ou plus grande que la donnée IGN/OSM. Le `buffer(-0.5)` envisagé à
+l'étape 2 s'est avéré inutile : deux polygones qui se touchent par une arête (mitoyen réel) ont une
+intersection d'aire **nulle**, et un débordement de digitalisation de 10 cm sur 8 m donne 1,25 % —
+très en dessous du seuil. Un simple critère d'aire suffit, et il reste vrai que `intersects` aurait
+supprimé tous les mitoyens d'un tissu urbain dense.
+
+**Filtrage placé avant l'extrusion et avant le contrôle de limite de maillage**, sinon le doublon
+consommerait des sommets/triangles sur `MAX_VERTICES`/`MAX_TRIANGLES` et pourrait, via le `break`,
+évincer un vrai voisin plus éloigné. `n_skipped` retranche désormais `n_self` : un bâtiment écarté
+parce qu'il est le bâtiment étudié n'a rien à voir avec la limite de maillage, et le compter là
+donnait le message « réduire le rayon », faux.
+
+**Câblé uniquement sur `generate_environment_for_building`** (la seule tâche qui connaisse un
+`Building`). `generate_environment` — génération autonome de la page Environnement — n'a aucun
+bâtiment de référence : `self_envelope=None` par défaut, comportement d'origine strictement
+inchangé, vérifié en réel.
+
+### Avertissements : le frontend les jetait
+`job.result['warnings']` était produit par le backend depuis la génération d'environnement… et
+**jamais affiché** : `startEnvGenPoll` ne reprenait que `job.message`. Un filtrage silencieux étant
+un filtrage invérifiable (et c'est précisément ce qui a permis au doublon de passer inaperçu jusqu'à
+la question de l'utilisateur), la page Bâtiment affiche désormais la liste complète des
+avertissements — bâtiment étudié écarté, hauteurs estimées, limite de maillage atteinte.
+
+Piège d'ordonnancement traité au passage : `loadBuilding()` remet l'état à plat, et la génération
+l'appelle **avant** de poser ses avertissements. Le reset de `envGenWarnings` est donc synchrone, en
+tête de `loadBuilding` (comme `message`), et non dans le callback de la requête — sinon la réponse
+HTTP, qui arrive après, les effacerait. C'est exactement ce qui arrive déjà à `envGenJob` (le bloc
+d'état du job disparaît après un succès) ; comportement préexistant, non touché ici.
+
+Trois messages distincts plutôt qu'un seul : `n_self == 1` (cas normal), `n_self > 1` (« inhabituel,
+signale plutôt un géoréférencement erroné qu'un vrai doublon » — le détecteur d'erreur de
+géoréférencement prévu à l'étape 5), et `self_polygon` fourni mais `n_self == 0` (« pas retrouvé
+dans les données à cet endroit »), pour ne jamais laisser croire au filtrage quand il n'a rien fait.
+
+### Vérification
+**13 tests** (`SelfBuildingFilterTest`, `SelfBuildingFilterFrameTest`), sans réseau : aire de
+l'empreinte insensible aux murs verticaux, empreinte obtenue sans aucun triangle `ground`,
+concavité préservée (L de 12 m² et non son enveloppe convexe de 16), enveloppe vide → `None`,
+doublon exact écarté, mitoyen à arête partagée conservé, voisin disjoint conservé, recouvrement
+partiel à 75 % écarté, débordement de digitalisation conservé, candidat plus petit entièrement
+inclus écarté, `self_envelope=None` ne filtre rien.
+
+`SelfBuildingFilterFrameTest` rejoue la chaîne réelle (`local_xy` → `_rotate_xy`) à cinq caps
+(0°, 37°, 90°, 180°, 270°) pour le **piège de repère** : les empreintes candidates sont converties
+dans le repère local, `Building.envelope` y est déjà, une seconde rotation ferait rater le doublon.
+Sensibilité confirmée par mutation : empreinte du bâtiment étudié construite dans le mauvais repère
+→ détection encore vraie à 0° mais **fausse à 90° et 180°**. Un test qui ne couvrirait que le cap
+nul serait donc aveugle à cette erreur — c'est bien pour ça que le test balaie plusieurs caps.
+
+**Vérifié en réel contre l'API IGN**, sur deux zones pavillonnaires distinctes (Orléans banlieue,
+Antony) : 42 → 41 et 41 → 40 bâtiments retenus, `buildings_self = 1` dans les deux cas — le
+bâtiment étudié écarté, et lui seul, aucun voisin perdu. Chemin « pas retrouvé » vérifié également
+en réel (enveloppe volontairement placée à 200 m : 0 écarté, 39 retenus, avertissement explicite).
+Interface vérifiée en navigateur réel (même dispositif qu'au Lot W) : **6/6**, dont le rendu des
+deux avertissements et leur survie au rechargement du bâtiment.
+
+`manage.py test api` → **108/108** (95 + 13), depuis l'image reconstruite et non depuis des
+fichiers copiés à chaud. `manage.py check` propre, `ng build --configuration production` propre,
+déployé via `setup2.sh bilan-thermique --yes`.
+
+### Reste ouvert
+Un **mitoyen** est conservé comme obstacle (c'est voulu), mais la paroi que le bâtiment étudié
+partage avec lui devrait physiquement être adiabatique plutôt qu'exposée à `t_ext` : cela suppose un
+troisième `boundary` (après `exterior_air` et `ground`), non fait — à ajouter aux limites de la page
+Théorie (Lot AC). Le seuil `SELF_OVERLAP_RATIO = 0,3` n'est pas réglable depuis l'interface ; les
+deux vérifications en réel n'ont montré aucun cas limite, mais un bâtiment modélisé très
+grossièrement (boîte débordant largement sur un petit voisin) pourrait faire écarter ce voisin —
+l'avertissement « plus d'un bâtiment écarté » est le garde-fou prévu pour ce cas.
 
 ---
 
@@ -1760,8 +1850,9 @@ tiers peut juger de ce que vaut un résultat produit par cet outil.
 
 1. ~~**Lot W**~~ — ✅ livré le 2026-08-09. A remis en service le mode simplifié **et** corrigé au
    passage une répartition du vitrage qui vitrait intégralement toute paroi réglée au-delà de 50 %.
-2. **Lot X** — le correctif de justesse le plus important ; à faire avant d'ajouter quoi que ce soit
-   au maillage d'obstacles.
+2. ~~**Lot X**~~ — ✅ livré le 2026-08-09. Vérifié en réel contre l'IGN sur deux zones : le bâtiment
+   étudié écarté, et lui seul. A aussi fait afficher les avertissements de génération
+   d'environnement, que le frontend jetait depuis toujours.
 3. **Lot AB1** puis **AB2**, **AB3**, **AB4** — correctifs physiques/restitution, indépendants entre
    eux, tous courts.
 4. **Lot AA** (usage 1 d'abord, seul et immédiat ; usages 2-3 ensuite).
