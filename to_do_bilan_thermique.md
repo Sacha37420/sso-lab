@@ -1649,7 +1649,7 @@ n'est pas toujours l'intuition.
 
 ---
 
-## Lot Z — Végétation dans l'environnement (arbres, haies, bois)
+## Lot Z — Végétation dans l'environnement (arbres, haies, bois) ✅ Z1+Z2 livrés le 2026-08-09 (Z3 non fait)
 
 ### Constat (question 2.1.1)
 « Pour le chargement de l'environnement j'aimerais qu'on puisse charger des éléments plus fins comme
@@ -1730,6 +1730,68 @@ rien ; garder Z3 comme lot séparé, à décider ensuite.
 ### Dépendance
 Après le Lot X (sinon la végétation s'ajoute à un environnement déjà faux) et de préférence après AA
 (un arbre doit être posé sur le terrain réel, pas à z = 0).
+
+### Ce qui a été fait
+**Z1 et Z2 livrés ensemble**, comme recommandé ci-dessus — Z1 seul aurait donné un résultat qu'on
+sait faux. **Z3 (saisonnalité) non fait** : il supposerait une notion de **date calendaire côté
+serveur**, que l'application refuse délibérément depuis le Lot V (« aucune notion de date calendaire
+réelle côté serveur »). C'est une décision d'architecture, pas un réglage : laissée ouverte.
+
+**Sources cumulées et non alternatives**, contrairement à la règle « IGN d'abord, OSM en repli » du
+reste du module : seule OSM connaît l'arbre **individuel**, seule l'IGN couvre proprement les masses
+boisées françaises. Les zones boisées OSM ne sont reprises que hors de France, pour ne pas doubler la
+BD TOPO. Table `VEGETATION_PROFILES` (hauteur + transmittance par type) : inévitable, puisque la
+couche IGN n'a **aucun** attribut de hauteur et qu'OSM n'en porte que sur ~40 % des arbres.
+
+**Le vrai travail est Z2 : un occulteur qui atténue au lieu de bloquer.** Le piège central, et ce que
+le lot résout : *un rayon qui traverse un volume fermé touche au moins DEUX faces* (entrée et
+sortie). Multiplier la transmittance à chaque face donnerait k² au lieu de k. D'où
+`shadow.VegetationScene`, qui groupe les faces touchées **par objet** (`obj`) via
+`intersects_id(multiple_hits=True)` et n'applique `k` qu'une fois par objet réellement traversé.
+
+Architecture retenue pour ne rien coûter à ceux qui n'utilisent pas la végétation : **deux
+intersecteurs et deux passes**. La passe opaque reste exactement celle d'avant
+(`intersects_any`, avec sa sortie anticipée) ; la végétation — plus coûteuse — n'est interrogée que
+pour les rayons ayant **déjà** passé le test opaque, et seulement s'il y a de la végétation. Sans
+végétation, `build_vegetation_scene` retourne `None` et tout le chemin est bit à bit celui du Lot C.
+
+`per_triangle` devient une **fraction** au lieu d'un booléen — le binaire n'étant que le cas
+particulier k ∈ {0, 1}. Stocké en `int8` quand il n'y a pas de végétation (pour ne pas gonfler
+`Building.sun_visibility`), en `float32` arrondi à 3 décimales sinon. `lookup_visibility` retourne
+un `float`, et le solveur fait `cos_ti *= transmittance` au lieu de `cos_ti = 0`. Même généralisation
+sur le facteur de vue du ciel (poids multiplié par la transmittance plutôt que mis à zéro) et sur le
+mode temps réel.
+
+Les zones de végétation qui recouvrent le bâtiment étudié sont écartées par le **même critère qu'au
+Lot X** (recouvrement relatif, pas simple contact) — un bois cartographié englobant la maison en
+ferait un volume translucide autour d'elle ; un arbre planté contre la façade, lui, reste légitime.
+
+### Vérification
+**7 tests.** Le décisif : un couvert traversé de part en part transmet **k et non k²** — l'assertion
+teste explicitement les deux. Son pendant : deux couverts **distincts** empilés multiplient bien
+(0,5 × 0,4 = 0,2), donc grouper par objet ne fusionne pas des objets différents. Plus : grille
+strictement binaire sans triangle translucide (non-régression du Lot C), `k = 0` équivalent à
+opaque, facteur de vue du ciel **strictement entre** le cas dégagé et le cas opaque, `lookup_visibility`
+rendant un flottant, et un test **bout en bout** : sous un couvert à k = 0,25, l'échauffement de
+surface vaut exactement 25 % de celui à ciel ouvert — l'atténuation traverse donc tout le chemin
+jusqu'au flux calculé.
+
+**Vérifié en réel** contre les deux API : 13 arbres OSM à Paris 10ᵉ (13 objets distincts, k = 0,20
+feuillus) ; à Orléans, 3 zones IGN **et** 6 arbres OSM cumulés, 9 objets et deux transmittances
+(0,15 bois, 0,20 feuillu) — les deux sources se complètent comme prévu. Sur un bâtiment réel avec sa
+végétation réelle (10 objets, 1000 triangles), le facteur de vue du ciel moyen passe de 0,5000
+(dégagé) à **0,4885** avec atténuation, contre 0,4867 si la même végétation était opaque : l'effet est
+bien intermédiaire. 157/157.
+
+### Reste ouvert
+**Z3 — saisonnalité, non fait** : la valeur « sans feuilles » est déjà dans `VEGETATION_PROFILES`,
+inutilisée. Aujourd'hui un arbre à feuilles caduques est modélisé **en feuilles toute l'année**, ce
+qui **surestime l'ombrage hivernal** — précisément la saison où l'apport solaire compte le plus.
+Écrit dans l'interface et remonté en avertissement à chaque génération, plutôt que masqué. La
+végétation est posée à z = 0 et non sur le relief (le maillage de terrain du Lot AA, lui, l'est) ;
+la couronne d'un arbre est un prisme octogonal, pas une sphère ; et le rayon de couronne se déduit de
+la circonférence du tronc quand `diameter_crown` manque — une approximation sur une approximation,
+assumée.
 
 ---
 
@@ -2199,7 +2261,9 @@ tiers peut juger de ce que vaut un résultat produit par cet outil.
 4. ~~**Lot AA**~~ — ✅ livré le 2026-08-09 (usages 1 et 3 ; usage 2 laissé ouvert, voir sa section).
 5. ~~**Lot Y**~~ — ✅ livré le 2026-08-09. Composant de recherche factorisé et partagé avec le mode
    simplifié ; géoréférencement complet prérempli, rotation nord nulle par construction.
-6. **Lot Z** — le plus lourd, et le seul qui demande un arbitrage d'architecture (Z1/Z2/Z3).
+6. ~~**Lot Z**~~ — ✅ Z1+Z2 livrés le 2026-08-09 (occulteurs à transmittance). **Z3 (saisonnalité)
+   laissé ouvert** : il introduirait une notion de date calendaire côté serveur, refusée
+   délibérément depuis le Lot V — décision d'architecture à prendre à part.
 7. **Lot AC** — en dernier, une fois que ce qui est vrai est stabilisé.
 
 Et, transversalement à toute la phase : **vérifier en navigateur réel**, systématiquement. C'est le
