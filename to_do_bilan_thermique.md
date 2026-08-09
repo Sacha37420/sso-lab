@@ -1555,7 +1555,7 @@ l'avertissement « plus d'un bâtiment écarté » est le garde-fou prévu pour 
 
 ---
 
-## Lot Y — Créer un bâtiment depuis ses coordonnées, hors mode simplifié
+## Lot Y — Créer un bâtiment depuis ses coordonnées, hors mode simplifié ✅ livré le 2026-08-09
 
 ### Constat (question 2.1.2)
 « Pour le chargement du bâtiment hors mode simplifié on ne peut pas commencer par sélectionner le
@@ -1605,6 +1605,47 @@ existant s'applique tel quel (assignation par groupe, sélection manuelle au cli
 ### Dépendance
 Aucune bloquante. Meilleur après le Lot W (le composant partagé sortira du code du mode simplifié
 une fois celui-ci vérifié en navigateur) et idéalement après AA (pour `georefGroundZ`).
+
+### Ce qui a été fait
+Les six étapes. Nouveau composant partagé `components/building-search` (formulaire + appel + liste de
+candidats), utilisé par la page Bâtiment **et** par le mode simplifié — dont le code de recherche a
+été retiré au profit du composant. Il ne fait QUE chercher et laisser choisir : il n'écrit rien, ne
+crée aucun bâtiment, et émet le candidat ; chaque page décide de ce qu'elle en fait. Le type
+`BuildingCandidate` remonte dans `core/building.types.ts`, où il était de toute façon à sa place.
+
+Sur la page Bâtiment, la recherche est une **troisième source de maillage**, à côté de l'import
+OBJ/STL et du générateur de boîte — aucun parcours imposé ensuite, tout l'outillage habituel
+(assignation par groupe, sélection au clic, `boundary`/occultations, raffinement) s'applique tel quel.
+Le vrai gain par rapport à un import : **le géoréférencement est connu par construction**. Latitude,
+longitude, et surtout `georef_north_offset_deg = 0` — l'empreinte étant produite dans le repère
+est/nord réel, la rotation nord est nulle par définition, ce qui supprime d'un coup la principale
+source d'erreur silencieuse identifiée au point A6 de l'analyse. `georef_ground_z` est récupéré dans
+la foulée (Lot AA), donc les quatre champs du géoréférencement sont remplis sans une saisie.
+
+`MAX_WALLS_SIMPLIFIED_MODE` est devenu **paramétrable** plutôt que supprimé : ce plafond de 30 existe
+parce que le mode simplifié génère un menu déroulant PAR PAROI (« 515 murs observés en plein Paris »,
+Lot T) — la page Bâtiment, qui assigne par groupe avec sélection multiple, le relève à 400. Le mode
+simplifié garde le sien, il en a toujours besoin.
+
+Pas de raffinement forcé : sur la page Bâtiment, `refineMesh` est déjà un contrôle explicite, et un
+bâtiment issu de la recherche arrive avec 2 triangles par mur — le bon point de départ pour une
+assignation par groupe. Les réserves de la source (toiture plate, hauteur parfois estimée, cours
+intérieures comblées) sont écrites au-dessus du bloc.
+
+### Vérification
+**12/12 en navigateur réel**, dont trois vérifications de non-régression qui étaient tout l'enjeu de
+la factorisation : le mode simplifié utilise bien le **même** composant, son plafond de parois n'a pas
+bougé (`max_walls` absent → défaut serveur) alors que la page Bâtiment envoie bien 400, et **son
+étape 2 est toujours atteinte** — le Lot W n'a pas été défait en refaisant sa page. Côté Bâtiment :
+maillage chargé avec ses groupes, latitude/longitude/rotation nord/altitude préremplies, nom proposé,
+et bouton d'altitude fonctionnel isolément. 150/150 backend.
+
+### Reste ouvert
+Le composant ne propose pas de carte : les coordonnées se saisissent au clavier, comme avant. La
+recherche trie par distance au **centroïde** de l'empreinte et non par « empreinte contenant le point
+demandé » (défaut C7 relevé à l'analyse, non traité) : sur une parcelle allongée ou en angle, le
+voisin peut sortir premier — la liste affiche la distance, ce qui permet de choisir, mais l'ordre
+n'est pas toujours l'intuition.
 
 ---
 
@@ -2156,7 +2197,8 @@ tiers peut juger de ce que vaut un résultat produit par cet outil.
    et ajouté les planchers bas au catalogue ; AB4 a été tranché avec l'utilisateur après mesure de
    ce que la source météo permet réellement.
 4. ~~**Lot AA**~~ — ✅ livré le 2026-08-09 (usages 1 et 3 ; usage 2 laissé ouvert, voir sa section).
-5. **Lot Y** — ergonomie, réutilise l'existant, gagne à venir après AA.
+5. ~~**Lot Y**~~ — ✅ livré le 2026-08-09. Composant de recherche factorisé et partagé avec le mode
+   simplifié ; géoréférencement complet prérempli, rotation nord nulle par construction.
 6. **Lot Z** — le plus lourd, et le seul qui demande un arbitrage d'architecture (Z1/Z2/Z3).
 7. **Lot AC** — en dernier, une fois que ce qui est vrai est stabilisé.
 
