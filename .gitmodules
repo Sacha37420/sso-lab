@@ -40,3 +40,6 @@
 [submodule "bilan-thermique"]
 	path = bilan-thermique
 	url = https://github.com/Sacha37420/bilan-thermique.git
+[submodule "oauth-hub"]
+	path = oauth-hub
+	url = https://github.com/Sacha37420/oauth-hub.git
