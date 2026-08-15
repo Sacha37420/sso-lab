@@ -11,11 +11,12 @@ raisonnement (règles, pièges, décisions déjà tranchées).
 
 ## Chantiers ouverts (à traiter, pas encore faits)
 
-### Sept apps sur quatorze n'ont aucun test de cloisonnement ⚠️
+### Huit apps sur quinze n'ont aucun test de cloisonnement ⚠️
 
-`analyse-lora`, `app-builder`, `arbre-genealogique`, `atelier-3d`, `conciergerie`, `lab-admin` et
-`restauration` n'ont **pas** de `frontend/e2e/cloisonnement.spec.ts` (constaté le 2026-08-09 en
-vérifiant les comptes E2E). Les sept autres l'ont.
+`analyse-lora`, `app-builder`, `arbre-genealogique`, `atelier-3d`, `conciergerie`, `lab-admin`,
+`restauration` et `traitement-de-fichiers-compils` n'ont **pas** de
+`frontend/e2e/cloisonnement.spec.ts` (recompté le 2026-08-16 sur l'arborescence réelle ; le relevé
+du 2026-08-09 en oubliait un et ignorait `oauth-hub`, créée depuis). Les sept autres l'ont.
 
 Ce qui rend le trou dangereux : **le runner répond `[]` pour ces apps, sans erreur ni
 avertissement** — une app sans spec est donc indiscernable, dans lab-admin comme en ligne de
@@ -529,6 +530,104 @@ nommés individuellement (ex. `conciergerie` : accès par bien, ensembles de co-
 différents d'un bien à l'autre — ni un partage global par groupe, ni des espaces personnels ne
 conviennent, une liste de membres explicite avec droit d'écriture reste nécessaire).
 
+### Identifiants OAuth des sites externes — `oauth-hub`
+
+`oauth-hub` (Django + Angular, 8100 / 4215) centralise les identifiants OAuth2 des **sites**
+externes (GitHub, GitLab, Google…) et distribue aux apps autorisées un jeton **au nom de
+l'utilisateur connecté**. Mode d'emploi complet — pour les devs comme pour les apps
+consommatrices — dans **`oauth-hub/README.md`** ; cette section ne garde que les décisions.
+
+**Cible : des applications qui tournent côté client** (outils de bureau sur le poste de
+l'utilisateur), en plus des apps web du lab. D'où trois URI de rappel distinctes, dont **deux en
+boucle locale** — la confusion la plus fréquente, détaillée en tête du README de l'app :
+
+| # | URI | Où | Boucle locale ? |
+|---|---|---|---|
+| 1 | callback du fournisseur | enregistrée chez GitHub/GitLab | **non, jamais** — l'échange du code exige le `client_secret`, qui ne doit pas être distribué sur les postes |
+| 2 | redirect URI Keycloak du client natif | client Keycloak de l'app | oui (`http://127.0.0.1:8765/callback`) |
+| 3 | `return_url` | paramètre d'appel, rien à enregistrer | oui |
+
+`_is_safe_return_url` (`api/views.py`) n'accepte en `return_url` que le domaine du lab et la boucle
+locale : un endpoint de retour redirigeant vers une URL arbitraire fournie par l'appelant serait un
+tremplin de hameçonnage.
+
+**Les identifiants sont portés par le site, jamais par l'app consommatrice.** Une seule
+application OAuth est enregistrée chez GitHub pour tout le lab ; dix apps s'en servent. L'alternative
+(une application OAuth par app du lab) multipliait les `client_secret` à créer, à roter et à ne pas
+laisser fuir, sans rien apporter : GitHub ne distingue pas les apps du lab, il distingue les
+utilisateurs.
+
+**Décision : courtage maison plutôt que courtage Keycloak.** Keycloak sait faire *identity
+brokering* (`storeToken` + `addReadTokenRoleOnCreate`, endpoint `/realms/ssolab/broker/<idp>/token`)
+et ç'aurait été moins de code. Le choix retenu est une app maison, actée par l'utilisateur en
+connaissance de la contrepartie : **elle concentre en un point** ce que le courtage Keycloak
+répartissait — un seul service détient de quoi agir, au nom de tous les comptes du lab, sur tous les
+sites configurés. Compensations en place : chiffrement au repos (Fernet, `OAUTH_HUB_ENCRYPTION_KEY`),
+liste blanche explicite des apps consommatrices, `client_secret` jamais relisible par l'API, et
+journalisation de chaque remise de jeton. En contrepartie l'app offre ce que le broker Keycloak ne
+donne pas : des fournisseurs **génériques éditables en base** (ajouter GitLab = un formulaire, pas un
+déploiement) et une interface où les devs déposent eux-mêmes les secrets.
+
+**La liste blanche `azp` se donne app par app, jamais au realm.** Même mécanisme que `storage`
+(voir plus haut), mais l'enjeu est d'un cran supérieur : `/api/providers/<slug>/token/` rend le jeton
+**amont brut**. Toute app qui l'obtient agit sur GitHub au nom de l'utilisateur, avec toutes les
+portées accordées. Ouvrir la liste à « tout compte authentifié » reviendrait à l'ouvrir à `admin-cli`
+(public, password grant activé par défaut sur le realm), donc à tout compte du lab depuis n'importe où.
+
+> ⚠ **Seule app du lab où cette liste ne vit PAS dans le `.env`** : elle est en base
+> (`api.models.TrustedClient`) et s'édite dans la page « Apps autorisées » de l'interface.
+> `KEYCLOAK_TRUSTED_CLIENTS` (`oauth-hub/.env`) n'a servi que de graine à la migration `0003` et
+> **n'est plus lue à l'exécution** — l'éditer n'autorise ni ne révoque plus rien (piège à connaître
+> avant de « corriger » un 403 par là). Le déplacement n'affaiblit rien : la population qui édite
+> (`OAUTH_HUB_ADMIN_GROUPS`) écrit déjà `authorization_url`/`token_url` de chaque site, donc peut
+> déjà détourner l'aller-retour OAuth de tout le lab — autoriser un client de plus ne lui ouvre rien
+> qu'elle ne puisse déjà obtenir. Ce qui change, c'est le délai de **révocation** : immédiat au lieu
+> d'un `.env` + recréation de conteneur. Trois invariants non éditables tiennent la propriété de
+> sécurité, tous dans `TrustedClient.is_trusted` (donc appliqués même à une ligne insérée
+> directement en base, pas seulement à une saisie) : le client d'oauth-hub est autorisé en dur (pas
+> de verrouillage possible de l'interface), les clients intégrés du realm (`admin-cli` en tête) sont
+> refusés quoi qu'il arrive, et **aucun cache** ne s'interpose (un cache mémoire serait par
+> processus gunicorn — une révocation resterait partiellement sans effet, en silence).
+
+**Cloisonnement « au moins un groupe »**, et non un groupe nommé : tout compte réellement rattaché au
+lab relie ses propres comptes externes, un auto-inscrit sans groupe n'accède à rien. Implémenté sans
+mécanisme parallèle, en passant la **liste complète des groupes** à `--require-group`.
+> ⚠ Tout nouveau groupe LDAP doit être ajouté à `oauth-hub/.keycloak-client-opts` **et** à
+> `KEYCLOAK_REQUIRED_GROUPS` (`oauth-hub/.env`), sinon ses membres sont refusés à tort.
+
+L'écriture dans le coffre (déposer/modifier un `client_secret`) est réservée à `developers`
+(`OAUTH_HUB_ADMIN_GROUPS`) — distinct de l'accès à l'app.
+
+> ⚠ `init-secrets.sh` **ne régénère jamais** `OAUTH_HUB_ENCRYPTION_KEY` si elle existe. C'est la
+> seule clé du script qui chiffre des données **au repos qui survivent** : la remplacer rend le
+> coffre entier illisible, sans reprise possible.
+
+### PKCE et clients publics — pourquoi ce n'est pas activé partout
+
+`create-app-client.sh` accepte `--native-redirect <uri>` (répétable) et `--pkce` / `--no-pkce`.
+PKCE S256 est posé **automatiquement** sur tout client ayant une URI native, et disponible en opt-in
+ailleurs. Il n'est **pas** posé par défaut sur les clients publics, malgré la règle générale, pour
+une raison vérifiée : **keycloak-js 22.0.5 n'envoie `code_challenge` que si `pkceMethod` est passé
+explicitement à `init()`** (`node_modules/keycloak-js/dist/keycloak.js:811`), et **aucun des 14
+frontends Angular du lab ne le fait**. Poser l'attribut sur les clients publics existants les
+casserait tous d'un coup (`Missing parameter: code_challenge`).
+
+Pour généraliser : ajouter `pkceMethod: 'S256'` dans `<app>/frontend/src/app/core/keycloak.service.ts`
+**et** dans `_templates/django-angular/`, app par app, puis relancer avec `--pkce`. Chantier ouvert,
+non fait.
+
+> ⚠ Trou préexistant repéré au passage, **non corrigé lab-wide** : le bloc de création de
+> `create-app-client.sh` pose `redirectUris: ["*"]` et `webOrigins: ["*"]`. Un joker de redirection
+> sur un client public autorise le renvoi du code d'autorisation vers n'importe quelle URL — ce qui
+> annule le bénéfice de PKCE. Le joker n'est purgé que sur les clients à URI native
+> (`--native-redirect`), parce que les clients web du lab s'appuient aujourd'hui dessus pour les
+> accès LAN/WAN non calculés : les purger tous couperait des accès en service sans prévenir. À
+> reprendre en même temps que le chantier PKCE ci-dessus.
+
+`--no-env` (nouveau) crée un client **sans écrire de `<app>/.env`** : pour un client dont
+l'application vit hors de `dev/` (application de bureau, autre dépôt). Sans lui, le script créait un
+dossier vide avec un `.env` orphelin que rien ne déployait. Utilisé par `storage-analysis`.
+
 ---
 
 ## Tests end-to-end (Playwright)
@@ -645,6 +744,7 @@ chaud. `rotate-secrets-full.sh` termine lui-même par `recompose_docker.sh --for
 | `conciergerie` | `Sacha37420/conciergerie` | Django + Angular | 8084 / 4202 |
 | `craft-lab` | `Sacha37420/craft-lab` | Django + Angular (+ `relay/` WebSocket) | 8097 / 4213 |
 | `lab-admin` | `Sacha37420/lab-admin` | Django + Angular | 8083 / 4201 |
+| `oauth-hub` | `Sacha37420/oauth-hub` | Django + Angular | 8100 / 4215 |
 | `restauration` | `Sacha37420/restauration` | Django + Angular | 8088 / 4206 |
 | `robot-lab` | `Sacha37420/robot-lab` | Django + Angular (+ `engine/` Playwright) | 8094 / 4212 |
 | `storage` | `Sacha37420/storage` | Django + Angular | 8093 / 4211 |
@@ -692,7 +792,7 @@ ci-dessous, lancé avec `bash sso-lab/…`).
 |---|---|
 | `new-app.sh` | Scaffold d'une nouvelle app (interactif) |
 | `setup2.sh <app> --yes` | Déploiement complet d'une app (ou de tout le lab) |
-| `create-app-client.sh <app>` | Créer/mettre à jour le client Keycloak seul |
+| `create-app-client.sh <app>` | Créer/mettre à jour le client Keycloak seul (`--native-redirect`, `--pkce`, `--no-env`) |
 | `sso-lab/setup-code-server-auth.sh` | Créer le client Keycloak pour oauth2-proxy/code-server |
 | `reset_url.sh` | Propager LAN/WAN/Keycloak dans tous les `.env` |
 | `clean2.sh <app>` | Arrêter et supprimer les containers d'une app |

@@ -24,6 +24,27 @@
 #   --wan-ip <IP>          IP WAN (skip l'auto-détection via ipify)
 #   --no-wan               Désactive l'ajout des URIs WAN
 #   --no-rotate            Conserve le secret existant (ne régénère pas)
+#   --native-redirect <u>  URI de rappel ajoutée telle quelle (répétable).
+#                            Pour un client natif à boucle locale, que la
+#                            logique LAN/WAN ne sait pas produire :
+#                            --native-redirect 'http://127.0.0.1:8765/callback'
+#                            Implique --pkce (voir ci-dessous).
+#   --pkce / --no-pkce     Force / retire l'exigence PKCE S256 sur le client.
+#
+# ⚠ PKCE et clients publics — pourquoi ce n'est PAS activé par défaut
+#   Un client public sans PKCE est vulnérable à l'interception du code
+#   d'autorisation ; ce devrait donc être le défaut. Ça ne l'est pas ici pour
+#   une raison vérifiable : keycloak-js 22.0.5 n'envoie `code_challenge` QUE si
+#   `pkceMethod` est explicitement passé à `init()` (cf. keycloak.js:811), et
+#   AUCUN frontend Angular du lab ne le fait aujourd'hui. Poser l'attribut sur
+#   les clients publics existants casserait donc la connexion des 14 apps d'un
+#   coup (Keycloak refuse la requête : « Missing parameter: code_challenge »).
+#   PKCE est donc activé automatiquement là où il est à la fois indispensable
+#   et sans risque — les clients natifs (--native-redirect) — et disponible en
+#   opt-in via --pkce pour une app dont le frontend est prêt.
+#   Pour généraliser : ajouter `pkceMethod: 'S256'` dans
+#   `<app>/frontend/src/app/core/keycloak.service.ts` ET dans
+#   `_templates/django-angular/`, app par app, puis passer --pkce.
 #
 # Prérequis :
 #   - sso-lab/.env rempli (KEYCLOAK_ADMIN_PASSWORD au minimum)
@@ -53,12 +74,17 @@ usage() {
   echo "  --no-wan               Ne pas ajouter d'URIs WAN"
   echo "  --no-rotate            Conserver le secret existant"
   echo "  --require-group <g>    Crée un rôle realm <g>-member et l'assigne au groupe <g>"
+  echo "  --native-redirect <u>  URI de rappel ajoutée telle quelle (répétable, implique --pkce)"
+  echo "  --pkce | --no-pkce     Force / retire l'exigence PKCE S256"
+  echo "  --no-env               N'écrit aucun <app>/.env (client sans dossier d'app)"
   echo ""
   echo "Exemples :"
   echo "  $0 mon-api --port 8083"
   echo "  $0 mon-front --public --port 4201"
   echo "  $0 mon-api --no-rotate --port 8083"
   echo "  $0 infra --client-id pgadmin --port 5050"
+  echo "  $0 storage-analysis --public --no-wan \\"
+  echo "     --native-redirect 'http://127.0.0.1:8765/callback' --require-group developers"
   exit 1
 }
 
@@ -124,6 +150,10 @@ NO_WAN=false
 ROTATE=true
 REQUIRE_GROUP=""
 CADDY_PATH=""
+declare -a NATIVE_REDIRECTS=()
+NO_ENV=false
+# vide = « laisser tel quel » ; true/false = décision explicite
+PKCE_CHOICE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -136,6 +166,10 @@ while [[ $# -gt 0 ]]; do
     --no-wan)          NO_WAN=true ;;
     --no-rotate)       ROTATE=false ;;
     --require-group)   [[ $# -gt 1 ]] || die "--require-group requiert une valeur"; REQUIRE_GROUP="$2"; shift ;;
+    --native-redirect) [[ $# -gt 1 ]] || die "--native-redirect requiert une valeur"; NATIVE_REDIRECTS+=("$2"); shift ;;
+    --no-env)          NO_ENV=true ;;
+    --pkce)            PKCE_CHOICE="true" ;;
+    --no-pkce)         PKCE_CHOICE="false" ;;
     --caddy-path)      [[ $# -gt 1 ]] || die "--caddy-path requiert une valeur"; CADDY_PATH="$2"; shift ;;
     --caddy-subdomain) [[ $# -gt 1 ]] || die "--caddy-subdomain requiert une valeur"; CADDY_PATH="$2"; shift ;;  # alias rétrocompat
     --help|-h)         usage ;;
@@ -152,6 +186,21 @@ done
 
 [[ "$APP_NAME" =~ ^[a-zA-Z0-9_-]+$ ]] \
   || die "Nom invalide : '$APP_NAME' (alphanumérique, tirets et underscores uniquement)"
+
+# Un client natif à boucle locale ne peut pas garder de secret et sa redirection
+# est interceptable par tout process local : PKCE y est indispensable, et son
+# client (une app de bureau qu'on écrit soi-même) le supporte forcément.
+# --no-pkce reste prioritaire pour un dépannage.
+if [[ ${#NATIVE_REDIRECTS[@]} -gt 0 && -z "$PKCE_CHOICE" ]]; then
+  PKCE_CHOICE="true"
+fi
+
+# Une URI de rappel mal formée passerait silencieusement dans Keycloak et
+# échouerait seulement au moment de l'authentification, sans message clair.
+for _nr in ${NATIVE_REDIRECTS[@]+"${NATIVE_REDIRECTS[@]}"}; do
+  [[ "$_nr" =~ ^https?://[^[:space:]]+$ ]] \
+    || die "--native-redirect invalide : '$_nr' (attendu : http(s)://hôte[:port]/chemin)"
+done
 
 
 # ── Chemins ───────────────────────────────────────────────────────────────────
@@ -198,8 +247,18 @@ _urlenc() {
 # Usage : upsert_env <fichier> <clé> <valeur>
 # Remplace la ligne KEY=... existante (+ éventuelles lignes orphelines suivantes
 # issues d'une écriture corrompue) ou ajoute la clé en fin de fichier.
+declare -a _KC_SUMMARY=()
 upsert_env() {
   local file="$1" key="$2" value="$3"
+  # --no-env : le client n'a pas de dossier d'application dans dev/ (client
+  # natif, application de bureau vivant dans un autre dépôt…). Sans ce garde-fou
+  # le script créerait un dossier vide avec un .env orphelin, que rien ne
+  # déploierait ni ne nettoierait. On collecte les valeurs pour les afficher en
+  # fin d'exécution : elles restent la sortie utile du script.
+  if [[ "${NO_ENV:-false}" == "true" && "$file" == "${APP_ENV:-}" ]]; then
+    _KC_SUMMARY+=("$key=$value")
+    return 0
+  fi
   [[ -f "$file" ]] || touch "$file"
   if grep -qE "^${key}=" "$file" 2>/dev/null; then
     # awk : remplace la ligne KEY= et saute les lignes orphelines qui suivent
@@ -309,6 +368,14 @@ echo "  Port          : ${APP_PORT:-— (redirect URIs non calculées, utiliser 
 echo "  Redirect path : $REDIRECT_PATH"
 echo "  LAN IP        : ${LAN_IP:-—}"
 echo "  WAN IP        : ${WAN_IP:-—}"
+if [[ ${#NATIVE_REDIRECTS[@]} -gt 0 ]]; then
+  echo "  URIs natives  : ${NATIVE_REDIRECTS[*]}"
+fi
+case "$PKCE_CHOICE" in
+  true)  echo "  PKCE          : S256 (exigé)" ;;
+  false) echo "  PKCE          : retiré explicitement (--no-pkce)" ;;
+  *)     echo "  PKCE          : inchangé" ;;
+esac
 echo "  Keycloak admin : $KEYCLOAK_URL  (appels API — localhost)"
 echo "  Keycloak public: $KEYCLOAK_PUBLIC_URL  (écrit dans .env — realm: $REALM)"
 echo "  .env cible    : $APP_ENV"
@@ -725,7 +792,7 @@ info "2/5 — Gestion du secret..."
 
 CLIENT_SECRET=""
 if [[ "$CLIENT_TYPE" == "confidential" ]]; then
-  mkdir -p "$APP_DIR"
+  $NO_ENV || mkdir -p "$APP_DIR"
 
   if $ROTATE; then
     # POST sans body : Keycloak génère lui-même le secret et le retourne dans la réponse.
@@ -776,6 +843,15 @@ if [[ -n "$APP_PORT" ]]; then
   done
 fi
 
+# URIs natives (--native-redirect) — ajoutées telles quelles.
+#   Volontairement SANS webOrigin correspondant : une boucle locale n'est pas
+#   une origine de navigateur qui appellerait l'API du lab, et l'ajouter
+#   élargirait le CORS du realm sans aucun bénéfice.
+for _nr in ${NATIVE_REDIRECTS[@]+"${NATIVE_REDIRECTS[@]}"}; do
+  DESIRED_URIS+=("$_nr")
+  info "URI de rappel native : $_nr"
+done
+
 # URIs HTTPS via Caddy — ajoutées si --caddy-path est fourni et DOMAIN configuré
 if [[ -n "$CADDY_PATH" ]]; then
   _ROOT_ENV="$(cd "$(dirname "$0")/.." && pwd)/.env"
@@ -798,14 +874,29 @@ else
   DESIRED_ORIGINS_JSON='[]'
 fi
 
+# Un client créé par ce script reçoit `redirectUris: ["*"]` (bloc de création
+# plus haut). Sur un client NATIF c'est intenable : le joker autorise la
+# redirection du code d'autorisation vers n'importe quelle URL, ce qui annule
+# exactement ce que PKCE et l'URI de boucle locale viennent protéger. Dès qu'une
+# URI native précise est fournie, on purge donc le joker (et l'origine vide que
+# Keycloak accumule au passage).
+#   Volontairement limité à ce cas : les clients web du lab s'appuient
+#   aujourd'hui sur ce joker pour les accès LAN/WAN non calculés, les purger
+#   tous ici couperait des accès en service sans prévenir.
+if [[ ${#NATIVE_REDIRECTS[@]} -gt 0 ]]; then STRICT_URIS=true; else STRICT_URIS=false; fi
+
 # Fusionner avec les URIs existantes (union sans doublons)
 NEW_URIS_JSON=$(echo "$CLIENT_JSON" | jq \
   --argjson d "$DESIRED_URIS_JSON" \
-  '((.redirectUris // []) + $d) | unique')
+  --argjson strict "$STRICT_URIS" \
+  '((.redirectUris // []) + $d) | unique
+   | if $strict then map(select(. != "*")) else . end')
 
 NEW_ORIGINS_JSON=$(echo "$CLIENT_JSON" | jq \
   --argjson d "$DESIRED_ORIGINS_JSON" \
-  '((.webOrigins // []) + $d) | unique')
+  --argjson strict "$STRICT_URIS" \
+  '((.webOrigins // []) + $d) | unique
+   | if $strict then map(select(. != "*" and . != "")) else . end')
 
 # Comparer avec l'existant
 PREV_URIS=$(echo "$CLIENT_JSON"    | jq -Sc '(.redirectUris // []) | sort')
@@ -813,11 +904,31 @@ PREV_ORIGINS=$(echo "$CLIENT_JSON" | jq -Sc '(.webOrigins // []) | sort')
 NEXT_URIS=$(echo "$NEW_URIS_JSON"       | jq -Sc 'sort')
 NEXT_ORIGINS=$(echo "$NEW_ORIGINS_JSON" | jq -Sc 'sort')
 
-if [[ "$NEXT_URIS" != "$PREV_URIS" ]] || [[ "$NEXT_ORIGINS" != "$PREV_ORIGINS" ]]; then
+# ── PKCE S256 (idempotent) ────────────────────────────────────────────────────
+#   Comparé ici pour être appliqué par le MÊME PUT que les URIs : le bloc
+#   ci-dessous ne partait que si les URIs changeaient, donc un client déjà à
+#   jour n'aurait jamais reçu l'attribut.
+PKCE_ATTR='pkce.code.challenge.method'
+PKCE_PREV=$(echo "$CLIENT_JSON" | jq -r --arg k "$PKCE_ATTR" '.attributes[$k] // ""')
+PKCE_NEXT="$PKCE_PREV"
+case "$PKCE_CHOICE" in
+  true)  PKCE_NEXT="S256" ;;
+  false) PKCE_NEXT="" ;;
+esac
+
+if [[ "$NEXT_URIS" != "$PREV_URIS" ]] || [[ "$NEXT_ORIGINS" != "$PREV_ORIGINS" ]] \
+   || [[ "$PKCE_NEXT" != "$PKCE_PREV" ]]; then
   UPDATED_CLIENT=$(echo "$CLIENT_JSON" | jq \
     --argjson uris    "$NEW_URIS_JSON" \
     --argjson origins "$NEW_ORIGINS_JSON" \
-    '.redirectUris = $uris | .webOrigins = $origins | .attributes["post.logout.redirect.uris"] = "+"')
+    --arg     pkcek   "$PKCE_ATTR" \
+    --arg     pkcev   "$PKCE_NEXT" \
+    '.redirectUris = $uris | .webOrigins = $origins | .attributes["post.logout.redirect.uris"] = "+"
+     # Chaîne vide ⇒ on RETIRE la clé plutôt que de la poser à "" : Keycloak
+     # traite un attribut vide comme présent et refuserait alors les requêtes
+     # sans code_challenge.
+     | if $pkcev == "" then .attributes |= del(.[$pkcek])
+                       else .attributes[$pkcek] = $pkcev end')
 
   HTTP_STATUS=$(curl -s -o /tmp/_kc_update.json -w "%{http_code}" \
     -X PUT \
@@ -829,12 +940,14 @@ if [[ "$NEXT_URIS" != "$PREV_URIS" ]] || [[ "$NEXT_ORIGINS" != "$PREV_ORIGINS" ]
   if [[ "$HTTP_STATUS" == "204" ]]; then
     success "Redirect URIs mises à jour :"
     echo "$NEW_URIS_JSON" | jq -r '.[]' | sed 's/^/     • /'
+    [[ "$PKCE_NEXT" != "$PKCE_PREV" ]] && success "  PKCE : '${PKCE_PREV:-aucun}' → '${PKCE_NEXT:-aucun}'."
   else
     warn "Mise à jour des URIs : HTTP $HTTP_STATUS — $(cat /tmp/_kc_update.json)"
   fi
 else
   success "Redirect URIs déjà complètes."
   echo "$NEW_URIS_JSON" | jq -r '.[]' | sed 's/^/     • /'
+  [[ -n "$PKCE_PREV" ]] && success "  PKCE déjà exigé ($PKCE_PREV)."
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -879,15 +992,19 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # 5/5 — Mise à jour du .env de l'application
 # ══════════════════════════════════════════════════════════════════════════════
-info "5/5 — Mise à jour de $APP_ENV..."
+if $NO_ENV; then
+  info "5/5 — Configuration du client (aucun .env, --no-env)..."
+else
+  info "5/5 — Mise à jour de $APP_ENV..."
+fi
 
-mkdir -p "$APP_DIR"
+$NO_ENV || mkdir -p "$APP_DIR"
 upsert_env "$APP_ENV" "KEYCLOAK_URL"         "$KEYCLOAK_PUBLIC_URL"
 upsert_env "$APP_ENV" "KEYCLOAK_REALM"      "$REALM"
 upsert_env "$APP_ENV" "KEYCLOAK_CLIENT_ID"  "$CLIENT_ID"
 upsert_env "$APP_ENV" "KEYCLOAK_ISSUER_URI" "$KEYCLOAK_PUBLIC_URL/realms/$REALM"
 upsert_env "$APP_ENV" "PORT_KEYCLOAK"       "$KC_PORT"
-success "$APP_ENV mis à jour."
+$NO_ENV || success "$APP_ENV mis à jour."
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 6/5 — Restriction d'accès à un ou plusieurs groupes Keycloak (optionnel)
@@ -1182,8 +1299,13 @@ echo ""
 success "Terminé !"
 echo ""
 echo "─────────────────────────────────────────────────────────────"
-echo "  $APP_ENV :"
-grep -E "^KEYCLOAK_|^PORT_KEYCLOAK" "$APP_ENV" 2>/dev/null | sed 's/^/  /'
+if $NO_ENV; then
+  echo "  Aucun .env écrit (--no-env). Configuration du client :"
+  printf '  %s\n' ${_KC_SUMMARY[@]+"${_KC_SUMMARY[@]}"}
+else
+  echo "  $APP_ENV :"
+  grep -E "^KEYCLOAK_|^PORT_KEYCLOAK" "$APP_ENV" 2>/dev/null | sed 's/^/  /'
+fi
 echo "─────────────────────────────────────────────────────────────"
 echo ""
 if [[ "$CLIENT_TYPE" == "confidential" ]]; then

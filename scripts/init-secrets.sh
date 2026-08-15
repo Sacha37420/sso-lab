@@ -108,6 +108,35 @@ KC_ADMIN_PASS=$(gen_pass)
 upsert_env "$SSO_ENV" "KEYCLOAK_ADMIN_PASSWORD" "$KC_ADMIN_PASS"
 echo "✅  KEYCLOAK_ADMIN_PASSWORD            → sso-lab"
 
+# ── Coffre OAuth (oauth-hub) ──────────────────────────────────────────────────
+#   OAUTH_HUB_ENCRYPTION_KEY chiffre, dans la base de oauth-hub, les
+#   client_secret des sites OAuth et les jetons amont de chaque utilisateur.
+#
+#   ⚠ Seule clé de ce script qui n'est JAMAIS régénérée quand elle existe déjà.
+#   Les autres secrets d'ici ne valent que pour des volumes neufs : les
+#   remplacer ne « perd » rien, on recrée le volume. Celle-ci chiffre des
+#   données au repos qui, elles, survivent — la remplacer rendrait tout le
+#   coffre illisible (client_secret ET connexions de tous les comptes du lab),
+#   sans aucune reprise possible. Pour la roter volontairement, il faut d'abord
+#   vider le coffre et redemander à chacun de relier ses comptes.
+OAUTH_HUB_ENV="$SCRIPT_DIR/oauth-hub/.env"
+if [[ -d "$SCRIPT_DIR/oauth-hub" ]]; then
+  _existing_key=""
+  if [[ -f "$OAUTH_HUB_ENV" ]]; then
+    _existing_key=$(grep -E '^OAUTH_HUB_ENCRYPTION_KEY=' "$OAUTH_HUB_ENV" 2>/dev/null \
+      | head -1 | cut -d= -f2-)
+  fi
+  if [[ -n "$_existing_key" && "$_existing_key" != "CHANGE_ME" ]]; then
+    echo "⏭️   OAUTH_HUB_ENCRYPTION_KEY            (conservée — la changer viderait le coffre)"
+  else
+    # Clé Fernet = 32 octets aléatoires en base64 urlsafe. `openssl` suffit :
+    # pas de dépendance Python dans ce script.
+    OAUTH_HUB_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
+    upsert_env "$OAUTH_HUB_ENV" "OAUTH_HUB_ENCRYPTION_KEY" "$OAUTH_HUB_KEY"
+    echo "✅  OAUTH_HUB_ENCRYPTION_KEY            → oauth-hub"
+  fi
+fi
+
 # ── Utilisateurs LDAP (init.ldif) — uniquement avec --init-ldif-password ──────
 #   init.ldif porte les mots de passe en clair, en dur : c'est lui la source de
 #   vérité au bootstrap. On réécrit chaque `userPassword:` et on recopie la valeur
