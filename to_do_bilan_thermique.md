@@ -2855,6 +2855,112 @@ choisi dans la scène (76 triangles) contre 8 172 triangles d'environnement : qu
 
 ---
 
+## Lot AI — Sol, matériaux, texture, et mode simplifié par sélection 3D ✅ livré le 2026-09-27
+
+### Demandes (retours sur le Lot AH)
+1. Végétation BD TOPO jugée nulle → la baser sur le LiDAR. *Constat* : c'était déjà le cas au Lot AH ;
+   l'environnement critiqué venait de l'ancien générateur ou avait été lancé cases décochées.
+   Libellés rendus explicites (« relevés par le LiDAR »).
+2. Sol : exploiter les données → tranché avec l'utilisateur : **nature / albédo du sol** et
+   réflexion solaire par le sol (absente jusqu'ici).
+3. « Texturer » → tranché : **les deux** — texture visuelle (orthophoto) ET matériaux pour le calcul.
+4. Mode simplifié trop difficile → charger l'environnement 3D, sélectionner le bâtiment (ou
+   plusieurs emprises BD TOPO qui n'en forment qu'un), **recalculer l'enveloppe de l'ensemble**.
+
+### Données vérifiées (2026-09-27)
+- Orthophotos WMS-R `ORTHOIMAGERY.ORTHOPHOTOS` (RVB) et `ORTHOIMAGERY.ORTHOPHOTOS.IRC`
+  (proche infrarouge en canal rouge), 20 cm natifs, emprise arbitraire. Même limite 1 req/s.
+- BD TOPO : `materiaux_des_murs`, `materiaux_de_la_toiture` (codes fichiers fonciers à deux
+  chiffres, un matériau par chiffre non nul : « 35 » = béton + aggloméré), `date_d_apparition`.
+  Renseignés sur ~⅔ des bâtiments du quartier test.
+- Le catalogue de parois ne contenait QUE du neuf (RT2005–RE2020) : aucune paroi pour un mur en
+  pierre ou un béton des années 60 — pré-assigner exigeait de l'étendre.
+
+### Ce qui a été fait
+- **Albédo** (`observed_env.OrthoImage`) : moitié visible (RVB linéarisé, gamma 2,2), moitié
+  proche infrarouge (IRC). Calibration vérifiée sur l'image réelle : feuillus 0,15, pelouse 0,20,
+  enrobé 0,04, minéral clair 0,44 — dans les fourchettes usuelles. Eau reprise du LiDAR (classe 9).
+  Grille d'albédo du sol à 2 m → `Environment.generation['ground_albedo']`.
+- **Réflexion par le sol** (`shadow.compute_ground_reflection_factors`) : facteur par triangle
+  `ρ_vu·(1 − cos β)/2`, ρ_vu = albédo du sol réellement vu (rayons vers le bas, voisins masquants,
+  albédo lu au point d'impact). Solveur : `e_glo += facteur × GHI` (GHI = e_dir·sin h + e_dif),
+  traité comme du diffus (y compris sous un store). Précalculé avec l'ombrage, recalculé en
+  mode temps réel. **Aucun terme sans albédo relevé** : comportement antérieur inchangé.
+- **Absorptance par triangle** (`alpha_ext`) : remplace l'alpha de la couche extérieure opaque
+  sans dupliquer le modèle. Toiture : 1 − albédo relevé (75ᵉ centile, voir pièges) ; murs :
+  valeur usuelle du matériau BD TOPO. Préservée par le PATCH « sommets seuls » (piège Lot K), la
+  page Bâtiment et le mode simplifié.
+- **Catalogue étendu** (`seed_paroi_catalogue`, 14 parois de bâti existant) : pierre 50 cm
+  (U ≈ 1,9), brique pleine (1,6), pan de bois (2,0), béton banché non isolé (3,2), parpaing non
+  isolé (2,3), ITI 40/60/80 mm (0,71/0,53/0,42), ossature bois, toitures non isolée → 150 mm,
+  plancher non isolé. **Pré-assignation** par époque × matériau (`observed_env.suggest_materials`) ;
+  sans année ni matériau, rien n'est inventé. Commande à relancer après déploiement (idempotente).
+- **Fusion** (`observed_env.merge_objects`) : enveloppe REconstruite sur l'union des emprises
+  (jours de quelques cm refermés), toiture relevée sur les maillages des parties par lancer de
+  rayons vertical, murs seulement sur le contour extérieur ; un ressaut entre parties devient
+  mur extérieur au-dessus du toit le plus bas. Sélection non contiguë refusée.
+  Endpoint `POST /api/environnements/<id>/etudier/ {ids, name}`.
+- **Texture** : `GET /api/environnements/<id>/orthophoto/` (cache disque), descripteur affine
+  local → (u, v) dans le détail ; `MeshViewer` gère un second maillage texturé (toits et terrain),
+  façades teintées par matériau (tokens `--mat-*`). Composant partagé `env-scene`.
+- **Mode simplifié refondu** : 1. reconstruire (ou reprendre) le quartier ; 2. cliquer son ou ses
+  bâtiments dans la vue 3D (réunis automatiquement) ; 3. parois pré-assignées, vitrage double 20 %
+  pré-rempli sur les façades exposées, **réglage commun à toutes les façades**, détail par paroi
+  replié ; maille élargie automatiquement si le bâtiment est trop grand ; 4. l'environnement est
+  déjà lié, reste l'ombrage ; 5. calcul. Volume et emprise mesurés sur l'enveloppe (volume 2,5D
+  exact, Σ aire projetée × hauteur).
+- Page Environnement : sélection multiple (bâtiments seuls, déjà étudiés exclus), orthophoto
+  activable, rapport de pré-assignation.
+
+### Mesures réelles (quartier test, 47,4100 ; 0,6987, R = 150 m)
+- Albédo du sol : médiane 0,145 (p5 0,05 – p95 0,30).
+- Albédo des toits par matériau déclaré (75ᵉ centile) : ardoises 0,12 < tuiles 0,16 < béton 0,21
+  < zinc 0,48 — l'ordre attendu.
+- Parois suggérées pour 64 bâtiments sur 110 (les autres : ni année ni matériau).
+- Fusion de deux bâtiments mitoyens réels (6,5 m et 17,4 m) : volume fermé 9 972 m³ contre
+  9 969 m³ pour les parties (0,03 %), murs mitoyens signalés.
+- Facteur de réflexion médian des murs du bâtiment fusionné : 0,039 (albédo vu ≈ 0,08 — rue
+  canyon, voisins masquants).
+
+### Pièges (constatés, corrigés)
+- **Plancher sur terre-plein** : il « voit » tout le sol sous lui et recevait ρ × GHI sur sa face
+  enterrée (facteur 0,74 mesuré). Exclu (`boundary == 'ground'`).
+- **Albédo de toit à la médiane** : sur un toit à deux pans, le pan à l'ombre au moment de la prise
+  de vue paraît sombre sans l'être — médiane biaisée bas (tuiles 0,12). 75ᵉ centile.
+- **App sans zone.js** : une affectation dans un `subscribe` ne rafraîchit pas la vue → signal.
+- **Sélection multiple** : un clic tombé sur le terrain effaçait la sélection ; un bâtiment déjà
+  étudié pouvait y entrer. Bâtiments actifs seulement.
+- **Maille de 2 m** refusée pour un collectif de 74 m (> 20 000 triangles) : repli automatique ×1,5.
+- Mon propre test : triangle « face au sud » orienté au nord (ordre des sommets) — les valeurs
+  obtenues étaient exactement celles du côté réellement vu.
+- **Précalcul d'ombrage > 10 min** pour un collectif subdivisé (12 288 triangles) : lancer de rayons
+  numpy de trimesh. Passage à **Embree** (`embreex`, repli numpy automatique,
+  `shadow._ray_intersector`) : 200 000 rayons en 4,9 s contre 2 313 s, zéro désaccord ; sur une
+  scène réelle complète, 11 cases de grille solaire sur 54 432 diffèrent (rayons rasants), facteur
+  de ciel à 3·10⁻⁵ près, réflexion du sol identique. Le facteur de vue du ciel regroupe en outre
+  ses rayons par lots (résultat identique à 3·10⁻¹⁶). Ombrage du parcours simplifié : 6 s.
+- **Verrou fantôme** (préexistant) : une tâche coupée par un redéploiement restait « en cours » en
+  base et bloquait tout précalcul et tout calcul du lab (409). Le worker marque désormais ces
+  tâches en erreur à son démarrage (`tasks._release_orphan_jobs`, signal `worker_ready`).
+- **Calcul refusé avec tout profil sans climatisation** (préexistant depuis le Lot V) : les profils
+  codent « pas de clim » par t_max = 100, la consigne horaire était bornée à 50 → 400 heure par
+  heure. Borne relevée à 100.
+
+### Parcours vérifié en navigateur réel (API réelle)
+Mode simplifié : quartier repris → clic sur un bâtiment → parois pré-assignées (2000, béton +
+aggloméré, ardoises : ITI 80 mm, toiture 1989–2000, α toit 0,91 mesuré) → vitrage pré-rempli →
+ombrage 6 s → année type → **6 708 kWh, 62 kWh/m²/an** sur 108 m². Page Environnement :
+orthophoto servie et drapée, sélection multiple de deux bâtiments, bouton « Réunir » présent.
+
+### Reste ouvert
+- Façades voisines toujours noires (seul le sol réfléchit) ; ombres portées au sol ignorées.
+- Orthophoto non « vraie ortho » : toit d'un bâtiment haut déporté ; son albédo peut mêler façade.
+- Pré-assignation par ordre de grandeur d'époque ; pas de menuiseries réelles (proportion de
+  triangles vitrés, comme avant).
+- Texture : orthophoto en vue de dessus sur les toits en pente (étirement léger sur les pans raides).
+
+---
+
 ## Hors scope — décisions déjà prises, à ne pas entreprendre sans en rediscuter
 
 La page Théorie (section « Portée et hypothèses ») exclut déjà explicitement, comme choix assumé et
