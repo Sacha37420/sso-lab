@@ -2996,6 +2996,81 @@ une segmentation dédiée (squelette le long de la haie) ferait mieux.
 
 ---
 
+## Lot AK — Façades : texture Panoramax, baies détectées, vrais vitrages ✅ livré le 2026-09-27
+
+### Demande
+Texture visuelle des façades, catégorisation vitrage / mur, et dans le mode simplifié de vrais
+vitrages au lieu d'une proportion ; pouvoir couper la texture pour vérifier sur le maillage.
+
+### Sources et outils vérifiés
+- **Panoramax** (IGN × OSM France) : photos 360° équirectangulaires CC-BY-SA 4.0, API ouverte
+  sans clé (`api.panoramax.xyz/api/search?bbox=`), position (précision annoncée ~4 m), cap du
+  centre (`view:azimuth`), inclinaison (`pers:pitch`), HD 7680×3840. > 100 photos sur la zone test.
+  Pas d'obliques IGN en service.
+- **Détection des baies** — trois essais sur façades réelles : (1) règle de couleur : rate les
+  volets clairs sur mur crème, prend les trouées d'une haie pour des baies ; (2) SegFormer/ADE20K :
+  segmente bien végétation/ciel/véhicules mais **aucune** fenêtre ; (3) **OWLv2** (Google, Apache
+  2.0, ONNX quantifié 155 Mo, requêtes « a window » / « a window shutter » / « a door ») : fenêtres,
+  volets et portes correctement encadrés — retenu (~30 s par façade en tâche de fond).
+- SegFormer conservé pour mesurer la part de façade visible (licence NVIDIA non commerciale).
+  Modèles téléchargés au premier usage dans le cache du conteneur (re-téléchargés après
+  redéploiement).
+
+### Chaîne (`api/facades.py`)
+1. Plans de façade (groupes `mur_k` exposés), repère (s, t) : s vers la droite vu de l'extérieur.
+2. Photos candidates proches et de face (4–35 m, < 60°), classées ; pré-filtre de visibilité par
+   lancer de rayons (bâtiments + terrain, bâtiment lui-même compris) avant tout téléchargement.
+3. Hauteur d'appareil = terrain LiDAR SOUS la prise de vue + 2,2 m.
+4. Recalage fin (±2 m, ±3°) sur les arêtes des bâtiments (contours orientés, végétation
+   masquée, rappel vers le GPS, façade interdite dans le ciel).
+5. Redressement (3 cm/px) ; photo retenue = la première suffisamment dégagée (≤ 55 % masquée
+   selon SegFormer), sinon la moins masquée ; > 70 % masquée → « masquée ».
+6. OWLv2 → baies ; fusion des cadres emboîtés / vantaux voisins ; filtres de taille et de contour.
+7. Intégration (`insert_openings`) : chaque baie = trou rectangulaire dans le mur (triangulation
+   contrainte), rempli par `vitrage_k` (modèle de vitrage) ou `porte_k` ; contour du mur conservé
+   sommet pour sommet → volume fermé. Façade non vue : fenêtres régulières par étage à la
+   proportion choisie. Toujours depuis l'enveloppe de base (réappliquable).
+
+### API / interface
+- `POST /api/batiments/<id>/facades/analyser/` (job), `GET …/facades/<groupe>/texture/`,
+  `POST …/facades/appliquer/ {glazing_model_id, wall_model_id?, fallback_ratio, use_detection}`.
+  `Building.facades` (migration 0013) ; l'enveloppe de base n'est pas renvoyée au navigateur.
+- Composant `facade-panel` (mode simplifié étape 3 et page Bâtiment) : analyse, vue 3D texturée
+  ou en couleurs (vitrage bleu, porte orange, mur, mitoyen), tableau par façade avec « utiliser la
+  détection », intégration. Visualiseur : plusieurs textures (une par façade), UV en 3D.
+- Mode simplifié : plus de proportion de petits triangles ; subdivision APRÈS les vitrages
+  (finesse de l'ombrage), repli automatique de maille.
+
+### Itérations sur données réelles (maison de la zone test) — pièges
+- Caméra à 2,2 m au-dessus du pied du bâtiment : rue en pente → texture remontée dans le toit.
+- Recalage avec grands déplacements : scores élevés sur de fausses solutions (lames d'un volet) ;
+  la photo la plus proche, à peine corrigée, était la bonne → recalage borné, pas de recalage
+  vertical, choix dans l'ordre géométrique.
+- Choix par SegFormer seul : le muret de clôture est classé « mur » → exclu des classes façade.
+- Vue d'un pignon caché par une maison voisine : détection des fenêtres de la voisine → test de
+  visibilité par rayons.
+- Cadres emboîtés / vantaux séparés → fusion.
+- Pignon vu et aveugle recevait des fenêtres de repli → une façade vue suit la détection même vide.
+- **Affinage de maillage refusé après insertion des vitrages** (trouvé par le parcours complet en
+  navigateur) : l'ancien raffinement « rouge » marquait les trois côtés de tout triangle touché,
+  ce qui se propageait à TOUT le maillage à chaque itération ; avec les petits triangles des baies
+  et des côtés de 37 m, dépassement de la limite de 20 000 triangles même à 7 m. Remplacé par un
+  raffinement local rouge-vert-bleu par le plus long côté (`geometry.refine_envelope`, conforme,
+  orientation conservée) : 5 118 triangles à 2 m sur la même maison. Tests `RefineEnvelopeTest`
+  (l'ancien algorithme échoue au test de non-propagation).
+Résultat final sur la maison test : façade sur rue 3 fenêtres + porte exactes ; pignon vu,
+aveugle ; pignon masqué (voiture, haie) détecté comme tel ; façade jardin sans photo. Enveloppe
+fermée après insertion (vérifié).
+
+### Reste ouvert
+- Façades côté jardin : rarement photographiées depuis la rue → proportion.
+- Recalage fragile quand peu d'arêtes nettes sont visibles ; détection manquée d'une fenêtre
+  surexposée.
+- Pas de dimension réelle des menuiseries (cadre) ; fenêtres de toit ignorées.
+- Texture des bâtiments voisins non faite (bâtiment étudié seulement).
+
+---
+
 ## Hors scope — décisions déjà prises, à ne pas entreprendre sans en rediscuter
 
 La page Théorie (section « Portée et hypothèses ») exclut déjà explicitement, comme choix assumé et
