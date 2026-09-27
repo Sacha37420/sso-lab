@@ -2961,6 +2961,41 @@ orthophoto servie et drapée, sélection multiple de deux bâtiments, bouton « 
 
 ---
 
+## Lot AJ — Houppiers relevés sur le LiDAR, essence par CoSIA ✅ livré le 2026-09-27
+
+### Demande
+« Grâce au LiDAR × CoSIA, les arbres devraient avoir des formes assez fines plutôt que de vulgaires
+polygones extrudés. »
+
+### Données vérifiées
+- **CoSIA** (couverture du sol par IA, IGN) en WMS-R par millésime : `IGNF_COSIA_2017-2020`,
+  `_2021-2023`, `_2024-2026` (le millésime est choisi d'après l'année du relevé LiDAR). Rendu en
+  couleurs de légende (`CoSIA-legend.png`) : la classe est décodée par la couleur la plus proche
+  (tolérance 20). Palette relevée à la main — la détection automatique des pastilles se décalait
+  d'une ligne.
+
+### Ce qui a été fait
+- `observed_env.crown_solid` : chaque houppier est découpé en tranches de ~1,5 m ; dans chaque
+  tranche, rayon au 90ᵉ centile des points dans 8 directions autour de l'axe ; anneaux reliés, fond
+  au bas du houppier, pointe au point le plus haut. Conifère conique, feuillu arrondi, dissymétrie
+  conservée. ~72 triangles par arbre. Repli sur le prisme (contour du segment) pour un massif non
+  étoilé ou < 30 points.
+- **Essence** (CoSIA majoritaire sous la couronne) : un conifère garde ses aiguilles, donc la
+  transparence mesurée par un vol hivernal vaut pour lui toute l'année (appliquée) ; feuillu ou
+  inconnu : valeur « en feuilles » par défaut, mesure conservée (`k_bare`).
+- Vue : feuillus et conifères de teintes distinctes (`--veg-feuillu`, `--veg-conifere`), fiche avec
+  essence et forme.
+
+### Mesures réelles (quartier test, R = 150 m)
+280 arbres, 280 houppiers relevés (0 volume ouvert), 21 conifères, 26 192 triangles au total. Test
+synthétique : cône de points → maillage fermé effilé, volume ~ cône (et non prisme).
+
+### Reste ouvert
+Haies et alignements : la reconstruction autour d'un axe unique les aplatit (forme en étoile) ;
+une segmentation dédiée (squelette le long de la haie) ferait mieux.
+
+---
+
 ## Hors scope — décisions déjà prises, à ne pas entreprendre sans en rediscuter
 
 La page Théorie (section « Portée et hypothèses ») exclut déjà explicitement, comme choix assumé et
