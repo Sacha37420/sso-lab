@@ -2712,6 +2712,149 @@ pourrait couper davantage.
 
 ---
 
+## Lot AH — Environnement « observé » : LiDAR HD IGN × BD TOPO, bâtiment étudié choisi dans la scène ✅ livré le 2026-09-27
+
+### Demande
+Génération d'environnement entièrement automatique, appuyée sur les positions réellement observées
+(toits, arbres) par le LiDAR, croisées avec la BD TOPO pour recaler ses emprises et construire les
+bâtiments. Le bâtiment étudié se définit ensuite soit en le sélectionnant dans l'environnement, soit
+en l'important à la main après avoir retiré de l'environnement ce qui doit l'être.
+
+### Ce que les services exposent réellement (vérifié par appels, 2026-09-27)
+- **Index des dalles** : WFS `IGNF_LIDAR-HD_METADONNEE:metadata` (une entité par dalle de 1 km²,
+  `url_npl` = nuage COPC, dates d'acquisition, procédé de classement). L'ancienne couche
+  `IGNF_NUAGES-DE-POINTS-LIDAR-HD:dalle` n'existe plus.
+- **Nuage COPC** lu partiellement par requêtes Range : 300 × 300 m dans une dalle de 112 Mo =
+  18 requêtes, 18,5 Mo, 8,5 s, 1,3 M points. Classes : 1, 2 sol, 3/4/5 végétation, 6 bâtiment, 64.
+- **Limite de débit 1 req/s** (download ET WMS-R). Le lecteur HTTP de laspy lance 10 requêtes en
+  parallèle et ne réessaie jamais un 429 → flux séquentiel maison `ThrottledRangeStream`.
+- Rasters MNS/MNT/MNH 0,5 m en WMS-R sur emprise arbitraire : disponibles, **non utilisés** — sans
+  classification, ils ne séparent pas un toit d'un arbre, ce qui est justement le besoin.
+
+### Architecture
+- `api/lidar_source.py` (réseau seul) : index, lecture COPC, BD TOPO **directement en Lambert 93**
+  (jamais de double projection sur ce qu'on cherche à mesurer : le décalage entre sources).
+- `api/observed_env.py` (pur, testable sans réseau) : repère, rasters, recalage, toitures, arbres,
+  terrain, objets, composition, promotion en bâtiment, ajustement d'un import.
+- `api/environment_service.py` (Django) : génération jusqu'à l'`Environment` enregistré, repli hors
+  couverture, actions sur les objets.
+- Modèle : `Environment` gagne son propre géoréférencement (`georef_*`), `scene_objects` (nommé ainsi
+  car `objects` est le gestionnaire Django ; exposé `objects` par l'API) et `generation` (compte
+  rendu). `envelope` devient une vue dérivée des objets actifs — seul format lu par `api.shadow`,
+  donc **ni `shadow.py` ni `building_solver.py` ne changent**.
+- Chaque objet : `{id, kind: building|vegetation|terrain, status: active|removed|studied, origin,
+  label, reason, info, footprint, vertices, triangles, k, building_id}`.
+
+### Chaîne de reconstruction
+1. **Repère** : Lambert 93 → local avec correction de la **convergence des méridiens** (1,7° à Tours,
+   3,4° à Rennes, > 5° en Bretagne ouest) et du facteur d'échelle, mesurés numériquement (pyproj +
+   géodésique). Signe vérifié contre le chemin indépendant WGS84/équirectangulaire : rotation
+   résiduelle 0,017° et 0,000° (un signe inversé aurait laissé 3,4° / 6,8°).
+2. **Rasters** : MNT 1 m (points sol, trous interpolés), toits 0,5 m (max des points bâtiment),
+   végétation haute 1 m, comptes sol/total (fraction de trouée). Marge de 30 m au-delà de la zone.
+3. **Recalage BD TOPO** : décalage global (±6 m) puis individuel (±2 m), par corrélation FFT avec un
+   poids = **profondeur dans le toit** — pas le recouvrement (voir pièges). Pas d'ajustement
+   individuel pour un mitoyen.
+4. **Statut** : emprise couverte par un toit LiDAR → confirmée ; sans toit mais avec sursol → gardée,
+   prisme à la hauteur BD TOPO ; LiDAR voit le sol → **retirée d'office** (« démoli ? »),
+   restaurable ; pas de points du tout (dalle manquante) → gardée, jamais conclue démolie.
+5. **Bâtiments absents de la BD TOPO** : composantes du masque bâtiment hors emprises (+1,5 m),
+   ouverture à 2,5 m, ≥ 12 m², rectangle orienté si le contour s'y prête.
+6. **Toitures** : TIN par insertion gloutonne (Garland–Heckbert) contrainte à l'emprise
+   (bibliothèque `triangle`), points de contour insérables (pointe des pignons dans les murs),
+   budget proportionnel à la surface, tolérance croissant avec la distance. Murs verticaux jusqu'à
+   l'égout de chaque sommet, plancher — **volume fermé, normales sortantes** (vérifié : 0 défaut sur
+   222 bâtiments et 335 arbres réels).
+7. **Arbres** : maxima locaux de la canopée + ligne de partage des eaux ; prisme du bas du houppier
+   (10ᵉ centile) au sommet ; transparence **mesurée** (points sol / points totaux sous la couronne),
+   appliquée si vol feuilles présentes, sinon valeur « en feuilles » par défaut (0,20) et mesure
+   conservée dans `k_bare` (prête pour la saisonnalité, Lot Z3).
+8. **Terrain** : TIN glouton sur le MNT (508 triangles pour 300 × 300 m pavillonnaire) ; percé sous
+   l'emprise du bâtiment étudié à la composition.
+9. **Budget** : 60 000 triangles (terrain d'abord, puis par distance).
+10. **Repli** hors couverture / hors France : générateur historique découpé en objets, avec z = 0
+    désormais toujours au sol de l'origine (l'ancien comportement laissait les bâtiments IGN à leur
+    altitude NGF absolue quand aucune altitude n'était saisie).
+
+### Bâtiment étudié
+- **Dans la scène** : `POST /api/environnements/<id>/objets/<obj>/etudier/` → `Building` dans le
+  repère de l'environnement (alignement exact par construction), lié à lui ; groupes `mur_k`
+  (suffixe `_mitoyen` si un voisin actif longe l'arête), `toiture_<orientation>` / `toiture_plate`,
+  `sol` (boundary `ground`).
+- **Importé** : `.../remplacer/` → `observed_env.fit_import` place l'OBJ/STL sur l'emprise de
+  l'objet (rotation, translation, **axe vertical Y/Z et unité m/cm/mm/pouce détectés**), triangles
+  dégénérés écartés et comptés au lieu de faire rejeter le fichier. IoU affiché, avertissement
+  sous 60 %.
+- Retirer / restaurer : `PATCH .../objets/ {ids, status}` ; tout changement recompose l'enveloppe
+  et périme l'ombrage des bâtiments liés. Rien n'est jamais supprimé.
+- `generer/` avec `building_id` : repère du bâtiment repris, l'objet qui lui correspond est marqué
+  `studied` (successeur du Lot X) ; son `georef_ground_z` vide est fixé au sol mesuré.
+- Le job **enregistre** l'environnement (`result.environment_id`) — plus d'aller-retour de plusieurs
+  Mo par le navigateur. Rayon ≤ 250 m.
+
+### Mesures sur données réelles
+| Zone | Durée totale (job réel) | Bâtiments | Arbres | Triangles | Erreur angulaire des toits vue du centre (méd. / p90 / p99) |
+|---|---|---|---|---|---|
+| Joué-lès-Tours, collectifs + pavillons, R = 150 m | ≈ 25 s (29 requêtes, 25 Mo) | 63 | 260 | 8 252 | 0,04° / 0,29° / 1,42° |
+| Tours centre ancien, mitoyens, R = 120 m | ≈ 30 s | 159 | 74 | 13 756 | 0,34° / 1,68° / 4,45° |
+
+Pour mémoire, la grille d'ombrage précalculée a un pas de 15°. Précalcul d'ombrage d'un bâtiment
+choisi dans la scène (76 triangles) contre 8 172 triangles d'environnement : quelques secondes.
+
+### Pièges rencontrés (tous constatés sur données réelles, corrigés)
+- **Recouvrement ≠ recalage** : une emprise entièrement contenue dans son toit a déjà un
+  recouvrement maximal, aucun décalage ne l'améliore — une bande de toit de 1–2 m restait d'un côté.
+  D'où la pondération par profondeur (centre l'emprise, répartit le débord).
+- **Bord de zone** : garder les emprises qui recoupent la zone sans agrandir les rasters laissait
+  la partie hors raster sans toit (maison à deux pans reconstruite plate à 5,5 m au lieu de 11).
+- **Points de façade** classés « bâtiment » : ils tiraient l'égout vers le bas (toit plat en
+  pyramide). Mailles de bord plus basses de 1,5 m que leurs voisines écartées.
+- **Ouverture morphologique** pour ôter les cheminées : elle écrêtait aussi chaque faîtage de
+  pente × 1,25 m. Ne rabote plus que les taches compactes ≤ 4 m².
+- **Insertion gloutonne arrêtée à mi-budget** quand ses 12 pires points étaient tous trop proches
+  d'un sommet existant.
+- **Égout surestimé** de 0,5–0,9 m sur un toit en pente (maille la plus proche à 0,5–1 m à
+  l'intérieur) : plan local extrapolé jusqu'au contour, borné (jamais au-dessus des voisins + 0,2 m,
+  sans quoi le bout d'un faîtage débordait).
+- **Recalage individuel en îlot mitoyen** : toits continus, pas de signal → désactivé pour les
+  emprises qui en touchent une autre.
+- **Faux « bâtiments LiDAR seul »** : bandes de débord de toit et doublons en bord de zone.
+- Champ de modèle nommé `objects` : interdit par Django (gestionnaire).
+- `setup2.sh` a affiché « ✓ déployée » et rendu 0 alors que le build du frontend avait échoué
+  (budget CSS) — conteneurs absents. Non corrigé (script partagé), à garder en tête.
+
+### Vérifications
+- 203 tests backend (dont 20 nouveaux : scène LiDAR synthétique à vérité connue — maison à deux
+  pans, toit plat avec points de façade, annexe hors BD TOPO, bâtiment démoli, arbre à trouées,
+  terrain en pente, emprises décalées de (1,5 ; −1) m — repère, recalage, promotion, ajustement
+  d'import, service avec base, vue, génération bout en bout réseau simulé, repli).
+- Job Celery réel sur l'app déployée, puis navigateur réel (lab-runner, Keycloak réel, API réelle —
+  `e2e_member` a désormais un email) : ouverture, légende et compte rendu, glisser ≠ clic, sélection
+  au clic, retrait, restauration, bâtiment étudié créé et ouvert sur la page Bâtiment
+  (`/batiment?id=`), remplacement par un OBJ Y-up en mm (axe et unité reconnus, avertissement de
+  faible recouvrement affiché). Données de test supprimées ensuite.
+
+### Au passage
+- Visualiseur : couleurs résolues une fois par passe (un `getComputedStyle` par triangle coûtait des
+  secondes à 60 000 triangles) ; sélection au relâchement seulement si le pointeur n'a pas bougé ;
+  cadrage resserré ; toile transparente (fond noir en thème clair auparavant).
+- `DATA_UPLOAD_MAX_MEMORY_SIZE` = 30 Mo (un OBJ de 20 000 sommets dépassait les 2,5 Mo par défaut).
+
+### Reste ouvert
+- **Toitures en TIN 2,5D** : un ressaut vertical devient une pente de ≥ 0,7 m de large ; en centre
+  ancien, p90 angulaire 1,7°. Une vraie segmentation en pans (LOD2) ferait mieux, sans enjeu à la
+  résolution de 15° de la grille d'ombrage — à reconsidérer si le mode temps réel devient la norme.
+- **Horizon lointain** (relief au-delà du rayon) ignoré : l'API horizon de PVGIS le fournirait.
+- Mitoyens : le mur est signalé `_mitoyen`, mais reste exposé à `t_ext` faute de condition limite
+  adiabatique (troisième `boundary`, déjà noté au Lot X).
+- Couronnes en prisme ; massifs très irréguliers approchés par leur contour simplifié.
+- `triangle` enveloppe la bibliothèque de J. R. Shewchuk : libre pour un usage non commercial.
+- Préexistant, non corrigé : la page Bâtiment colore les modèles de paroi avec `--series-1..8`,
+  variables définies seulement dans le style de Calcul 1D — sur Bâtiment elles sont vides et toutes
+  les parois assignées s'affichent du même gris.
+
+---
+
 ## Hors scope — décisions déjà prises, à ne pas entreprendre sans en rediscuter
 
 La page Théorie (section « Portée et hypothèses ») exclut déjà explicitement, comme choix assumé et
