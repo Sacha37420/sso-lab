@@ -3071,6 +3071,98 @@ fermée après insertion (vérifié).
 
 ---
 
+## Lot AL — Façades traitées dans l'ensemble de l'environnement ✅ livré le 2026-09-27
+
+### Demande
+« Le résultat de ta projection sur les façades verticales est nul » : chercher des sources et
+méthodes plus adaptées (peut-être traiter le bâtiment dans l'ensemble de son environnement), puis
+implémenter le mieux adapté.
+
+### Diagnostic (bâtiment utilisateur « 4 bâtiments réunis », collectifs sur un talus planté)
+Superposition des arêtes du modèle sur les photos recalées : le recalage N'était PAS le problème
+principal (ligne de toit juste). Causes réelles :
+- la haie du talus, les murets, les massifs ne sont pas dans la scène (seuls les arbres hauts le
+  sont) → le bas des façades était texturé avec la haie ;
+- SegFormer appliqué à la texture redressée d'un morceau de mur de 14 px étiré en 512² → une haie
+  pleine mesurée « visible à 99 % » ;
+- une photo par morceau de mur, sans cohérence entre voisins.
+
+### Recherche (deux agents, appels réels)
+- **Sources** : BDNB (CSTB) — DPE par bâtiment avec surfaces vitrées N/E/S/O, % de baies, Uw, g,
+  menuiserie ; API PostgREST sans clé, Etalab 2.0 ; jointure par le RNB (`closest`). Vérifié :
+  collectif de Tours 23 %, maison 1989 N 9,6 / S 10,9 / O 9,1 m². ADEME DPE (pas de surfaces par
+  orientation dans le jeu plat). Mapillary : poses SfM corrigées mais jeton requis (couverture non
+  vérifiée). IGN : ni obliques ouvertes, ni LOD2 pour Tours ; LiDAR HD sans couleur et peu de points
+  en façade. OSM : aucune baie décrite.
+- **Méthodes** : recalage de séquence (SfM COLMAP/OpenSfM + alignement LiDAR — non fait, lourd sur
+  2 vCPU), texturation multi-vues avec visibilité et rejet des vues incohérentes (mvs-texturing),
+  détection spécialisée de fenêtres (win_det_heatmaps MIT — poids sur Google Drive/Baidu en
+  PyTorch, écarté), grille d'étages.
+
+### Implémenté (`api/facade_texture.py`, `api/bdnb.py`, `api/facades.py`)
+1. **Occultation par le nuage LiDAR brut** (`LidarOccupancy`) : voxels 0,3 m de tous les points
+   hors sol (classes 1, 4, 5, 6, 64), objets bas (< 4 m) remplis jusqu'au sol (une haie vue d'avion
+   n'a de points que sur son dessus), bâtiment étudié exclu (déjà maillage exact). Plus l'occulteur
+   de scène (bâtiments + terrain). Test par rayon à la maille de 25 cm.
+2. **Recalage par séquence** : décalage (dx, dy, cap) commun par tronçon de séquence (≤ 40 m), puis
+   affinage individuel ±0,5 m, ±0,5°.
+3. **Recalage de chaque vue sur CHAQUE façade** (`refine_view_on_facade`) : hauteur d'appareil et
+   cap ajustés (±1 m, ±1°) sur le contour de la façade (égout, rampants, angles — pied exclu).
+   Décisif : deux photos consécutives d'une même séquence plaçaient la façade d'une maison à ~1 m
+   d'écart vertical (hauteur réelle d'appareil inconnue : voiture, piéton…).
+4. **Segmentation par panorama entier** (SegFormer, 1024 px), consultée au pixel de chaque texel,
+   vote par maille : végétation, véhicules, ciel… écartés pour la vue concernée.
+5. **Composition par vue principale** : la vue qui apporte le plus (texels vus × résolution, vues
+   < 8 m pénalisées × plausibilité² = part de texels « façade » selon la segmentation) couvre tout ce
+   qu'elle voit ; les suivantes comblent ses trous par régions ≥ 0,5 m². Zone non vue = gris.
+   Petits trous isolés (< 0,6 m²) bouchés par la couleur voisine. Texture à 2 cm/px.
+6. **Baies** : OWL-ViT v1 patch 32 (Apache 2.0, ~6 s/passe) sur tuiles de ~6 m, image égalisée sur
+   les seuls texels vus ; complément OWLv2 sur la façade entière quand < 10 % de vitrage trouvé
+   sur ≥ 8 m² vus ; filtres : zone non vue, feuillage (> 25 % de vert), cadre collé au sommet ;
+   « porte » ≥ 1,5 m de large → baie vitrée ; « porte » en étage → fenêtre SAUF si son bas est caché.
+7. **Grille d'étages** (`regularize_openings`) : alignement par étages × travées, extrapolation
+   dans les parties NON VUES seulement (rez caché par une haie) — jamais dans une partie vue.
+8. **Référence DPE (BDNB)** : repli par orientation (maison) ou global (immeuble, le DPE ne décrit
+   qu'un logement) pour les façades non vues et les parties cachées sans grille.
+9. Statut « partielle » (vue à 10–60 %), part vue par façade, `POST …/facades/recomposer/` (textures
+   perdues au redéploiement, recomposées en tâche de fond depuis les vues enregistrées).
+
+### Pièges d'exploitation trouvés au test en navigateur
+- **Textures invisibles** : le worker compose dans SON /tmp, le backend sert depuis le sien —
+  conteneurs distincts. Au Lot AK le backend refaisait la texture lui-même depuis une photo, ce qui
+  masquait le problème (et réaffichait l'ancienne texture « haie »). Volume local partagé
+  `facade-cache` (docker-compose), vidé à chaque `setup2.sh` → bouton « Recomposer les textures »
+  (~30 s pour 11 façades), les baies restant en base.
+- Cases « utiliser la détection » conservées d'une analyse à l'autre : une façade devenue vue
+  recevait le repli → réinitialisées à chaque nouvelle analyse.
+
+### Essais abandonnés (avec la raison — à ne pas retenter sans nouvel argument)
+- Mélange des vues texel par texel : mosaïque délavée à images fantômes (façade réelle non plane :
+  balcons, parallaxe différente par photo).
+- Estimation de l'inclinaison par les arêtes : score presque plat, estimation opposée à la
+  métadonnée que la superposition confirmait juste.
+- Regrouper plusieurs façades sur une image pour OWL : même façade 5 baies seule, 0 en compagnie.
+- Contrôle de cohérence entre vues (corrélation de gradients) : ≈ 0 entre toutes les vues, même la
+  bonne — le recalage n'est pas assez précis pour ça (il faudrait la SfM).
+- 40 photos par bâtiment : > 10 min pour une maison → 16 photos, 5 vues par façade.
+
+### Mesures
+Maison (env. 16) ~3 min ; collectif 4 bâtiments réunis ~5–6 min. Façade sur rue de la maison :
+égout en haut, fenêtres, porte, baie coulissante ; collectif : bas caché (haie) gris et rez complété
+en grille.
+
+### Reste ouvert
+- Détection encore instable (zéro-shot) : varie avec de petites différences de texture ; baies
+  derrière balcons profonds rarement vues.
+- SfM de séquence (COLMAP/OpenSfM) + alignement LiDAR : seule voie vers un recalage assez précis
+  pour la cohérence multi-vues ; non fait (coût CPU).
+- Géométrie : façades courbes/balcons du collectif vs plans BD TOPO ; « bâtiments » LiDAR parasites
+  (massifs) devant certaines maisons.
+- Licences : SegFormer NVIDIA non commercial ; OWL-ViT/OWLv2 Apache 2.0 ; BDNB Etalab 2.0 ;
+  Panoramax CC-BY-SA.
+
+---
+
 ## Hors scope — décisions déjà prises, à ne pas entreprendre sans en rediscuter
 
 La page Théorie (section « Portée et hypothèses ») exclut déjà explicitement, comme choix assumé et
