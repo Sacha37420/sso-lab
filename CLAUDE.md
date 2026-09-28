@@ -7,6 +7,42 @@ Démarrage/exploitation courants (clone, `.env`, HTTP local, WAN, HTTPS) : voir 
 sections 1 et 5 — ce fichier ne redocumente pas ces procédures, seulement ce qui demande un
 raisonnement (règles, pièges, décisions déjà tranchées).
 
+## Méthode de travail — travail linéaire vs chantier orchestré
+
+Ce fichier dit **ce qu'il faut savoir** ; cette section dit **comment s'organiser**. Deux régimes,
+et le choix se fait au début, pas en cours de route.
+
+**Régime linéaire** (défaut) — un lot dans une seule app, un correctif, une question. Travailler
+de bout en bout dans la session, sans subagent. C'est le bon mode pour la majorité des tâches, y
+compris longues : `to_do_<app>.md` est fait pour ça.
+
+**Régime chantier** — dès qu'au moins **deux** de ces conditions sont réunies : ≥ 3 sous-modules
+ou dossiers racine touchés · création/modification d'une **interface consommée par plusieurs
+parties** (schéma partagé, endpoint appelé par d'autres apps, clé `.env` lue ailleurs, convention
+de nommage) · > ~2 h d'exécution estimée · sécurité du cloisonnement, `storage`, `infra/` ou
+`sso-lab/` touchés.
+
+Dans ce cas : **invoquer la skill `chantier`** (`.claude/skills/chantier/SKILL.md`) et suivre son
+protocole à 3 strates — architecte (la session) → chefs de secteur (1 subagent par secteur,
+parallèles) → codeurs. Points non négociables du protocole, rappelés ici parce que ce sont eux
+qu'on saute :
+
+- **Aucun subagent n'est lancé avant que `chantiers/<nom>/CONTRAT.md` existe**, avec les interfaces
+  écrites et **versionnées**. On ne parallélise jamais sur du code pas encore écrit — on
+  parallélise sur un contrat écrit.
+- **Un secteur ne devine jamais une interface.** S'il bute dessus, il s'arrête et émet un
+  amendement ; l'architecte tranche, bump la version, et **redescend le changement par
+  `SendMessage` au demandeur *et* à tout secteur impacté, y compris ceux qui ont déjà rendu `OK`**.
+- **Les fichiers partagés appartiennent à l'architecte seul** (`CLAUDE.md`, `.ports`, `infra/**`,
+  `sso-lab/**`, `scripts/**`, le `.env` d'une autre app…). Un secteur rapporte la ligne exacte à
+  ajouter, l'architecte applique tout en un seul edit groupé.
+- **Les secteurs ne déploient pas** : 2 vCPU, jamais deux builds lourds ni deux `setup2.sh` en
+  parallèle. Ils rapportent la commande, l'architecte séquence.
+
+Précédent de référence : `.claude/plans/sharing-model-orchestration.md` (chantier fondation
+`storage/` + un secteur par app) — écrit à la main avant l'existence de la skill, il en applique
+déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement.
+
 ---
 
 ## Chantiers ouverts (à traiter, pas encore faits)
