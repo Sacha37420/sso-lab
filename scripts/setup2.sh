@@ -132,8 +132,11 @@ fi
 # ── 1bis. Rotation des secrets applicatifs (--rotate-secrets) ─────────────────
 # Placée ICI, entre le nettoyage et reset_url : la rotation DB écrit le nouveau
 # mot de passe dans infra/.env, et l'étape 2 (reset_url) le propage aussitôt aux
-# .env des apps. Postgres est encore debout (clean2.sh épargne l'infra), ce qui
-# permet l'ALTER ROLE à chaud. La rotation précède le démarrage des stacks (7),
+# .env des apps. Avec un nom d'app, Postgres est encore debout (clean2.sh <app>
+# épargne l'infra), ce qui permet l'ALTER ROLE à chaud. ⚠ Sur tout le lab,
+# clean2.sh arrête l'infra (redémarrée seulement à l'étape 4bis) : la rotation
+# échoue alors sur « dev-postgres non démarré » — relancer
+# `recompose_docker.sh --app infra` puis reprendre. La rotation précède le démarrage des stacks (7),
 # donc les containers repartent d'emblée avec les nouveaux secrets.
 if $ROTATE_SECRETS; then
   echo -e "\033[0;36m══ 1bis  Rotation des secrets applicatifs (--rotate-secrets)\033[0m"
@@ -233,6 +236,17 @@ else
     bash "$SCRIPT_DIR/recompose_docker.sh" --app sso-lab
     echo -e "\033[0;32m✓ sso-lab démarré.\033[0m"
   fi
+
+  # ── 4bis. Démarrage de l'infra (PostgreSQL / PostGIS) ────────────────
+  # Sur tout le lab, clean2.sh (étape 1) arrête l'infra, et le dispatch
+  # parallèle de l'étape 7 l'exclut de sa liste d'apps : sans cette étape, plus
+  # rien ne la relance — tous les backends bouclent sur « could not translate
+  # host name "postgres" » et ensure-schemas est ignoré en silence (constaté
+  # le 2026-09-27). Après sso-lab, dont infra réutilise le réseau sso-net.
+  # No-op si l'infra tourne déjà (recompose_docker.sh sans --force).
+  echo -e "\033[0;36m══ 4bis/7  Démarrage de l'infra (PostgreSQL)\033[0m"
+  bash "$SCRIPT_DIR/recompose_docker.sh" --app infra
+  echo -e "\033[0;32m✓ Infra démarrée.\033[0m"
 
   # ── 5. Attente Keycloak ───────────────────────────────────────────────
   echo -e "\033[0;36m══ 5/7  Attente de Keycloak\033[0m"
