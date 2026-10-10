@@ -43,3 +43,6 @@
 [submodule "oauth-hub"]
 	path = oauth-hub
 	url = https://github.com/Sacha37420/oauth-hub.git
+[submodule "peripheriques"]
+	path = peripheriques
+	url = https://github.com/Sacha37420/peripheriques.git

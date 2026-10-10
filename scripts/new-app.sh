@@ -932,8 +932,9 @@ __pycache__/
 .venv/
 venv/
 db.sqlite3
-media/
-backend/media/
+# « /backend/media/ » et non « media/ » : un service media/ dans une app (ex. peripheriques/media,
+# MediaMTX) doit rester versionné.
+/backend/media/
 
 # ── Angular / Node (racine si app Angular seul, frontend/ si +Angular) ────────
 node_modules/

@@ -666,6 +666,43 @@ dossier vide avec un `.env` orphelin que rien ne déployait. Utilisé par `stora
 
 ---
 
+### Périphériques de l'hôte — `peripheriques`
+
+`peripheriques` (Django + Angular + `media/`, 8101 / 4216) donne accès, en direct et en relecture,
+à la caméra et au micro branchés sur l'hôte. Contrat d'origine :
+`chantiers/peripheriques/CONTRAT.md` (v6). Décisions à ne pas rouvrir :
+
+- **Les droits sont par email, en base (`Grant`), périphérique par périphérique** (vidéo, micro ou
+  les deux), accordés à un compte du realm existant. L'accès à l'app elle-même est « au moins un
+  groupe », comme `oauth-hub` — même contrainte : tout nouveau groupe LDAP doit être ajouté à
+  `peripheriques/.keycloak-client-opts` **et** à `KEYCLOAK_REQUIRED_GROUPS`.
+- **Les administrateurs (`PERIPHERIQUES_ADMIN_GROUPS`) gèrent les droits mais n'ont aucun accès
+  implicite** aux flux ni à l'historique : un admin qui veut voir ou écouter s'accorde un droit,
+  soumis comme les autres à son `since` (un droit ne vaut que pour ce qui est postérieur à son
+  octroi).
+- **Une page de gestion des droits ne tire jamais ses référentiels d'un endpoint filtré par les
+  droits de l'utilisateur courant.** Le sélecteur de périphériques lisait `/api/devices/`
+  (= « là où j'ai un droit ») : un admin sans droit ne pouvait accorder le premier, même à
+  lui-même. D'où `/api/grants/devices/` (admin, tous les périphériques).
+- **MediaMTX n'interroge le hook d'autorisation HLS qu'à l'ouverture de session** (version
+  `1.21.1`) : sous-playlists et segments passent ensuite sans contrôle. Une révocation doit donc
+  **expulser** les sessions ouvertes, WebRTC *et* HLS (`webrtcsessions/kick`, `hlssessions/kick`) ;
+  refuser au hook ne suffit pas.
+- **Aucun `devices:` figé dans le compose.** Une ré-énumération USB a interverti `video0`/`video1`
+  et le conteneur pointait sur le nœud de métadonnées. `/dev` de l'hôte est monté en lecture seule
+  sous `/hostdev` avec `device_cgroup_rules` (81 = video4linux, 116 = ALSA), et le chemin est
+  résolu à chaque (re)publication.
+- **`MEDIA_HOOK_KEY` transite en query string** (contrainte MediaMTX) : le backend ne journalise
+  jamais la query de `/api/media-auth/` (`api/log_filters.py`).
+- **Les enregistrements ne passent pas par `storage`** (dérogation assumée) : flux machine
+  d'environ 11 Go/jour écrit directement par MediaMTX dans le volume `external`
+  `peripheriques-recordings`, rétention 7 jours.
+- **MediaMTX est privé à l'app, provisoirement.** La migration vers une brique commune `lab-media`
+  dans `infra/` est décrite dans `to_do_lab_media.md` — non commencée.
+- Hors vitrine : `peripheriques` n'est pas dans `.app-descriptions`.
+
+---
+
 ## Tests end-to-end (Playwright)
 
 Chaque app a **un seul fichier** de test Playwright, à cet emplacement fixe et ce nom :
@@ -690,6 +727,8 @@ ci-dessous) suppose un seul fichier, ce nom précis.
   uniquement, monte tout le dépôt en lecture seule (`${HOST_DEV_ROOT}`, voir ci-dessous), **jamais
   exposé** (pas de port publié, pas de label Caddy) — atteint uniquement par nom de conteneur
   (`lab-runner`) depuis `lab-admin` (worker Celery) ou via `docker exec` depuis `setup_unit.sh`.
+  Son Chromium **ne décode pas le H.264** (pas de Chrome dans le runner, décision actée) : une
+  lecture vidéo H.264 (`peripheriques`) ne se vérifie que dans un vrai navigateur, à la main.
 - **Deux comptes LDAP synthétiques** (`sso-lab/ldap/init.ldif`) : `e2e_member`, membre de **tous**
   les groupes existants (toujours le cas « membre » positif, quelle que soit l'app testée), et
   `e2e_outsider`, membre d'**aucun** groupe (toujours le cas « non-membre » négatif — aucune
@@ -781,10 +820,16 @@ chaud. `rotate-secrets-full.sh` termine lui-même par `recompose_docker.sh --for
 | `craft-lab` | `Sacha37420/craft-lab` | Django + Angular (+ `relay/` WebSocket) | 8097 / 4213 |
 | `lab-admin` | `Sacha37420/lab-admin` | Django + Angular | 8083 / 4201 |
 | `oauth-hub` | `Sacha37420/oauth-hub` | Django + Angular | 8100 / 4215 |
+| `peripheriques` | `Sacha37420/peripheriques` | Django + Angular (+ `media/` MediaMTX) | 8101 / 4216 |
 | `restauration` | `Sacha37420/restauration` | Django + Angular | 8088 / 4206 |
 | `robot-lab` | `Sacha37420/robot-lab` | Django + Angular (+ `engine/` Playwright) | 8094 / 4212 |
 | `storage` | `Sacha37420/storage` | Django + Angular | 8093 / 4211 |
 | `traitement-de-fichiers-compils` | `Sacha37420/traitement-de-fichiers-compils` | Django + Angular | 8089 / 4207 |
+
+> `peripheriques` a un **troisième service**, `media/` (MediaMTX + ffmpeg, conteneur
+> `peripheriques-media`) : seul détenteur de la caméra et du micro de l'hôte, il publie le port ICE
+> **8189 udp/tcp** (redirection Bbox faite à la main) et écrit les enregistrements. Décisions et
+> pièges : section « Périphériques de l'hôte » plus haut.
 
 > `robot-lab` a un **troisième service**, `engine/` (Node + Playwright + `ws`, port 8095) : le
 > navigateur qu'il pilote est isolé là, jamais dans l'image Django — même règle que `runner/`.
@@ -862,10 +907,11 @@ Les templates sont dans `_templates/` :
 Toutes les apps du lab (11 sous-modules + les deux templates de scaffold) partagent une même
 identité visuelle et une même structure de navigation, baptisées **Foyer** — déployée
 intégralement le 2026-07-30 (avant cette date, chaque app avait sa propre nav en en-tête
-horizontal ; ne plus reproduire ce pattern). Cahier des charges exécutable complet — tokens,
-polices, comportements, checklist de vérification par app — dans `to_do_ui_foyer.md` (racine) :
-**le lire avant toute tâche touchant la navigation ou les tokens visuels d'une app**, ce résumé
-n'en couvre que les points qui piègent le plus souvent :
+horizontal ; ne plus reproduire ce pattern). La référence exécutable — tokens, polices,
+comportements — est `_templates/django-angular/frontend/` (le cahier des charges d'origine,
+`to_do_ui_foyer.md`, a été supprimé de la racine au commit `4d0478d`) : **la lire avant toute tâche
+touchant la navigation ou les tokens visuels d'une app**, ce résumé n'en couvre que les points qui
+piègent le plus souvent :
 
 - **Aucune couleur en dur** dans un composant — toujours via les tokens CSS (`--accent`,
   `--bg`, `--text`…) définis en tête de `src/styles.scss`. C'est la seule chose qui permet au

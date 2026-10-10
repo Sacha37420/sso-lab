@@ -55,6 +55,7 @@ dev/
 ├── craft-lab/                       ← Django + Angular + relay WebSocket [sous-module] — jeu 2D multijoueur
 ├── lab-admin/                       ← Django + Angular  [sous-module] — portail du lab
 ├── oauth-hub/                       ← Django + Angular  [sous-module] — coffre d'identifiants OAuth externes
+├── peripheriques/                   ← Django + Angular + media MediaMTX [sous-module] — caméra/micro de l'hôte
 ├── restauration/                    ← Django + Angular  [sous-module]
 ├── robot-lab/                       ← Django + Angular + engine Playwright [sous-module]
 ├── storage/                         ← Django + Angular  [sous-module] — stockage fichiers du lab
@@ -729,6 +730,7 @@ mobile) :
 | `craft-lab` | [Sacha37420/craft-lab](https://github.com/Sacha37420/craft-lab) | 8097 / 4213 (+ `relay` 8098) | `famille`, `amis`, `developers` | postgres | Jeu de construction/survie 2D multijoueur : catalogue objets/monstres/cartes, génération procédurale, combat, artisanat |
 | `bilan-thermique` | [Sacha37420/bilan-thermique](https://github.com/Sacha37420/bilan-thermique) | 8099 / 4214 | `developers`, `famille`, `amis` | postgres | Simulation thermique d'une paroi multicouche par éléments finis : conduction, capacité, apports solaires (+ Celery) |
 | `oauth-hub` | [Sacha37420/oauth-hub](https://github.com/Sacha37420/oauth-hub) | 8100 / 4215 | tous les groupes | postgres | Coffre des identifiants OAuth2 de sites externes (GitHub, GitLab…) et distribution de jetons aux apps autorisées |
+| `peripheriques` | [Sacha37420/peripheriques](https://github.com/Sacha37420/peripheriques) | 8101 / 4216 (+ `media` ICE 8189 udp/tcp) | tous les groupes (droits fins par email, en base) | postgres | Caméra et micro de l'hôte : direct (WebRTC/HLS) et enregistrement continu heure par heure, droits accordés par email |
 
 > `code-route` est la seule app dont le port frontend (**4200**) est en dessous du plancher
 > habituel des suggestions de `new-app.sh` — valeur historique, à ne pas « corriger ».
