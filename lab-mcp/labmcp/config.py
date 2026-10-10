@@ -40,6 +40,13 @@ class Config:
     ws_gateway: str          # nom du conteneur passerelle (lab-ws-gateway)
     ws_gateway_url: str
     ws_prefix: str           # « ws- » ; les essais utilisent « ws-test- »
+    ws_bridge_prefix: str    # préfixe d'INTERFACE des ponts d'espace : « lws » (essais : « lwt… ») — pare-feu
+    # ── pgAdmin par dev (I9) ──
+    pg_prefix: str           # « pg- » ; essais : « pg-test- »
+    pg_image: str
+    pg_relay: str            # nom du conteneur relais (lab-pg-relay)
+    pg_max: int
+    pg_memory: str
     public_origin: str       # https://<DOMAIN>
     ws_max: int
     ws_idle_min: float
@@ -95,6 +102,12 @@ def load() -> Config:
         ws_gateway=_env("LAB_WS_GATEWAY", "lab-ws-gateway"),
         ws_gateway_url=_env("LAB_WS_GATEWAY_URL", "http://lab-ws-gateway:8080").rstrip("/"),
         ws_prefix=_env("LAB_WS_PREFIX", "ws-"),
+        ws_bridge_prefix=_env("LAB_WS_BRIDGE_PREFIX", "lws"),
+        pg_prefix=_env("LAB_PG_PREFIX", "pg-"),
+        pg_image=_env("LAB_PG_IMAGE", "dpage/pgadmin4:8"),
+        pg_relay=_env("LAB_PG_RELAY", "lab-pg-relay"),
+        pg_max=int(_env("LAB_PG_MAX", "3")),
+        pg_memory=_env("LAB_PG_MEMORY", "512m"),
         public_origin=_env("LAB_MCP_PUBLIC_URL", f"https://{domain}/mcp").rstrip("/").rsplit("/mcp", 1)[0],
         ws_max=int(_env("LAB_WS_MAX", "3")),
         ws_idle_min=float(_env("LAB_WS_IDLE_MIN", "30")),

@@ -67,6 +67,8 @@ def routes(engine: Engine) -> list[Route]:
 
     async def me(r, c): return await call("me", c, as_uid=q(r, "as"))
     async def me_init(r, c): return await call("me_init", c)
+    async def pg_open(r, c): return await call("pgadmin_open", c)
+    async def pg_close(r, c): return await call("pgadmin_close", c)
     async def groups(r, c): return await call("groups", c)
     async def devs(r, c): return await call("devs", c)
     async def projects(r, c): return await call("projects", c, as_uid=q(r, "as"))
@@ -112,6 +114,19 @@ def routes(engine: Engine) -> list[Route]:
     async def ws_close(r, c): return await call("workspace_close", c, app=app(r))
     async def job(r, c): return await call("job", c, job_id=r.path_params["job_id"], tail=q(r, "tail", 200))
 
+    async def db_password(request: Request) -> Response:
+        """Le seul secret que l'API rende : jamais mis en cache, ni par le navigateur ni par un relais."""
+        caller = request.scope.get("lab.caller")
+        headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+        try:
+            if not isinstance(caller, Caller):
+                raise LabError("unauthorized", "Jeton requis.")
+            if request.query_params.get("as"):
+                raise LabError("forbidden", "Le mot de passe d'une base ne se lit que par son propriétaire.")
+            return JSONResponse(await call("database_password", caller), headers=headers)
+        except LabError as exc:
+            return JSONResponse(exc.body(), status_code=exc.status, headers=headers)
+
     # ── sans appelant Keycloak ──────────────────────────────────────────────
     async def hook(request: Request) -> Response:
         raw = await request.body()
@@ -128,6 +143,7 @@ def routes(engine: Engine) -> list[Route]:
         """Appelé par la passerelle des espaces, pour CHAQUE requête (WebSocket compris).
         200 = laisser passer ; 302 = ticket échangé contre un cookie ; 401 = refus."""
         decision, info = engine.ws_authorize(
+            request.headers.get("x-lab-ws-kind", "ws"),
             request.headers.get("x-lab-ws-uid", ""), request.headers.get("x-forwarded-uri", ""),
             request.headers.get("cookie", ""))
         if decision == "ok":
@@ -136,7 +152,7 @@ def routes(engine: Engine) -> list[Route]:
             return Response(status_code=302, headers={"Location": info["location"], "Set-Cookie": info["set_cookie"],
                                                       "Cache-Control": "no-store"})
         return JSONResponse({"error": "unauthorized",
-                             "detail": "Espace de travail fermé ou session expirée — rouvrez-le depuis lab-admin.",
+                             "detail": "Service fermé ou session expirée — rouvrez-le depuis lab-admin.",
                              "reason": info.get("reason")}, status_code=401, headers={"Cache-Control": "no-store"})
 
     async def healthz(_request: Request) -> Response:
@@ -145,6 +161,8 @@ def routes(engine: Engine) -> list[Route]:
     R = lambda path, fn, method: Route(P + path, endpoint(fn), methods=[method])  # noqa: E731
     return [
         R("/me", me, "GET"), R("/me/init", me_init, "POST"),
+        Route(P + "/me/database-password", db_password, methods=["GET"]),
+        R("/me/pgadmin", pg_open, "POST"), R("/me/pgadmin", pg_close, "DELETE"),
         R("/groups", groups, "GET"), R("/devs", devs, "GET"),
         R("/projects", projects, "GET"), R("/projects", create, "POST"),
         R("/projects/check-name", check_name, "POST"),

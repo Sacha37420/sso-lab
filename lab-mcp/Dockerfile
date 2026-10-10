@@ -12,7 +12,7 @@ FROM python:3.12-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git jq curl openssl openssh-client ca-certificates iproute2 procps util-linux \
+      git jq curl openssl openssh-client ca-certificates iproute2 procps util-linux iptables \
  && install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
@@ -38,6 +38,9 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY labmcp ./labmcp
+# Pare-feu des ponts d'espace (I3 v7). Le moteur ne l'exécute jamais dans son propre conteneur
+# (il n'a ni le réseau de l'hôte ni NET_ADMIN) : il lance un conteneur jetable de CETTE image.
+COPY --chmod=0755 firewall/lab-ws-firewall.sh /usr/local/bin/lab-ws-firewall
 
 USER lab
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/app

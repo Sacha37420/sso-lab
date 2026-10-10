@@ -1,0 +1,9 @@
+stream {
+    # Noms de CONTENEUR, résolus à chaque connexion : « postgres »/« postgis » sont aussi les
+    # alias de ce relais sur les réseaux de pgAdmin, il ne doit pas se joindre lui-même.
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    map "" $lab_pg  { default "${LAB_PG_UPSTREAM}:5432"; }
+    map "" $lab_gis { default "${LAB_GIS_UPSTREAM}:5432"; }
+    server { listen 5432; proxy_pass $lab_pg;  proxy_connect_timeout 5s; }
+    server { listen 5433; proxy_pass $lab_gis; proxy_connect_timeout 5s; }
+}

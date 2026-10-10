@@ -42,6 +42,9 @@ from .github import Github, GithubError, parse_repo_url
 from .jobs import Job, JobManager, QueueFull
 from .oauthhub import HubError, OAuthHub
 from .registry import Registry, valid_app, valid_uid
+from .access import Access
+from .firewall import Firewall
+from .pgadmin import PgAdminManager
 from .workspaces import WorkspaceManager
 
 audit_log = logging.getLogger("lab-mcp.audit")
@@ -75,12 +78,29 @@ class Engine:
         self.registry = Registry(cfg.root)
         self.hub = OAuthHub(cfg)
         self.jobs = JobManager()
-        self.ws = WorkspaceManager(cfg)
+        self.access = Access(secure_cookies=cfg.public_origin.startswith("https://"))
+        self.firewall = Firewall(cfg)
+        self.ws = WorkspaceManager(cfg, self.access, self.firewall)
+        self.pg = PgAdminManager(cfg, self.access, self.firewall)
         self.authn = Authenticator(cfg, self.registry, self.ws.lookup_token)
         self.jobs.on_done = lambda job: audit(
             job.owner, f"job:{job.kind}", job.app, "ok" if job.state == "succeeded" else "error",
             f"job {job.id} {job.state} étape={job.result.get('step', '')} sha={job.result.get('sha', '')}")
         self.ws.on_idle_close = lambda uid: audit("(moteur)", "workspace_idle_close", "", "ok", f"espace de {uid}")
+        self.pg.on_idle_close = lambda uid: audit("(moteur)", "pgadmin_idle_close", "", "ok", f"pgAdmin de {uid}")
+
+    async def startup(self) -> None:
+        """Au démarrage du moteur : pare-feu des ponts d'espace, puis fermeture des espaces et
+        pgAdmin d'une vie précédente (leurs jetons et sessions, gardés en mémoire, sont morts)."""
+        try:
+            await self.firewall.ensure(force=True)
+            audit("(moteur)", "firewall", "", "ok", f"règles « {self.cfg.ws_bridge_prefix}+ » en place")
+        except LabError as exc:
+            # Le moteur démarre quand même (tout le reste fonctionne) ; aucune ouverture d'espace
+            # ne passera tant que les règles ne peuvent pas être posées.
+            audit("(moteur)", "firewall", "", "error", exc.detail)
+        await self.ws.reconcile()
+        await self.pg.reconcile()
 
     # ═════════════════════════════════════════════════════════════════════════
     # Point d'entrée unique des deux entrées
@@ -254,7 +274,9 @@ class Engine:
             "eligible": reason is None, "ineligible_reason": reason, "initialized": subject.initialized,
             "github_linked": None, "github": None, "database": None,
             "mcp_url": self.cfg.public_url, "oauth_hub_url": f"{self.cfg.public_origin}/oauth-hub/",
-            "workspace": None, "scope_app": c.scope_app, "viewed_as": subject.uid if subject is not c else None,
+            "workspace": None,
+            "pgadmin": {"open": bool(subject.uid) and self.pg.is_open(subject.uid)},
+            "scope_app": c.scope_app, "viewed_as": subject.uid if subject is not c else None,
             "remaining": [],
         }
         if reason is None and not subject.initialized:
@@ -309,6 +331,60 @@ class Engine:
         me = await self.op_me(dataclasses.replace(c, initialized=True, is_superuser=self.registry.is_superuser(uid)))
         me["steps"] = steps
         return me
+
+    # ── ma base : mot de passe, pgAdmin (I9) ─────────────────────────────────
+    def _self_initialized(self, c: Caller) -> str:
+        """Routes « soi-même » d'I9 : dev initialisé, avec sa connexion personnelle. 403 sinon (I9)."""
+        if not c.uid or not c.initialized or not c.token:
+            raise LabError("not_initialized", "Réservé à un développeur initialisé du lab, pour lui-même.", http=403)
+        return c.uid
+
+    def _role_passwords(self, uid: str) -> tuple[str, str]:
+        return (sqlconsole._password(self.cfg.root, f"DEV_PG_PASSWORD__{uid}"),
+                sqlconsole._password(self.cfg.root, f"DEV_GIS_PASSWORD__{uid}"))
+
+    async def op_database_password(self, c: Caller) -> dict:
+        """Le mot de passe de SA base. Jamais celui d'un autre (pas de `as`), jamais journalisé."""
+        uid = self._self_initialized(c)
+        password, gis_password = self._role_passwords(uid)
+        if not password:
+            raise LabError("unavailable", f"Aucun mot de passe enregistré pour le rôle dev_{uid} (infra/dev-roles.env).")
+        return {
+            "database": {"host": "postgres", "name": f"dev_{uid}", "user": f"dev_{uid}"},
+            "gis": {"host": "postgis", "name": f"gis_{uid}", "user": f"dev_{uid}"} if gis_password else None,
+            "password": password,
+            "gis_password": gis_password or None,
+        }
+
+    async def _pg_locked(self) -> bool:
+        """PostgreSQL exige-t-il un mot de passe de tous depuis les réseaux Docker ?
+        Lu par la commande du lab ; code 0 = verrouillé, tout autre code = non (ou illisible)."""
+        code, _, _ = await self._script("dev-db.sh", ["hba-status"], timeout=30)
+        return code == 0
+
+    async def op_pgadmin_open(self, c: Caller) -> dict:
+        uid = self._self_initialized(c)
+        if not await self._pg_locked():
+            raise LabError(
+                "pg_trust_enabled",
+                "pgAdmin par développeur indisponible : PostgreSQL accepte encore le rôle d'administration "
+                "sans mot de passe depuis les réseaux du lab. À ouvrir une fois ce réglage retiré par "
+                "l'administrateur.")
+        _, gis_password = self._role_passwords(uid)
+        servers = [{"name": f"Ma base ({uid})", "host": "postgres", "port": 5432,
+                    "database": f"dev_{uid}", "user": f"dev_{uid}"}]
+        if gis_password:
+            # 5433 : port du relais vers l'instance PostGIS (préenregistré, le dev n'a rien à saisir).
+            servers.append({"name": f"Ma base SIG ({uid})", "host": "postgis", "port": 5433,
+                            "database": f"gis_{uid}", "user": f"dev_{uid}"})
+        ticket = await self.pg.open(uid, servers)
+        return {"url": f"{self.cfg.public_origin}/pg/{uid}/?ticket={ticket}",
+                "servers": [{"name": s["name"], "host": s["host"], "database": s["database"], "user": s["user"]}
+                            for s in servers]}
+
+    async def op_pgadmin_close(self, c: Caller) -> dict:
+        uid = self._self_initialized(c)
+        return {"closed": await self.pg.close(uid)}
 
     async def op_groups(self, c: Caller) -> dict:
         """Groupes qu'un dev peut choisir pour cloisonner un projet : nom + libellé, rien d'autre."""
@@ -739,9 +815,11 @@ class Engine:
             return {"app": app, "closed": await self.ws.close(owner)}
         return {"app": app, "closed": False}
 
-    def ws_authorize(self, target: str, forwarded_uri: str, cookie: str) -> tuple[str, dict]:
-        if not valid_uid(target):
-            return "deny", {"reason": "espace inconnu"}
-        return self.ws.authorize(
+    def ws_authorize(self, kind: str, target: str, forwarded_uri: str, cookie: str) -> tuple[str, dict]:
+        """Décision de la passerelle pour UNE requête vers `/ws/<uid>/` ou `/pg/<uid>/`."""
+        if kind not in ("ws", "pg") or not valid_uid(target):
+            return "deny", {"reason": "service inconnu"}
+        manager = self.ws if kind == "ws" else self.pg
+        return manager.authorize(
             target, forwarded_uri, cookie,
             lambda viewer, owner: self.registry.is_dev(viewer) and (viewer == owner or self.registry.is_superuser(viewer)))

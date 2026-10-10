@@ -47,6 +47,7 @@ services:
       LAB_WS_IMAGE: "${LAB_WS_IMAGE:-lab-workspace:latest}"
       LAB_WS_MAX: "${LAB_WS_MAX:-3}"
       LAB_WS_IDLE_MIN: "${LAB_WS_IDLE_MIN:-30}"
+      LAB_PG_MAX: "${LAB_PG_MAX:-3}"
     networks:
       - sso-net            # Keycloak (clés du realm), oauth-hub, lab-runner, Caddy, passerelle
       - dev-net            # PostgreSQL (console SQL)
@@ -101,3 +102,33 @@ services:
       caddy: "${DOMAIN}"
       caddy.handle_2: "/ws/*"
       caddy.handle_2.reverse_proxy: "{{upstreams 8080}}"
+      # pgAdmin par développeur (I9) : même passerelle, même contrôle.
+      caddy.handle_3: "/pg/*"
+      caddy.handle_3.reverse_proxy: "{{upstreams 8080}}"
+
+  # ── Relais PostgreSQL des pgAdmin par dev (I9) ─────────────────────────────
+  # Un pgAdmin par dev ne doit joindre QUE PostgreSQL : il n'est donc pas sur
+  # dev-net. Ce relais TCP y est, et le moteur le connecte au réseau privé
+  # (interne) de chaque pgAdmin ouvert, sous les noms « postgres » (5432) et
+  # « postgis » (5433). Deux ports, deux destinations fixes, aucun secret.
+  pg-relay:
+    image: nginx:alpine
+    command: ["nginx", "-c", "/etc/lab/nginx.conf", "-g", "daemon off;"]
+    container_name: lab-pg-relay
+    restart: unless-stopped
+    user: "101"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges"]
+    tmpfs: [/tmp]
+    environment:
+      # Noms de CONTENEUR des deux instances (pas « postgres »/« postgis », qui sont aussi les
+      # alias de ce relais sur les réseaux de pgAdmin).
+      LAB_PG_UPSTREAM: "dev-postgres"
+      LAB_GIS_UPSTREAM: "dev-postgis"
+      NGINX_ENVSUBST_OUTPUT_DIR: "/tmp"
+    networks:
+      - dev-net
+    volumes:
+      - ${HOST_DEV_ROOT}/lab-mcp/pg-relay/nginx.conf:/etc/lab/nginx.conf:ro
+      - ${HOST_DEV_ROOT}/lab-mcp/pg-relay/stream.conf.template:/etc/nginx/templates/stream.conf.template:ro

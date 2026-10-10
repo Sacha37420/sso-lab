@@ -22,6 +22,8 @@ STATUS = {
     "job_exists": 409,         # un job est déjà en file ou en cours pour ce projet ; `job_id`
     "queue_full": 429,
     "workspace_limit": 429,    # LAB_WS_MAX espaces ouverts ; `open`, `max`
+    "pg_trust_enabled": 409,   # PostgreSQL accepte encore devuser sans mot de passe : pas de pgAdmin par dev
+    "pgadmin_limit": 429,      # LAB_PG_MAX pgAdmin ouverts ; `open`, `max`
     "sql_error": 400,          # message de PostgreSQL ; `sqlstate`
     "sql_timeout": 400,
     "upstream": 502,           # oauth-hub, GitHub, lab-runner injoignable ou en refus ; `service`
@@ -31,16 +33,17 @@ STATUS = {
 
 
 class LabError(Exception):
-    def __init__(self, code: str, detail: str, **extra: object) -> None:
+    def __init__(self, code: str, detail: str, http: int | None = None, **extra: object) -> None:
         super().__init__(detail)
         assert code in STATUS, code
         self.code = code
         self.detail = detail
+        self._http = http      # statut imposé par le contrat pour une route précise (I9)
         self.extra = {k: v for k, v in extra.items() if v is not None}
 
     @property
     def status(self) -> int:
-        return STATUS[self.code]
+        return self._http or STATUS[self.code]
 
     def body(self) -> dict:
         return {"error": self.code, "detail": self.detail, **self.extra}

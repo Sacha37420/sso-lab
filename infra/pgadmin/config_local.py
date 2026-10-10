@@ -32,7 +32,11 @@ OAUTH2_CONFIG = [
         # Restreint l'accès aux membres du groupe LDAP 'developers'.
         # pgAdmin vérifie que 'developers' est présent dans le claim 'groups'
         # (le mapper Keycloak injecte les groupes sans slash : ["developers", …])
-        'OAUTH2_ADDITIONAL_CLAIMS': {'groups': 'developers'},
+        # Réservé au groupe `admins` (2026-10-11) : ce pgAdmin partagé porte les serveurs
+        # devuser/gisuser — SUPERUTILISATEURS — avec leur mot de passe (.pgpass). Il s'ouvrait
+        # à tout `developers`. Chaque développeur a désormais SON pgAdmin vers SA base,
+        # ouvert depuis lab-admin (lab-mcp, contrat multi-dev I9).
+        'OAUTH2_ADDITIONAL_CLAIMS': {'groups': 'admins'},
 
         'OAUTH2_ICON'            : 'fa-lock',
         'OAUTH2_BUTTON_COLOR'    : '#2db1ff',

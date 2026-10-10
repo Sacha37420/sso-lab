@@ -1,4 +1,4 @@
-# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v6)
+# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v6, I9 v7)
 
 Écrite à partir de ce que le code rend réellement (`labmcp/engine.py`). Là où la table d'I5 et ce
 document divergent sur une **forme**, ce document l'emporte.
@@ -18,7 +18,8 @@ Ce qui reste `🟡`, et pourquoi (rien de tout cela ne change une forme) :
 - le dernier saut « Caddy du lab → passerelle des espaces » : le moteur n'est pas déployé.
 
 **Écarts avec la table d'I5** :
-- route **en plus** : `GET /mcp/api/groups` (demandée en v6) ;
+- routes **en plus** : `GET /mcp/api/groups` (v6) ; `GET /mcp/api/me/database-password`,
+  `POST` et `DELETE /mcp/api/me/pgadmin` (I9, v7 — §3.7, formes reprises telles quelles du contrat) ;
 - aucune route de la table n'est absente ;
 - `GET /mcp/api/jobs/<id>` ne rend pas `{state, step, log}` seul : voir « Jobs » ;
 - `POST …/tests` rend un job (`{job_id}`), comme la table le dit — l'outil MCP `run_tests`, qui était
@@ -90,11 +91,17 @@ reformulé. Entrée MCP : le même objet, en JSON, dans le texte de l'erreur d'o
 | `job_exists` | 409 | un job est déjà en file ou en cours pour ce projet | `job_id` |
 | `queue_full` | 429 | 8 jobs en attente sur le lab | — |
 | `workspace_limit` | 429 | `LAB_WS_MAX` espaces déjà ouverts | `open`, `max` |
+| `pg_trust_enabled` | 409 | pgAdmin par dev refusé : PostgreSQL accepte encore le rôle d'administration sans mot de passe depuis les réseaux du lab | — |
+| `pgadmin_limit` | 429 | `LAB_PG_MAX` pgAdmin déjà ouverts | `open`, `max` |
 | `sql_error` | 400 | erreur rendue par PostgreSQL | `sqlstate` |
 | `sql_timeout` | 400 | délai de la console SQL dépassé | — |
 | `upstream` | 502 | oauth-hub, GitHub, PostgreSQL ou lab-runner injoignable ou en refus | `service` |
 | `unavailable` | 503 | une pièce du lab manque (script, image, rôle de base non provisionné) | — |
 | `failed` | 500 | l'opération était recevable et a échoué | — |
+
+**Exception écrite par I9** : sur les trois routes du §3.7 (`/me/database-password`, `/me/pgadmin`),
+`not_initialized` est rendu en **403** et non en 409 — le contrat le fixe ainsi pour ces routes.
+Tester le champ `error`, pas le statut.
 
 Un refus de `validate-app.sh` n'est **pas** une erreur HTTP : il arrive dans le résultat du job de
 déploiement (`result.step = "validate"`, `result.reasons = ["[code] …"]`, §4).
@@ -128,6 +135,7 @@ Paramètre : `?as=<uid>` (superutilisateur seulement ; sinon `403`).
   "mcp_url": "https://<DOMAIN>/mcp",
   "oauth_hub_url": "https://<DOMAIN>/oauth-hub/",
   "workspace": {"open": false},    // ou la forme du §3.6 ; null tant que non initialisé
+  "pgadmin": {"open": false},      // (v7) son pgAdmin est-il ouvert ? toujours présent
   "scope_app": null,               // nom du projet quand l'appelant est un jeton d'espace (entrée MCP)
   "viewed_as": null,               // l'uid regardé, quand ?as= est utilisé
   "remaining": [                   // ce qu'il reste à faire, dans l'ordre ; [] quand tout est prêt
@@ -354,8 +362,48 @@ doit avoir relié GitHub pour ouvrir son espace), `503 unavailable` (image ou pa
 Dans `GET /me` et `GET /devs`, `workspace` est `{"open": false}` ou l'objet `workspace` ci-dessus ;
 dans `GET /projects`, c'est `{"open": bool}` pour **ce** projet.
 
-#### `GET /ws-auth` ✅ — appelée par la passerelle des espaces, pas par lab-admin
+#### `GET /ws-auth` ✅ — appelée par la passerelle (espaces **et** pgAdmin), pas par lab-admin
 `200` (laisser passer), `302` + `Set-Cookie` (ticket échangé), `401` (refus).
+
+### 3.7 Ma base : mot de passe et pgAdmin (I9, v7)
+
+Trois routes « soi-même » : jamais de `?as=`, y compris pour le superutilisateur ; pas d'outil MCP
+correspondant. Appelant non initialisé (ou non éligible) : `403 not_initialized`.
+
+#### `GET /me/database-password` ✅
+```json
+{"database": {"host": "postgres", "name": "dev_hassan", "user": "dev_hassan"},
+ "gis": {"host": "postgis", "name": "gis_hassan", "user": "dev_hassan"},      // null si pas de base SIG
+ "password": "…",
+ "gis_password": "…"}                                                          // null si pas de base SIG
+```
+En-têtes de réponse : `Cache-Control: no-store` (et `Pragma: no-cache`), succès comme erreur. L'appel
+est journalisé (qui, quand, résultat) **sans la valeur**. Erreurs : `403 forbidden` si `?as=` est
+présent, `403 not_initialized`, `503 unavailable` (aucun mot de passe enregistré pour ce rôle).
+À afficher à la demande, sans le garder dans l'état de l'application.
+
+#### `POST /me/pgadmin` ✅ (contre une instance PostgreSQL jetable ; en service : `409` tant que le garde-fou tient) — sans corps
+```json
+{"url": "https://<DOMAIN>/pg/hassan/?ticket=…",
+ "servers": [{"name": "Ma base (hassan)", "host": "postgres", "database": "dev_hassan", "user": "dev_hassan"},
+             {"name": "Ma base SIG (hassan)", "host": "postgis", "database": "gis_hassan", "user": "dev_hassan"}]}
+```
+- `url` : à ouvrir dans un nouvel onglet dans la minute (ticket à usage unique, 60 s, échangé contre
+  un cookie limité à `/pg/<uid>/`). Rappeler la route pour rouvrir l'onglet : si le pgAdmin tourne
+  déjà, elle rend simplement un nouveau ticket.
+- `servers` : ce qui est préenregistré dans pgAdmin (le second seulement si la base SIG existe). **Le
+  mot de passe n'y est pas** : le dev le saisit à la connexion au serveur, et pgAdmin ne
+  l'enregistre pas (réglage imposé).
+- **La réponse met 35 à 55 s** au premier appel (démarrage de pgAdmin, mesuré) : prévoir une attente
+  visible et un délai client d'au moins 3 minutes.
+
+Erreurs : `409 pg_trust_enabled`, `429 pgadmin_limit` `{"open": 3, "max": 3}`, `403 not_initialized`,
+`503 unavailable` (relais ou passerelle absents, pare-feu non posé), `500 failed`.
+
+#### `DELETE /me/pgadmin` ✅ → `{"closed": true}`
+`closed: false` s'il n'était pas ouvert. Un pgAdmin se ferme aussi seul après `LAB_WS_IDLE_MIN` (30)
+minutes sans requête (un onglet pgAdmin ouvert interroge son serveur en continu : il compte comme
+actif). Rien n'est conservé d'une ouverture à l'autre (préférences comprises).
 
 ---
 

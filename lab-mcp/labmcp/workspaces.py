@@ -30,22 +30,17 @@ import os
 import secrets
 import time
 from dataclasses import dataclass, field
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import urlencode
 
 import httpx
 
 from . import procs
+from .access import TICKET_TTL, Access, digest as _h
 from .auth import WS_TOKEN_PREFIX
 from .config import Config
 from .errors import LabError
 
-TICKET_TTL = 60
-SESSION_TTL = 12 * 3600
 HEARTBEAT = ".local/share/code-server/heartbeat"  # touché par code-server tant qu'une fenêtre est connectée
-
-
-def _h(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
 
 
 @dataclass
@@ -71,11 +66,11 @@ def _iso(ts: float) -> str:
 
 
 class WorkspaceManager:
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, access: Access, firewall) -> None:
         self.cfg = cfg
+        self.access = access
+        self.firewall = firewall
         self._ws: dict[str, Workspace] = {}
-        self._tickets: dict[str, tuple[str, str, float]] = {}    # condensat → (personne, espace visé, échéance)
-        self._sessions: dict[str, tuple[str, str, float]] = {}
         self._lock = asyncio.Lock()
         self._reaper: asyncio.Task | None = None
         self._reconciled = False
@@ -165,8 +160,7 @@ class WorkspaceManager:
                         open=len(self._ws), max=self.cfg.ws_max,
                     )
                 current = await self._start(owner, app, viewer, gh_token, author)
-            ticket = secrets.token_urlsafe(32)
-            self._tickets[_h(ticket)] = (viewer, owner, time.time() + TICKET_TTL)
+            ticket = self.access.ticket("ws", viewer, owner)
             self._start_reaper()
             return {"url": f"{self.url(owner)}?{urlencode({'ticket': ticket})}", "uid": owner, "app": app,
                     "reused": reused, "ticket_expires_in": TICKET_TTL, "workspace": current.view()}
@@ -181,8 +175,13 @@ class WorkspaceManager:
         name, net = self.container(owner), self.network(owner)
         token = WS_TOKEN_PREFIX + secrets.token_urlsafe(32)   # 256 bits
 
+        # Pare-feu des ponts d'espace (I3 v7) : vérifié AVANT chaque ouverture. S'il ne peut pas
+        # être posé, l'espace n'est pas ouvert — il joindrait les ports de l'hôte.
+        await self.firewall.ensure()
         await self._remove(owner)  # reste éventuel d'une ouverture interrompue
-        code, _, err = await self._docker("network", "create", "--label", f"lab.ws={cfg.ws_prefix}", net)
+        bridge = cfg.ws_bridge_prefix + "w" + _h(net)[:10]     # nom d'interface ≤ 15 caractères
+        code, _, err = await self._docker("network", "create", "--label", f"lab.ws={cfg.ws_prefix}",
+                                          "-o", f"com.docker.network.bridge.name={bridge}", net)
         if code != 0:
             raise LabError("failed", f"Création du réseau de l'espace impossible : {err.strip()[-200:]}")
         args = [
@@ -221,10 +220,10 @@ class WorkspaceManager:
             await self._remove(owner)
             raise LabError("unavailable", f"Passerelle des espaces ({cfg.ws_gateway}) injoignable : {err.strip()[-200:]}")
         ws = Workspace(uid=owner, app=app, token_hash=_h(token), opened_by=viewer, with_github=bool(gh_token),
-                       with_git_identity=bool(author), probe_cookie=secrets.token_urlsafe(32))
-        # Session interne : le moteur n'est sur aucun réseau d'espace, il sonde l'éditeur PAR la
-        # passerelle, comme tout le monde. Elle ne compte jamais comme une activité du dev.
-        self._sessions[_h(ws.probe_cookie)] = ("(moteur)", owner, time.time() + 10 * 365 * 86400)
+                       with_git_identity=bool(author),
+                       # Session interne : le moteur n'est sur aucun réseau d'espace, il sonde
+                       # l'éditeur PAR la passerelle. Elle ne compte jamais comme une activité du dev.
+                       probe_cookie=self.access.engine_session("ws", owner))
         self._ws[owner] = ws
         await self._wait_ready(ws)
         return ws
@@ -233,7 +232,7 @@ class WorkspaceManager:
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 return await client.get(f"{self.cfg.ws_gateway_url}/ws/{ws.uid}/{path}",
-                                        headers={"Cookie": f"{self.cookie_name(ws.uid)}={ws.probe_cookie}"})
+                                        headers={"Cookie": f"{Access.cookie_name('ws', ws.uid)}={ws.probe_cookie}"})
         except httpx.HTTPError:
             return None
 
@@ -254,57 +253,20 @@ class WorkspaceManager:
 
     async def _close_locked(self, uid: str) -> bool:
         ws = self._ws.pop(uid, None)
-        for store in (self._tickets, self._sessions):
-            for key in [k for k, v in store.items() if v[1] == uid]:
-                store.pop(key, None)
+        self.access.drop("ws", uid)
         await self._remove(uid)
         return ws is not None
 
     # ── contrôle d'accès, à chaque requête ──────────────────────────────────
-    def cookie_name(self, uid: str) -> str:
-        return f"lab_ws_{uid}"
-
     def authorize(self, target: str, forwarded_uri: str, cookie_header: str, allowed) -> tuple[str, dict]:
-        """Décision pour UNE requête vers l'espace `target`.
-
-        Rend ("ok", {}), ("redirect", {location, set_cookie}) ou ("deny", {reason}).
-        `allowed(personne, espace)` redit, à chaque requête, si cette personne a
-        encore le droit d'entrer (propriétaire, ou superutilisateur).
-        """
-        now = time.time()
         ws = self._ws.get(target)
         if ws is None:
             return "deny", {"reason": "espace fermé"}
 
-        parts = urlsplit(forwarded_uri or "")
-        query = parse_qsl(parts.query, keep_blank_values=True)
-        ticket = next((v for k, v in query if k == "ticket"), "")
-        if ticket:
-            entry = self._tickets.pop(_h(ticket), None)       # usage unique : retiré avant tout contrôle
-            if entry and entry[1] == target and entry[2] >= now and allowed(entry[0], target):
-                cookie = secrets.token_urlsafe(32)
-                self._sessions[_h(cookie)] = (entry[0], target, now + SESSION_TTL)
-                ws.last_activity = now
-                rest = urlencode([(k, v) for k, v in query if k != "ticket"])
-                secure = "; Secure" if self.cfg.public_origin.startswith("https://") else ""
-                return "redirect", {
-                    "location": f"/ws/{target}/" + (f"?{rest}" if rest else ""),
-                    "set_cookie": (f"{self.cookie_name(target)}={cookie}; Path=/ws/{target}/; HttpOnly; "
-                                   f"SameSite=Lax; Max-Age={SESSION_TTL}{secure}"),
-                }
-            return "deny", {"reason": "ticket invalide, expiré ou déjà utilisé"}
+        def touch() -> None:
+            ws.last_activity = time.time()
 
-        name = self.cookie_name(target) + "="
-        for piece in (cookie_header or "").split(";"):
-            piece = piece.strip()
-            if piece.startswith(name):
-                entry = self._sessions.get(_h(piece[len(name):]))
-                if entry and entry[1] == target and entry[2] >= now and (
-                        entry[0] == "(moteur)" or allowed(entry[0], target)):
-                    if entry[0] != "(moteur)":
-                        ws.last_activity = now
-                    return "ok", {}
-        return "deny", {"reason": "session absente ou expirée"}
+        return self.access.authorize("ws", target, forwarded_uri, cookie_header, allowed, touch)
 
     # ── arrêt après inactivité ──────────────────────────────────────────────
     async def _activity(self, ws: Workspace) -> float:
@@ -335,9 +297,11 @@ class WorkspaceManager:
         while self._ws:
             await asyncio.sleep(min(30, max(2, self.cfg.ws_idle_min * 60 / 4)))
             now = time.time()
-            for store in (self._tickets, self._sessions):
-                for key in [k for k, v in store.items() if v[2] < now]:
-                    store.pop(key, None)
+            self.access.purge()
+            try:   # les règles ont pu être vidées par un tiers : reposées ici (au plus toutes les 2 min)
+                await self.firewall.ensure()
+            except Exception:
+                pass
             limit = self.cfg.ws_idle_min * 60
             for uid, ws in list(self._ws.items()):
                 if now - await self._activity(ws) <= limit:

@@ -34,6 +34,7 @@
 			forward_auth {$LAB_ENGINE_ADDR:lab-mcp:8000} {
 				uri /mcp/api/ws-auth
 				header_up X-Lab-Ws-Uid {re.ws.1}
+				header_up X-Lab-Ws-Kind ws
 			}
 			# code-server ne sait pas servir sous un préfixe (toutes ses URL sont
 			# relatives) : l'image d'I7 écoute à la racine, et c'est ICI que
@@ -51,6 +52,27 @@
 			}
 		}
 	}
+	# ── pgAdmin par développeur (I9) : /pg/<uid>/ — même contrôle, autre sorte de service ──
+	@pgbare path_regexp pgbare ^/pg/([a-z][a-z0-9]{1,30})$
+	redir @pgbare {path}/ 308
+
+	@pg path_regexp pg ^/pg/([a-z][a-z0-9]{1,30})/
+	handle @pg {
+		route {
+			forward_auth {$LAB_ENGINE_ADDR:lab-mcp:8000} {
+				uri /mcp/api/ws-auth
+				header_up X-Lab-Ws-Uid {re.pg.1}
+				header_up X-Lab-Ws-Kind pg
+			}
+			# pgAdmin sait servir sous un préfixe (SCRIPT_NAME=/pg/<uid>) : le chemin n'est PAS modifié.
+			reverse_proxy {$LAB_PG_PREFIX:pg-}{re.pg.1}:8080 {
+				transport http {
+					keepalive off
+				}
+			}
+		}
+	}
+
 	handle {
 		respond "Introuvable" 404
 	}

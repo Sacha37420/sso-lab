@@ -90,8 +90,9 @@ faiblesses encore ouvertes et ce dépôt est public).
 - **Développeur** : membre du groupe `developers` dont l'uid a la forme `^[a-z][a-z0-9]{1,30}$`.
   Il est inscrit (`.devs`) **automatiquement à sa première connexion à `lab-admin`** : rôle et base
   PostgreSQL `dev_<uid>`, dossier de travail. Mettre un compte dans `developers` (`add-user.sh`)
-  est donc l'acte d'autorisation. `e2e_member` (tiret bas) ne peut pas être inscrit — voulu, mais
-  il n'existe par conséquent **aucun compte synthétique pour tester le parcours « dev »**.
+  est donc l'acte d'autorisation. `e2e_member` (tiret bas) ne peut pas être inscrit — voulu. Le parcours « dev » se teste avec
+  **`e2edev`** (voir « Tests end-to-end ») ; ce compte n'a pas de compte GitHub, donc tout ce qui
+  passe par GitHub (créer un projet, ouvrir l'éditeur) ne se vérifie qu'avec un compte humain.
 - **Propriété d'une app** : `.owners` (`<app>:<uid>`), gitignoré comme `.ports` et `.devs`. Une app
   sans ligne est une app historique du superutilisateur.
 
@@ -102,6 +103,7 @@ faiblesses encore ouvertes et ce dépôt est public).
 | **Moteur** | `lab-mcp/` (racine, pas un sous-module), conteneurs `lab-mcp` + `lab-ws-gateway` | **Seul composant privilégié** (monte `docker.sock`). Deux entrées sur les mêmes fonctions : `/mcp` pour une IA, `/mcp/api/…` pour l'interface. Description faisant foi : `lab-mcp/API.md` |
 | **Interface** | `lab-admin` | « Mes projets » et page projet : tout se fait **sans IA**. N'a ni socket Docker ni script ; son frontend appelle le moteur |
 | **Espace de travail** | `workspace/` (image `lab-workspace`), conteneur `ws-<uid>` | Un VS Code par projet, à la demande : code-server, Claude Code, Mistral Vibe. Pas de Docker, pas de `sudo`, ni `dev-net` ni `sso-net` |
+| **pgAdmin par dev** | conteneur `pg-<uid>`, relais `lab-pg-relay` (`lab-mcp/pg-relay/`) | Un pgAdmin à la demande vers la **seule** base du dev, sans mot de passe enregistré, sur un réseau interne qui ne joint que le relais PostgreSQL |
 | **Scripts** | `scripts/app-*.sh`, `validate-app.sh`, `check-app-name.sh`, `dev-db.sh`, `lab-lock.sh`, `lib/registry.sh` | Les seules commandes que le moteur exécute |
 
 ### Règles à ne pas rouvrir
@@ -135,7 +137,20 @@ faiblesses encore ouvertes et ce dépôt est public).
 - **`code-server` (`/code`) reste réservé au superutilisateur** : il monte tout le dépôt, le socket
   Docker, `~/.ssh` et `~/.claude`.
 - **Mots de passe des rôles `dev_<uid>`** : `infra/dev-roles.env`, jamais `infra/.env` (c'est
-  l'`env_file` de `dev-postgres` et `dev-pgadmin`).
+  l'`env_file` de `dev-postgres` et `dev-pgadmin`). Le dev lit le sien dans `lab-admin` (bloc
+  « Ma base », au clic seulement, `Cache-Control: no-store`, journalisé) — décision utilisateur
+  du 2026-10-10, qui remplace « jamais de mot de passe affiché ». Personne ne lit celui d'un autre.
+- **Le pgAdmin partagé (`dev-pgadmin`) est réservé au groupe `admins`** : il porte les serveurs
+  `devuser`/`gisuser` (superutilisateurs) avec leur mot de passe. Un dev ouvre **le sien** depuis
+  `lab-admin`. Le moteur refuse de l'ouvrir (`409 pg_trust_enabled`) tant que
+  `scripts/dev-db.sh hba-status` ne rend pas `locked` : avec une ligne `trust` réseau, taper
+  `devuser` dans un pgAdmin personnel donnerait le rôle superutilisateur.
+- **Un espace de travail ne joint ni l'hôte ni un autre pont Docker**, sauf 80/443. Le moteur nomme
+  ses ponts `lws…` et pose au démarrage dix règles (`INPUT` et `DOCKER-USER`,
+  `lab-mcp/firewall/lab-ws-firewall.sh`) qui portent **toutes** `-i lws+` : elles ne peuvent
+  toucher aucun autre trafic. Elles disparaissent au redémarrage de l'hôte et sont reposées par
+  le moteur. Ne jamais y ajouter une règle sans ce filtre d'interface. `sshd` et la publication
+  des ports ne sont pas modifiés : le superutilisateur garde son VS Code réel par SSH.
 
 ### Règles de développement imposées à tout projet (IA comprises)
 
@@ -165,8 +180,15 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
   concluait à tort que le SSO était arrêté (`scripts/lib/kcprobe.sh`).
 - **`vibe mcp add` sur un nom existant répond « already configured », code 0, sans rien changer** ;
   Vibe pose des dossiers en lecture seule dans `~/.vibe` (`chmod -R u+rwX` avant tout `rm -rf`).
-- **Le lien direct vers une page de `lab-admin` retombe sur l'accueil** après le passage par
-  Keycloak (`redirectUri = appUrl`, antérieur au chantier) — y compris `/projets/<app>`.
+- **Le lien direct vers une page retombait sur l'accueil** après le passage par Keycloak
+  (`redirectUri = env.appUrl`) : corrigé dans `lab-admin` (`core/redirect-uri.ts` — la page
+  courante, jamais un paramètre, seulement sous l'origine et le préfixe de l'app). **Le même
+  défaut est dans `_templates/` et dans toutes les autres apps**, non corrigé.
+- **Le noyau rend le commentaire d'une règle iptables entre guillemets** : un script qui cherche
+  ses propres règles par leur commentaire sans en tenir compte les pose en double et ne sait plus
+  les retirer (constaté sur des règles de test).
+- **L'image pgAdmin ne démarre pas sous `cap_drop ALL` seul** (son Python porte une capacité de
+  fichier) : il lui faut `NET_BIND_SERVICE`. Démarrage : 35 à 55 s.
 
 ### État de la bascule
 
@@ -845,6 +867,12 @@ ci-dessous) suppose un seul fichier, ce nom précis.
     garde-fou** — sans quoi, `VERIFY_EMAIL` étant actif sur le realm, donner une adresse à ce
     compte le **bloquerait** à l'écran de vérification (constaté en réel avant correction).
     `e2e_outsider` n'en a délibérément pas : il n'a jamais à dépasser le refus de cloisonnement.
+  - **`e2edev`** (2026-10-10) : troisième compte synthétique, membre de `developers` **seul**, uid
+    sans tiret bas, adresse factice `e2edev@ssolab.local`, mot de passe `E2EDEV_PASSWORD` dans
+    `sso-lab/.env`. C'est le compte du parcours « développeur » du lab multi-dev (inscrit, base
+    `dev_e2edev`) et le seul qui prouve qu'un membre de `developers` **sans** `admins` est refusé
+    sur les pages et l'API d'administration de `lab-admin`. Il n'est pas utilisé par
+    `cloisonnement.spec.ts`. Tout nouveau groupe LDAP ne doit **pas** l'inclure.
 - **Catalogue vs exécution**, deux choses bien distinctes :
   - *Catalogue* (`GET /list` sur le runner, **pas de navigateur**) : à chaque déploiement d'une app
     (`scripts/setup_unit.sh`, étape best-effort en toute fin), liste les tests du fichier

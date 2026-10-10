@@ -113,10 +113,61 @@ connexion, la passerelle n'en garde donc aucune entre deux requêtes.
   seule — `chmod -R u+rwX` d'abord, sinon `rm -rf` échoue. Le moteur ne supprime jamais ce dossier.
 - **Un redémarrage du moteur ferme tous les espaces** (leurs jetons sont en mémoire). Rien n'est
   perdu : sources et maison sont sur disque.
-- **Limite connue** : comme tout conteneur, un espace joint les ports **publiés sur l'hôte**
-  (Keycloak `:8080`, LDAP `:389`, pgAdmin `:5050`, `sshd :22`…). C'est l'exposition qu'a déjà toute
-  machine du réseau local ; la fermer demande un pare-feu sur l'hôte, hors de ce dossier.
-  PostgreSQL, les Redis, `lab-runner` et tout ce qui n'est pas publié restent injoignables.
+
+### Pare-feu des ponts d'espace (I3, v7)
+
+Sans lui, un espace joint par la passerelle de son pont tout ce que l'hôte écoute ou publie
+(`sshd :22`, LDAP `:389`, pgAdmin `:5050`, Keycloak `:8080`, les ports d'apps) et le réseau local.
+Le moteur nomme donc ses ponts `lws…` et pose des règles qui ne correspondent **qu'à ce préfixe
+d'interface** (`firewall/lab-ws-firewall.sh`, tout y est écrit) :
+
+| Flux depuis un espace | Où il passe | Règle |
+|---|---|---|
+| service natif de l'hôte (`sshd`) | chaîne `INPUT` | `-i lws+` : 80/443 acceptés, tout le reste rejeté |
+| port publié par Docker (réécrit vers un conteneur avant filtrage) | `DOCKER-USER` | `-i lws+` vers une adresse privée : rejeté — sauf une connexion dont le port **d'origine** est 80/443 (l'URL publique du lab) |
+| réseau local, autre pont | `DOCKER-USER` | rejeté |
+| Internet | `DOCKER-USER` | non touché |
+
+- **Qui les pose** : un conteneur jetable de l'image du moteur, en réseau hôte avec la seule
+  capacité `NET_ADMIN`, qui exécute `lab-ws-firewall apply lws` et s'arrête. Le moteur lui-même n'a
+  ni l'un ni l'autre.
+- **Quand** : au démarrage du moteur, avant chaque ouverture (espace ou pgAdmin), et au plus toutes
+  les 2 minutes tant qu'un espace est ouvert. Idempotent ; si la pose échoue, **rien ne s'ouvre**.
+- **Ce qui n'est pas touché** : aucune règle sans `-i lws+`, ni `nat`, ni les chaînes de Docker, ni
+  `edge-net`, ni un `ports:`, ni `sshd`. Dorsal : celui où existe `DOCKER-USER` (ici `iptables-nft`).
+- **Au redémarrage de l'hôte** : les règles disparaissent, les espaces aussi (`--restart no`) ; le
+  moteur les repose en démarrant.
+- Voir et retirer à la main :
+  `docker run --rm --network host --cap-drop ALL --cap-add NET_ADMIN --user 0 <image du moteur> lab-ws-firewall show|remove lws`
+- **Limites** : l'IP publique du lab reste jointe par le NAT en épingle de la box, donc les ports que
+  la box redirige (ceux qui sont déjà ouverts à Internet). IPv6 n'est pas filtré (les ponts Docker
+  du lab n'en ont pas). Si `br_netfilter` était chargé un jour, la règle « même pont → RETURN » est
+  déjà là pour que passerelle et espace continuent de se parler.
+
+## pgAdmin par développeur (I9)
+
+`POST /mcp/api/me/pgadmin` ouvre `pg-<uid>` : `dpage/pgadmin4:8` en mode « poste de travail » (pas
+d'écran de connexion), derrière la même passerelle et le même contrôle qu'un espace (`/pg/<uid>/`,
+ticket → cookie `lab_pg_<uid>`). Un ticket ou un cookie d'espace ne vaut rien pour un pgAdmin, et
+inversement.
+
+- **Réseau** (question ouverte du §8, tranchée par essai) : `pg-<uid>` est sur **un** réseau, le sien,
+  créé `--internal` — ni Internet, ni hôte, ni `dev-net`, ni `sso-net`. Le moteur y connecte la
+  passerelle et `lab-pg-relay` (`pg-relay/`), un relais TCP qui ne porte que `postgres:5432` vers
+  `dev-postgres` et `postgis:5433` vers `dev-postgis`. pgAdmin ne voit donc de `dev-net` que deux
+  ports PostgreSQL, et aucune app de `dev-net` ne peut joindre un pgAdmin.
+- **Ce qu'il ne reçoit pas** : `infra/.env`, `devuser`/`gisuser`, un `.pgpass`, le mot de passe du
+  dev. Serveurs préenregistrés sans mot de passe ; enregistrement désactivé
+  (`ALLOW_SAVE_PASSWORD=False`) ; données en mémoire (`tmpfs`) : rien ne survit à la fermeture.
+- **Capacités** (mesuré) : `cap_drop ALL` **plus** `NET_BIND_SERVICE` — le Python de l'image porte
+  cette capacité de fichier et ne se lance pas sans elle, même sur un port non privilégié.
+  `no-new-privileges`, 512 Mo (≈ 210 Mo utilisés), 256 pids.
+- **Garde-fou** : `scripts/dev-db.sh hba-status` doit rendre 0 (plus de `trust` réseau), sinon
+  `409 pg_trust_enabled` — taper « devuser » dans pgAdmin donnerait le rôle superutilisateur.
+- **Cycle de vie** : `LAB_PG_MAX` (3), arrêt après `LAB_WS_IDLE_MIN` sans requête, fermé au
+  redémarrage du moteur. Démarrage : 35 à 55 s.
+- Le mot de passe se lit par `GET /mcp/api/me/database-password` (soi-même uniquement, `no-store`,
+  journalisé sans la valeur).
 
 ---
 
@@ -130,10 +181,13 @@ connexion, la passerelle n'en garde donc aucune entre deux requêtes.
 | Propriété du projet pour toute opération qui en prend un ; « inconnu » et « à un autre » indistincts | `Engine._app` |
 | Jeton d'espace : 256 bits, haché, limité à un projet et à neuf opérations, jamais superutilisateur | `workspaces.py`, `Engine.call` |
 | Seuls les scripts d'I4 sont exécutés, en liste d'arguments ; enchaînements lancés **par** `lab-lock.sh` | `procs.py`, `chain.py` |
-| `docker` lancé directement **uniquement** pour les espaces, avec des noms dérivés d'un uid validé | `workspaces.py` |
+| `docker` lancé directement **uniquement** pour les espaces, les pgAdmin et le pare-feu, avec des noms dérivés d'un uid validé | `workspaces.py`, `pgadmin.py`, `firewall.py` |
 | Jeton GitHub = celui de l'appelant, redemandé à oauth-hub à chaque fois, jamais écrit ni journalisé ; pas de `gh` dans l'image | `oauthhub.py`, `github.py` |
 | **Un déploiement ne reçoit aucun jeton** : clé de déploiement en lecture seule, déposée à la création | `chain.py` |
 | Console SQL : connexion réseau avec le rôle `dev_<propriétaire>` et son mot de passe ; jamais `devuser` | `sqlconsole.py` |
+| Pare-feu des ponts d'espace : règles limitées à `-i lws+`, posées par un conteneur jetable `NET_ADMIN` ; échec = rien ne s'ouvre | `firewall.py`, `firewall/lab-ws-firewall.sh` |
+| pgAdmin par dev : réseau interne + relais PostgreSQL, aucun mot de passe remis, refusé tant que `trust` existe | `pgadmin.py`, `pg-relay/` |
+| Mot de passe de sa base : soi-même uniquement, `no-store`, jamais journalisé | `Engine.op_database_password`, `web.py` |
 | Webhook : HMAC-SHA256 par projet, comparaison à temps constant ; le SHA reçu n'est jamais déployé | `Engine.hook` |
 
 **Aucun mode « identité forcée »** : émetteur, adresse des clés et les deux `azp` ne sont pas
@@ -157,7 +211,7 @@ Décisions de ce secteur :
 mkdir -p /home/sacha/lab-work              # LAB_WORK_DIR : doit exister AVANT (sinon Docker le crée en root)
 cp lab-mcp/.env.example lab-mcp/.env       # vérifier LAB_UID / LAB_GID / DOCKER_GID
 bash scripts/reset_url.sh                  # remplit DOMAIN, HOST_DEV_ROOT, LAB_WORK_DIR
-bash scripts/setup2.sh lab-mcp --yes       # client Keycloak + build + moteur + passerelle
+bash scripts/setup2.sh lab-mcp --yes       # client Keycloak + build + moteur + passerelle + relais PostgreSQL
 ```
 Préalables : l'image `lab-workspace:latest` construite (`workspace/`), et `lab-mcp` **et**
 `lab-admin` ajoutés aux « Apps autorisées » d'oauth-hub (portée `repo` sur la fiche GitHub).
@@ -167,6 +221,8 @@ Préalables : l'image `lab-workspace:latest` construite (`workspace/`), et `lab-
 | `DOMAIN`, `LAB_ROOT`, `LAB_WORK_DIR` | posées par le compose ; chemins **identiques à l'hôte** |
 | `LAB_WS_IMAGE` / `LAB_WS_MAX` / `LAB_WS_IDLE_MIN` | `lab-workspace:latest` / 3 / 30 |
 | `LAB_WS_MEMORY` / `LAB_WS_CPUS` / `LAB_WS_PIDS` | `2g` / `1` / 512 |
+| `LAB_PG_MAX` / `LAB_PG_MEMORY` / `LAB_PG_IMAGE` | 3 / `512m` / `dpage/pgadmin4:8` |
+| `LAB_WS_BRIDGE_PREFIX` | `lws` — préfixe d'interface des ponts d'espace (essais : `lwt`) |
 | `LAB_WS_PUBLIC_VIA_HOST` | `1` : `<DOMAIN>` résolu vers l'hôte dans l'espace |
 | `LAB_SQL_TIMEOUT_S` / `LAB_SQL_MAX_ROWS` | 10 / 500 |
 | `LAB_MCP_QUICK_LOCK_TIMEOUT` / `LAB_MCP_JOB_LOCK_TIMEOUT` | 20 s / 900 s |
@@ -188,7 +244,8 @@ Préalables : l'image `lab-workspace:latest` construite (`workspace/`), et `lab-
 - `tests/client.py` — clients des deux entrées (client MCP officiel du SDK ; HTTP) ;
 - `tests/compare.py` — les deux entrées rendent-elles le même objet ?
 - `tests/keycloak_login.js` — vrai jeton Keycloak (`lab-mcp` ou `lab-admin`) par le navigateur de `lab-runner` ;
-- `tests/ws/` — essai réseau des espaces (substitut d'espace, sonde, client WebSocket).
+- `tests/ws/` — essai réseau des espaces (substitut d'espace, sonde, client WebSocket) ;
+- `tests/pgadmin_check.py` — ce qu'un pgAdmin par dev contient et accepte, par son API.
 
 ### Ce qui reste à vérifier en réel
 1. Un compte humain : première connexion (`me/init` qui inscrit réellement), parcours complet.

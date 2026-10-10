@@ -28,6 +28,8 @@ ALLOWED_SCRIPTS = frozenset({
     "app-remove.sh",
     # v5 : inscription à la première connexion, clone de travail d'un espace
     "dev-enroll.sh", "work-clone.sh",
+    # v7 : état de pg_hba (lecture seule : sous-commande hba-status uniquement)
+    "dev-db.sh",
 })
 
 LOCK_BUSY = 75  # code rendu par les scripts quand le verrou de déploiement est occupé

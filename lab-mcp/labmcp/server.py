@@ -53,10 +53,6 @@ class AuthMiddleware:
             await JSONResponse(exc.body(), status_code=exc.status, headers=headers)(scope, receive, send)
             return
         scope["lab.caller"] = caller
-        # Première requête après un démarrage : ferme les espaces d'une vie précédente
-        # (leurs jetons, gardés en mémoire, ne valent plus rien).
-        if not self.engine.ws._reconciled:
-            await self.engine.ws.reconcile()
         await self.app(scope, receive, send)
 
 

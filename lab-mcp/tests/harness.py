@@ -62,4 +62,20 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 doubles.start()
 cfg = config.load()
 print(f"[harness] SERVEUR DE TEST — clé de test, doubles oauth-hub/GitHub — racine {cfg.root}", flush=True)
-uvicorn.run(build(cfg), host="0.0.0.0", port=8000, log_level="warning", access_log=False)
+import asyncio  # noqa: E402
+import os  # noqa: E402
+
+from labmcp import engine as engine_module  # noqa: E402
+
+if os.environ.get("TEST_PG_LOCKED") == "1":
+    # ESSAI de l'ouverture réelle d'un pgAdmin contre une instance PostgreSQL JETABLE sans
+    # « trust » (le relais de test pointe vers elle). Le garde-fou réel lit les instances du lab,
+    # qui sont encore en « trust » : il est remplacé ICI, pas dans le code livré.
+    async def _locked(self):
+        return True
+    engine_module.Engine._pg_locked = _locked
+    print("[harness] garde-fou pg_trust remplacé : instance PostgreSQL de test", flush=True)
+
+app = build(cfg)
+asyncio.run(app.engine.startup())
+uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning", access_log=False)

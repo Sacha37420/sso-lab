@@ -25,6 +25,7 @@
 #                                                   reste une app du dev dans .owners)
 #   bash scripts/dev-db.sh lockdown-connect [--apply]   ┐ PHASE 3 — jamais appelés par un autre
 #   bash scripts/dev-db.sh lockdown-hba     [--apply]   ┘ script. Sans --apply : affichent seulement.
+#   bash scripts/dev-db.sh hba-status                    lecture seule : trust|locked par instance (code 0 = verrouillé)
 #
 # COMMENT L'ISOLATION TIENT (et ce qui ne la tient PAS) :
 #   • « chacun ne voit que ses projets » = un rôle non-superutilisateur qui ne
@@ -402,6 +403,24 @@ INNER
   $apply || echo -e "\n  (simulation — relancer avec --apply pour exécuter)"
 }
 
+# Lecture seule : dit si pg_hba.conf accepte encore une connexion RÉSEAU sans mot
+# de passe. Une ligne par instance démarrée (« <conteneur> trust|locked »), code 0
+# si toutes sont verrouillées, 1 si l'une garde une ligne trust réseau, 2 si une
+# instance n'a pas pu être lue. Consommé par le moteur (lab-mcp) avant d'ouvrir un
+# pgAdmin de développeur (contrat multi-dev, I9).
+cmd_hba_status() {
+  local container hba n rc=0
+  for container in "$PG_CONTAINER" "$GIS_CONTAINER"; do
+    _container_up "$container" || { echo "$container absent"; rc=2; continue; }
+    hba="$(_scalar "$container" postgres "SHOW hba_file")" || { echo "$container illisible"; rc=2; continue; }
+    n="$(docker exec "$container" awk '
+        $1 ~ /^host/ && $NF == "trust" && $0 !~ /127\.0\.0\.1\/32/ && $0 !~ /::1\/128/ { n++ } END { print n+0 }' "$hba")" \
+      || { echo "$container illisible"; rc=2; continue; }
+    if [[ "$n" == "0" ]]; then echo "$container locked"; else echo "$container trust"; [[ $rc -eq 2 ]] || rc=1; fi
+  done
+  return $rc
+}
+
 [[ $# -ge 1 ]] || usage
 CMD="$1"; shift
 case "$CMD" in
@@ -411,6 +430,7 @@ case "$CMD" in
   drop)              cmd_drop "$@" ;;
   lockdown-connect)  cmd_lockdown_connect "$@" ;;
   lockdown-hba)      cmd_lockdown_hba "$@" ;;
+  hba-status)        cmd_hba_status "$@" ;;
   -h|--help)         usage ;;
   *)                 die "Commande inconnue : $CMD" ;;
 esac

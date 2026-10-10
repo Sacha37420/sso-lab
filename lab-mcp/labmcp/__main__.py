@@ -1,6 +1,7 @@
 """Point d'entrée : `python -m labmcp`."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 
@@ -23,7 +24,10 @@ def main() -> None:
             "⚠ LAB_GIT_ALLOW_FILE=1 : origines git en file:// acceptées — MODE TEST, "
             "jamais en service (docker-compose.yml ne le définit pas)."
         )
-    uvicorn.run(build(cfg), host=cfg.host, port=cfg.port, log_level="warning", access_log=False)
+    app = build(cfg)
+    # Avant d'écouter : pare-feu des ponts d'espace, espaces et pgAdmin orphelins fermés.
+    asyncio.run(app.engine.startup())
+    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="warning", access_log=False)
 
 
 if __name__ == "__main__":
