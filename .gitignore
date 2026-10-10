@@ -30,3 +30,9 @@ atelier-3d-spike/
 
 # Config locale Claude Code (permissions personnelles, pas partagées)
 .claude/settings.local.json
+
+# Registre multi-dev — associe des personnes à leurs projets (dépôt public)
+.devs
+.owners
+# État local : verrou de déploiement, clés de déploiement, enregistrements de déploiement
+.lab-state/

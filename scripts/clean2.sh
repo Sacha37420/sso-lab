@@ -7,11 +7,19 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="${1:-}"
+# Registre des apps (contrat multi-dev, I1) : le dossier d'une app se demande à
+# registry_app_dir, jamais par un « $ROOT/<app> » écrit en dur.
+# shellcheck source=lib/registry.sh
+source "$SCRIPT_DIR/scripts/lib/registry.sh"
+APP_DIR=""
+if [[ -n "$APP_NAME" ]]; then
+  APP_DIR="$(registry_app_dir "$APP_NAME")" || { echo "Nom d'app invalide : '$APP_NAME'" >&2; exit 1; }
+fi
 
 # ── 1. Arrêt des stacks Docker et suppression des volumes ──────────────
 echo "=== 1/4  Arrêt des stacks Docker et suppression des volumes ==="
 if [[ -n "$APP_NAME" ]]; then
-  DIR="$SCRIPT_DIR/$APP_NAME"
+  DIR="$APP_DIR"
   if [[ -f "$DIR/docker-compose.yml" ]]; then
     echo "■ $APP_NAME — down --volumes ..."
     docker compose -f "$DIR/docker-compose.yml" down --volumes --remove-orphans 2>&1 | sed 's/^/  /' || true
@@ -28,7 +36,7 @@ else
   while IFS= read -r compose; do
     dir="$(dirname "$compose")"
     COMPOSE_DIRS+=("$dir")
-  done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort -r)
+  done < <(registry_dirs_with docker-compose.yml | sed 's|$|/docker-compose.yml|' | sort -r)
   for dir in "${COMPOSE_DIRS[@]}"; do
     compose="$dir/docker-compose.yml"
     [[ -f "$compose" ]] || continue
@@ -80,7 +88,7 @@ echo ""
 # `.heavy-build` dans le périmètre a toujours son cache nettoyé comme avant.
 echo "=== 3/4  Nettoyage du cache de build Docker ==="
 _PRUNE_SEARCH_ROOT="$SCRIPT_DIR"
-[[ -n "$APP_NAME" ]] && _PRUNE_SEARCH_ROOT="$SCRIPT_DIR/$APP_NAME"
+[[ -n "$APP_NAME" ]] && _PRUNE_SEARCH_ROOT="$APP_DIR"
 _HEAVY_FOUND=false
 _HEAVY_CHANGED=false
 while IFS= read -r _marker; do
@@ -107,14 +115,14 @@ echo ""
 echo "=== 4/4  Suppression des artefacts de build applicatifs ==="
 if [[ -n "$APP_NAME" ]]; then
   # Maven
-  MAVEN_TARGET="$SCRIPT_DIR/$APP_NAME/target"
+  MAVEN_TARGET="$APP_DIR/target"
   if [[ -d "$MAVEN_TARGET" ]]; then
     echo "■ Maven : suppression de $APP_NAME/target/"
     rm -rf "$MAVEN_TARGET"
   fi
   # Angular
-  ANGULAR_DIST="$SCRIPT_DIR/$APP_NAME/dist"
-  ANGULAR_CACHE="$SCRIPT_DIR/$APP_NAME/.angular"
+  ANGULAR_DIST="$APP_DIR/dist"
+  ANGULAR_CACHE="$APP_DIR/.angular"
   if [[ -d "$ANGULAR_DIST" ]]; then
     echo "■ Angular : suppression de $APP_NAME/dist/"
     rm -rf "$ANGULAR_DIST"
@@ -164,8 +172,17 @@ if [[ -z "$APP_NAME" ]]; then
     # tiret. L'étiquette Compose, elle, donne le dossier exact.
     rel="${wd#"$SCRIPT_DIR"/}"
     base="${rel%%/*}"
+    # Une app de deploiement/ : son dossier d'origine tient en DEUX composants
+    # (deploiement/<app>). Ne garder que « deploiement » rendrait le test
+    # ci-dessous toujours faux — un vrai orphelin n'y serait jamais vu.
+    if [[ "$base" == "deploiement" && "$rel" == deploiement/* ]]; then
+      _sub="${rel#deploiement/}"; base="deploiement/${_sub%%/*}"
+    fi
 
-    if [[ -n "$base" && ! -d "$SCRIPT_DIR/$base" ]]; then
+    # Une app déménagée par app-relocate.sh garde, tant qu'elle n'est pas
+    # redéployée, des conteneurs étiquetés avec son ANCIEN chemin ($ROOT/<app>) :
+    # son dossier existe toujours, sous deploiement/ — ce n'est pas un orphelin.
+    if [[ -n "$base" && ! -d "$SCRIPT_DIR/$base" && ! -d "$SCRIPT_DIR/deploiement/$base" ]]; then
       echo "■ Suppression conteneur orphelin : $name ($id) — dossier $base/ absent"
       docker rm -f "$id" 2>&1 | sed 's/^/  /' || true
     fi

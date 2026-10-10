@@ -1,0 +1,1 @@
+--public --no-env --no-wan --native-redirect http://localhost:8976/callback --native-redirect http://127.0.0.1:8976/callback --require-group developers

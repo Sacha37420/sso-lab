@@ -46,6 +46,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/registry.sh
+source "$ROOT_DIR/scripts/lib/registry.sh"
 
 FORCE=false
 KEEP_PASSWORD=""
@@ -103,7 +105,7 @@ while IFS= read -r _envf; do
   _app="$(basename "$(dirname "$_envf")")"
   [[ "$_app" == "sso-lab" || "$_app" == "infra" ]] && continue
   bash "$SCRIPT_DIR/rotate-app-secret.sh" "$_app" || true
-done < <(find "$ROOT_DIR" -maxdepth 2 -name ".env" | sort)
+done < <(registry_dirs_with .env | sed 's|$|/.env|')
 
 step "3/8  KEYCLOAK_CLIENT_SECRET de chaque app (mode tout-en-un)"
 bash "$SCRIPT_DIR/create-app-client.sh"

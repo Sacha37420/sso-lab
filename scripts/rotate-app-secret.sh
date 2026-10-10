@@ -25,7 +25,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${1:-}"
 [[ -n "$APP" ]] || { echo "Usage : bash rotate-app-secret.sh <app>" >&2; exit 1; }
 
-ENV_FILE="$SCRIPT_DIR/$APP/.env"
+# Registre des apps (contrat multi-dev, I1) : le dossier d'une app se demande à
+# registry_app_dir, jamais par un « $ROOT/<app> » écrit en dur.
+# shellcheck source=lib/registry.sh
+source "$SCRIPT_DIR/scripts/lib/registry.sh"
+APP_DIR="$(registry_app_dir "$APP")" || { echo "Nom d'app invalide : '$APP'" >&2; exit 1; }
+ENV_FILE="$APP_DIR/.env"
 [[ -f "$ENV_FILE" ]] || { echo "✗ $ENV_FILE introuvable." >&2; exit 1; }
 
 # Pas de clé SECRET_KEY dans ce .env (app non-Django : Angular seul, Spring…) :

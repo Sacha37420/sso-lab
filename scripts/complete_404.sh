@@ -22,6 +22,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Registre des apps (contrat multi-dev, I1) : le dossier d'une app se demande à
+# registry_app_dir, jamais par un « $ROOT/<app> » écrit en dur.
+# shellcheck source=lib/registry.sh
+source "$SCRIPT_DIR/scripts/lib/registry.sh"
 DESCRIPTIONS="$SCRIPT_DIR/.app-descriptions"
 TARGET="$SCRIPT_DIR/sso-lab/fallback/html/404.html"
 MARK_START='<!-- APPS:START'
@@ -44,7 +48,8 @@ escape_html() {
 # Préfixe front d'une app = son label caddy.handle_path qui ne finit pas par
 # -api (celui-là route le backend). Une app qui n'en a pas n'est pas publiable.
 front_prefix() {
-  local app="$1" compose="$SCRIPT_DIR/$1/docker-compose.yml"
+  local app="$1" compose
+  compose="$(registry_app_dir "$1" 2>/dev/null || echo "$SCRIPT_DIR/$1")/docker-compose.yml"
   [[ -f "$compose" ]] || return 1
   grep -o 'caddy\.handle_path: "/[^"]*"' "$compose" \
     | sed 's|.*"\(/[^"]*\)/\*"|\1/|' \
@@ -90,13 +95,13 @@ fi
 
 # Signale les apps qui exposent un front mais n'apparaissent pas sur la page :
 # un oubli dans .app-descriptions les rendrait invisibles en silence.
-for compose in "$SCRIPT_DIR"/*/docker-compose.yml; do
+while IFS= read -r compose; do
   app="$(basename "$(dirname "$compose")")"
   [[ "$app" == "sso-lab" || "$app" == "infra" ]] && continue
   [[ " $listed_apps " == *" $app "* ]] && continue
   front_prefix "$app" >/dev/null 2>&1 && [[ -n "$(front_prefix "$app")" ]] \
     && echo "ℹ $app expose un front mais n'est pas listé dans .app-descriptions" >&2
-done
+done < <(registry_dirs_with docker-compose.yml | sed 's|$|/docker-compose.yml|')
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '%s' "$rows"

@@ -44,11 +44,14 @@ echo ""
 RESOLVE="--resolve mabbox.bytel.fr:443:${BBOX_IP}"
 
 # ── Authentification Bbox : session cookie ───────────────────────────────────
+# Le mot de passe d'administration du routeur est lu par curl sur un descripteur
+# de fichier (« password@/dev/fd/3 »), pas passé en argument : la ligne de
+# commande d'un processus est lisible par `ps` pour tout compte de l'hôte.
 SESSION_TOKEN=$(curl -sk $RESOLVE \
   -X POST "$BBOX_URL/api/v1/login" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "password=$BBOX_ADMIN_PASSWORD" \
-  -D - | grep "Set-Cookie: BBOX_ID" | sed 's/.*BBOX_ID=//;s/;.*//' | tr -d '[:space:]')
+  --data-urlencode "password@/dev/fd/3" \
+  -D - 3< <(printf '%s' "$BBOX_ADMIN_PASSWORD") | grep "Set-Cookie: BBOX_ID" | sed 's/.*BBOX_ID=//;s/;.*//' | tr -d '[:space:]')
 
 if [[ -z "$SESSION_TOKEN" ]]; then
   echo "⚠  Authentification Bbox échouée — vérifier BBOX_URL, BBOX_IP et BBOX_ADMIN_PASSWORD" >&2

@@ -94,6 +94,8 @@ usage() {
 # → crée les clients pour chaque dossier contenant un docker-compose.yml, sauf sso-lab
 if [[ $# -lt 1 ]] || [[ "${1:-}" == "*" ]]; then
   _sd="$(cd "$(dirname "$0")/.." && pwd)"
+  # shellcheck source=lib/registry.sh
+  source "$_sd/scripts/lib/registry.sh"
   [[ $# -gt 0 ]] && shift   # consomme le '*' si présent
   _found=0
   while IFS= read -r _compose; do
@@ -116,7 +118,7 @@ if [[ $# -lt 1 ]] || [[ "${1:-}" == "*" ]]; then
       done < "$_opts_file"
     fi
     "$0" "$_name" "${_app_opts[@]+"${_app_opts[@]}"}" "$@" || true   # continue même si une app échoue
-  done < <(find "$_sd" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort)
+  done < <(registry_dirs_with docker-compose.yml | sed 's|$|/docker-compose.yml|')
   [[ $_found -eq 0 ]] && echo "Aucun dossier d'application trouvé dans $_sd"
   exit 0
 fi
@@ -127,8 +129,21 @@ APP_NAME="$1"; shift
 
 # Lire les options depuis .keycloak-client-opts si présent et si aucune option extra n'est passée
 _SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-_OPTS_FILE="${_SCRIPT_DIR}/${APP_NAME}/.keycloak-client-opts"
-if [[ -f "$_OPTS_FILE" && $# -eq 0 ]]; then
+# Registre des apps (contrat multi-dev, I1) : le dossier d'une app se demande à
+# registry_app_dir. Repli sur l'ancien chemin pour un nom que le registre ne
+# connaît pas comme dossier (client sans dossier d'app créé avec --no-env, dont
+# le nom peut porter des majuscules ou un tiret bas) — sauf s'il contient un
+# « / » ou un « .. », auquel cas aucun fichier d'options n'est lu.
+# shellcheck source=lib/registry.sh
+source "$_SCRIPT_DIR/scripts/lib/registry.sh"
+_app_dir_of() {
+  registry_app_dir "$1" 2>/dev/null && return 0
+  [[ "$1" =~ ^[a-zA-Z0-9_-]+$ ]] && echo "$_SCRIPT_DIR/$1" && return 0
+  return 1
+}
+_OPTS_FILE="$(_app_dir_of "$APP_NAME" || true)"
+[[ -n "$_OPTS_FILE" ]] && _OPTS_FILE="${_OPTS_FILE}/.keycloak-client-opts"
+if [[ -n "$_OPTS_FILE" && -f "$_OPTS_FILE" && $# -eq 0 ]]; then
   _extra_opts=()
   while IFS= read -r _opt_line || [[ -n "$_opt_line" ]]; do
     [[ -z "$_opt_line" || "$_opt_line" == \#* ]] && continue
@@ -207,7 +222,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SSO_ENV_FILE="$SCRIPT_DIR/sso-lab/.env"
 INFRA_ENV_FILE="$SCRIPT_DIR/infra/.env"
-APP_DIR="$SCRIPT_DIR/$APP_NAME"
+APP_DIR="$(_app_dir_of "$APP_NAME")" || die "Nom invalide : '$APP_NAME'"
 APP_ENV="$APP_DIR/.env"
 
 # ── Extraction d'une valeur depuis un fichier .env ────────────────────────────
@@ -263,7 +278,10 @@ upsert_env() {
   if grep -qE "^${key}=" "$file" 2>/dev/null; then
     # awk : remplace la ligne KEY= et saute les lignes orphelines qui suivent
     # (lignes qui ne ressemblent pas à une entrée .env valide ni à un commentaire)
-    awk -v key="$key" -v val="$value" '
+    # La valeur (souvent un secret) passe par l'ENVIRONNEMENT d'awk, pas par
+    # `-v` : la ligne de commande d'un processus est lisible par `ps`.
+    _UPSERT_VAL="$value" awk -v key="$key" '
+      BEGIN { val = ENVIRON["_UPSERT_VAL"] }
       $0 ~ ("^" key "=") { print key "=" val; skip=1; next }
       skip && (/^[A-Za-z_]+=/ || /^#/ || /^[[:space:]]*$/) { skip=0 }
       skip { next }
@@ -384,16 +402,24 @@ echo ""
 # ── Token admin Keycloak ──────────────────────────────────────────────────────
 info "Authentification admin Keycloak..."
 
+# Aucun secret sur une ligne de commande (argv est lisible par `ps` pour tout
+# compte de l'hôte, et l'hôte a désormais des comptes de développeurs) :
+#   • le mot de passe admin est lu par curl sur un descripteur de fichier ;
+#   • le jeton d'accès est écrit dans un fichier temporaire en 600, passé à
+#     chaque appel par `-K` (fichier de configuration curl), effacé en sortie.
 TOKEN_RESPONSE=$(curl -sf \
   --data-urlencode "client_id=admin-cli" \
   --data-urlencode "username=$ADMIN_USER" \
-  --data-urlencode "password=$ADMIN_PASS" \
+  --data-urlencode "password@/dev/fd/3" \
   --data-urlencode "grant_type=password" \
-  "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token") \
+  "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" 3< <(printf '%s' "$ADMIN_PASS")) \
   || die "Impossible de joindre Keycloak sur $KEYCLOAK_URL"
 
 ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token // empty')
 [[ -n "$ACCESS_TOKEN" ]] || die "Authentification échouée. Vérifiez KEYCLOAK_ADMIN_PASSWORD."
+_KC_AUTH="$(umask 077; mktemp)" || die "Fichier temporaire impossible."
+trap 'rm -f "$_KC_AUTH"' EXIT
+printf 'header = "Authorization: Bearer %s"\n' "$ACCESS_TOKEN" > "$_KC_AUTH"
 success "Token obtenu."
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -403,7 +429,7 @@ success "Token obtenu."
 info "0/5 — Vérification du realm '$REALM'..."
 
 REALM_EXISTS=$(curl -s \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -K "$_KC_AUTH" \
   "$KEYCLOAK_URL/admin/realms/$REALM" 2>/dev/null | jq -r '.realm // empty')
 
 if [[ -n "$REALM_EXISTS" ]]; then
@@ -429,7 +455,7 @@ else
 
   HTTP_STATUS=$(curl -s -o /tmp/_kc_realm.json -w "%{http_code}" \
     -X POST \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     -H "Content-Type: application/json" \
     -d "$REALM_PAYLOAD" \
     "$KEYCLOAK_URL/admin/realms")
@@ -487,16 +513,18 @@ if [[ "$SMTP_READY" == "true" ]]; then
   SMTP_SSL_VAL=$(_env_val "$SSO_ENV_FILE" "SMTP_SSL" "false")
   [[ -n "$SMTP_USER_VAL" ]] && SMTP_AUTH_VAL="true" || SMTP_AUTH_VAL="false"
 
-  REALM_LOGIN_PAYLOAD=$(echo "$REALM_LOGIN_PAYLOAD" | jq \
+  # Le mot de passe SMTP entre dans jq par l'ENVIRONNEMENT ($ENV), pas par
+  # --arg : l'environnement d'un processus n'est lisible que de son propriétaire.
+  REALM_LOGIN_PAYLOAD=$(echo "$REALM_LOGIN_PAYLOAD" | _KC_SMTP_PASS="$SMTP_PASS_VAL" jq \
     --arg host "$SMTP_HOST_VAL" --arg port "$SMTP_PORT_VAL" \
     --arg from "$SMTP_FROM_VAL" --arg disp "$SMTP_DISP_VAL" \
-    --arg user "$SMTP_USER_VAL" --arg pass "$SMTP_PASS_VAL" \
+    --arg user "$SMTP_USER_VAL" \
     --arg starttls "$SMTP_STARTTLS_VAL" --arg ssl "$SMTP_SSL_VAL" \
     --arg auth "$SMTP_AUTH_VAL" \
     '. + {
       smtpServer: {
         host: $host, port: $port, from: $from, fromDisplayName: $disp,
-        starttls: $starttls, ssl: $ssl, auth: $auth, user: $user, password: $pass
+        starttls: $starttls, ssl: $ssl, auth: $auth, user: $user, password: $ENV._KC_SMTP_PASS
       }
     }')
 else
@@ -506,10 +534,10 @@ fi
 info "  Réglages de login du realm (inscription: $REGISTRATION_VAL, vérification email: $VERIFY_EMAIL_VAL)..."
 LOGIN_HTTP=$(curl -s -o /tmp/_kc_login.json -w "%{http_code}" \
   -X PUT \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -K "$_KC_AUTH" \
   -H "Content-Type: application/json" \
-  -d "$REALM_LOGIN_PAYLOAD" \
-  "$KEYCLOAK_URL/admin/realms/$REALM")
+  --data-binary @- \
+  "$KEYCLOAK_URL/admin/realms/$REALM" <<< "$REALM_LOGIN_PAYLOAD")
 [[ "$LOGIN_HTTP" =~ ^2 ]] \
   && success "  Réglages de login du realm appliqués." \
   || warn    "  Réglages de login du realm : HTTP $LOGIN_HTTP — $(cat /tmp/_kc_login.json)"
@@ -527,12 +555,12 @@ LDAP_BASE_DN=$(echo "$LDAP_DOMAIN_VAL" \
   || die "LDAP_ADMIN_PASSWORD vide dans $SSO_ENV_FILE — requis pour configurer la fédération LDAP."
 
 REALM_UUID=$(curl -sf \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -K "$_KC_AUTH" \
   "$KEYCLOAK_URL/admin/realms/$REALM" | jq -r '.id')
 [[ -n "$REALM_UUID" ]] || die "Impossible de récupérer l'UUID du realm '$REALM'."
 
 LDAP_PROVIDER_ID=$(curl -sf \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -K "$_KC_AUTH" \
   "$KEYCLOAK_URL/admin/realms/$REALM/components" \
   | jq -r '[.[] | select(.providerType == "org.keycloak.storage.UserStorageProvider" and .name == "ldap")] | .[0].id // empty')
 
@@ -541,9 +569,8 @@ if [[ -n "$LDAP_PROVIDER_ID" ]]; then
 else
   info "  Provider LDAP absent — création en cours..."
 
-  LDAP_PROVIDER_PAYLOAD=$(jq -n \
+  LDAP_PROVIDER_PAYLOAD=$(_KC_LDAP_PASS="$LDAP_ADMIN_PASS" jq -n \
     --arg base_dn   "$LDAP_BASE_DN" \
-    --arg bind_pass "$LDAP_ADMIN_PASS" \
     --arg realm_id  "$REALM_UUID" \
     '{
       name:         "ldap",
@@ -566,7 +593,7 @@ else
         usersDn:                     [("ou=people," + $base_dn)],
         authType:                    ["simple"],
         bindDn:                      [("cn=admin," + $base_dn)],
-        bindCredential:              [$bind_pass],
+        bindCredential:              [$ENV._KC_LDAP_PASS],
         searchScope:                 ["1"],
         useTruststoreSpi:            ["never"],
         connectionPooling:           ["true"],
@@ -582,15 +609,15 @@ else
 
   LDAP_HTTP=$(curl -s -o /tmp/_kc_ldap.json -w "%{http_code}" \
     -X POST \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     -H "Content-Type: application/json" \
-    -d "$LDAP_PROVIDER_PAYLOAD" \
-    "$KEYCLOAK_URL/admin/realms/$REALM/components")
+    --data-binary @- \
+    "$KEYCLOAK_URL/admin/realms/$REALM/components" <<< "$LDAP_PROVIDER_PAYLOAD")
   [[ "$LDAP_HTTP" == "201" ]] \
     || die "Configuration LDAP échouée (HTTP $LDAP_HTTP) : $(cat /tmp/_kc_ldap.json)"
 
   LDAP_PROVIDER_ID=$(curl -sf \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     "$KEYCLOAK_URL/admin/realms/$REALM/components" \
     | jq -r '[.[] | select(.providerType == "org.keycloak.storage.UserStorageProvider" and .name == "ldap")] | .[0].id // empty')
   [[ -n "$LDAP_PROVIDER_ID" ]] || die "Impossible de récupérer l'ID du provider LDAP après création."
@@ -600,7 +627,7 @@ else
   info "  Synchronisation initiale des utilisateurs depuis LDAP..."
   SYNC_HTTP=$(curl -s -o /tmp/_kc_sync.json -w "%{http_code}" \
     -X POST \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     "$KEYCLOAK_URL/admin/realms/$REALM/user-storage/$LDAP_PROVIDER_ID/sync?action=triggerFullSync")
   [[ "$SYNC_HTTP" =~ ^2 ]] \
     && success "  Synchronisation utilisateurs terminée." \
@@ -615,7 +642,7 @@ fi
 #     Les mappers par défaut couvrent les attributs obligatoires d'inetOrgPerson
 #     (cn ← prénom, sn ← nom), que le formulaire d'inscription exige déjà.
 LDAP_COMPONENT=$(curl -sf \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -K "$_KC_AUTH" \
   "$KEYCLOAK_URL/admin/realms/$REALM/components/$LDAP_PROVIDER_ID")
 CURRENT_EDIT_MODE=$(echo "$LDAP_COMPONENT" | jq -r '.config.editMode[0] // empty')
 CURRENT_SYNC_REG=$(echo "$LDAP_COMPONENT" | jq -r '.config.syncRegistrations[0] // empty')
@@ -625,7 +652,7 @@ if [[ "$CURRENT_EDIT_MODE" != "WRITABLE" || "$CURRENT_SYNC_REG" != "true" ]]; th
     | jq '.config.editMode = ["WRITABLE"] | .config.syncRegistrations = ["true"]')
   EM_HTTP=$(curl -s -o /tmp/_kc_editmode.json -w "%{http_code}" \
     -X PUT \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     -H "Content-Type: application/json" \
     -d "$LDAP_WRITABLE_PAYLOAD" \
     "$KEYCLOAK_URL/admin/realms/$REALM/components/$LDAP_PROVIDER_ID")
@@ -640,7 +667,7 @@ fi
 info "  Vérification du Group Mapper LDAP..."
 
 GROUP_MAPPER_KC_ID=$(curl -sf \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -K "$_KC_AUTH" \
   "$KEYCLOAK_URL/admin/realms/$REALM/components?parent=$LDAP_PROVIDER_ID" \
   | jq -r '[.[] | select(.providerType == "org.keycloak.storage.ldap.mappers.LDAPStorageMapper" and .name == "groups")] | .[0].id // empty')
 
@@ -674,7 +701,7 @@ else
 
   GRP_HTTP=$(curl -s -o /tmp/_kc_grpmap.json -w "%{http_code}" \
     -X POST \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     -H "Content-Type: application/json" \
     -d "$GROUP_MAPPER_PAYLOAD" \
     "$KEYCLOAK_URL/admin/realms/$REALM/components")
@@ -685,7 +712,7 @@ else
   esac
 
   GROUP_MAPPER_KC_ID=$(curl -sf \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     "$KEYCLOAK_URL/admin/realms/$REALM/components?parent=$LDAP_PROVIDER_ID" \
     | jq -r '[.[] | select(.providerType == "org.keycloak.storage.ldap.mappers.LDAPStorageMapper" and .name == "groups")] | .[0].id // empty')
   success "  Group Mapper LDAP créé (ID: ${GROUP_MAPPER_KC_ID:-?})."
@@ -695,7 +722,7 @@ else
     info "  Synchronisation initiale des groupes depuis LDAP..."
     GRP_SYNC_HTTP=$(curl -s -o /tmp/_kc_grpsync.json -w "%{http_code}" \
       -X POST \
-      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -K "$_KC_AUTH" \
       "$KEYCLOAK_URL/admin/realms/$REALM/user-storage/$LDAP_PROVIDER_ID/mappers/$GROUP_MAPPER_KC_ID/sync?direction=fedToKeycloak")
     [[ "$GRP_SYNC_HTTP" =~ ^2 ]] \
       && success "  Synchronisation groupes terminée." \
@@ -711,7 +738,7 @@ fi
 #   provider qui, lui, vaut WRITABLE) — l'enum LDAPGroupMapperMode n'a pas WRITABLE.
 if [[ -n "$GROUP_MAPPER_KC_ID" ]]; then
   GM_COMPONENT=$(curl -sf \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     "$KEYCLOAK_URL/admin/realms/$REALM/components/$GROUP_MAPPER_KC_ID")
   GM_MODE=$(echo "$GM_COMPONENT" | jq -r '.config.mode[0] // empty')
   if [[ "$GM_MODE" != "LDAP_ONLY" ]]; then
@@ -719,7 +746,7 @@ if [[ -n "$GROUP_MAPPER_KC_ID" ]]; then
     GM_PAYLOAD=$(echo "$GM_COMPONENT" | jq '.config.mode = ["LDAP_ONLY"]')
     GM_HTTP=$(curl -s -o /tmp/_kc_gmmode.json -w "%{http_code}" \
       -X PUT \
-      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -K "$_KC_AUTH" \
       -H "Content-Type: application/json" \
       -d "$GM_PAYLOAD" \
       "$KEYCLOAK_URL/admin/realms/$REALM/components/$GROUP_MAPPER_KC_ID")
@@ -737,7 +764,7 @@ fi
 info "1/5 — Vérification du client '$CLIENT_ID'..."
 
 CLIENT_UUID=$(curl -sf \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -K "$_KC_AUTH" \
   "$KEYCLOAK_URL/admin/realms/$REALM/clients?clientId=$CLIENT_ID" \
   | jq -r '.[0].id // empty')
 
@@ -768,7 +795,7 @@ else
 
   HTTP_STATUS=$(curl -s -o /tmp/_kc_create.json -w "%{http_code}" \
     -X POST \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     -H "Content-Type: application/json" \
     -d "$CLIENT_PAYLOAD" \
     "$KEYCLOAK_URL/admin/realms/$REALM/clients")
@@ -777,7 +804,7 @@ else
     || die "Création du client échouée (HTTP $HTTP_STATUS) : $(cat /tmp/_kc_create.json)"
 
   CLIENT_UUID=$(curl -sf \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     "$KEYCLOAK_URL/admin/realms/$REALM/clients?clientId=$CLIENT_ID" \
     | jq -r '.[0].id // empty')
 
@@ -800,7 +827,7 @@ if [[ "$CLIENT_TYPE" == "confidential" ]]; then
     # ce qui provoquerait un décalage entre le .env et Keycloak.
     SECRET_RESPONSE=$(curl -sf \
       -X POST \
-      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -K "$_KC_AUTH" \
       "$KEYCLOAK_URL/admin/realms/$REALM/clients/$CLIENT_UUID/client-secret") \
       || die "Régénération du secret échouée."
     CLIENT_SECRET=$(echo "$SECRET_RESPONSE" | jq -r '.value // empty')
@@ -808,7 +835,7 @@ if [[ "$CLIENT_TYPE" == "confidential" ]]; then
     success "Secret régénéré dans Keycloak."
   else
     CLIENT_SECRET=$(curl -sf \
-      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -K "$_KC_AUTH" \
       "$KEYCLOAK_URL/admin/realms/$REALM/clients/$CLIENT_UUID/client-secret" \
       | jq -r '.value // empty')
     [[ -n "$CLIENT_SECRET" ]] || die "Impossible de lire le secret existant."
@@ -829,7 +856,7 @@ info "3/5 — Synchronisation des redirect URIs..."
 
 # Lire la config actuelle du client
 CLIENT_JSON=$(curl -sf \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -K "$_KC_AUTH" \
   "$KEYCLOAK_URL/admin/realms/$REALM/clients/$CLIENT_UUID")
 
 # Construire la liste des URIs souhaitées
@@ -932,7 +959,7 @@ if [[ "$NEXT_URIS" != "$PREV_URIS" ]] || [[ "$NEXT_ORIGINS" != "$PREV_ORIGINS" ]
 
   HTTP_STATUS=$(curl -s -o /tmp/_kc_update.json -w "%{http_code}" \
     -X PUT \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     -H "Content-Type: application/json" \
     -d "$UPDATED_CLIENT" \
     "$KEYCLOAK_URL/admin/realms/$REALM/clients/$CLIENT_UUID")
@@ -956,7 +983,7 @@ fi
 info "4/5 — Vérification du Group Membership mapper..."
 
 EXISTING_MAPPER=$(curl -sf \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -K "$_KC_AUTH" \
   "$KEYCLOAK_URL/admin/realms/$REALM/clients/$CLIENT_UUID/protocol-mappers/models" \
   | jq -r '[.[] | select(.name == "groups")] | .[0].id // empty')
 
@@ -965,7 +992,7 @@ if [[ -n "$EXISTING_MAPPER" ]]; then
 else
   MAPPER_STATUS=$(curl -s -o /tmp/_kc_mapper.json -w "%{http_code}" \
     -X POST \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -K "$_KC_AUTH" \
     -H "Content-Type: application/json" \
     -d '{
       "name": "groups",
@@ -1038,12 +1065,12 @@ if [[ -n "$REQUIRE_GROUP" ]]; then
     local exists
     # Pas de -f : un 404 (rôle absent) est le cas nominal ici, et sous
     # `set -euo pipefail` l'échec de curl ferait avorter le script.
-    exists=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+    exists=$(curl -s -K "$_KC_AUTH" \
       "$KEYCLOAK_URL/admin/realms/$REALM/roles/$(_urlenc "$role")" | jq -r '.name // empty')
     [[ -n "$exists" ]] && { success "  Rôle '$role' existant."; return 0; }
     local http
     http=$(curl -s -o /tmp/_kc_role.json -w "%{http_code}" -X POST \
-      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -K "$_KC_AUTH" -H "Content-Type: application/json" \
       -d "$(jq -n --arg n "$role" --arg d "$desc" '{name: $n, description: $d}')" \
       "$KEYCLOAK_URL/admin/realms/$REALM/roles")
     case "$http" in
@@ -1056,10 +1083,10 @@ if [[ -n "$REQUIRE_GROUP" ]]; then
   _assign_role_to_group() {
     local role="$1" group="$2"
     local role_id group_id http
-    role_id=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+    role_id=$(curl -s -K "$_KC_AUTH" \
       "$KEYCLOAK_URL/admin/realms/$REALM/roles/$(_urlenc "$role")" | jq -r '.id // empty')
     [[ -n "$role_id" ]] || { warn "  Rôle '$role' introuvable — assignation ignorée."; return 1; }
-    group_id=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+    group_id=$(curl -s -K "$_KC_AUTH" \
       "$KEYCLOAK_URL/admin/realms/$REALM/groups?search=$(_urlenc "$group")" \
       | jq -r --arg g "$group" '[.[] | select(.name == $g)] | .[0].id // empty')
     if [[ -z "$group_id" ]]; then
@@ -1067,7 +1094,7 @@ if [[ -n "$REQUIRE_GROUP" ]]; then
       return 1
     fi
     http=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -K "$_KC_AUTH" -H "Content-Type: application/json" \
       -d "$(jq -n --arg i "$role_id" --arg n "$role" '[{id: $i, name: $n}]')" \
       "$KEYCLOAK_URL/admin/realms/$REALM/groups/$group_id/role-mappings/realm")
     [[ "$http" =~ ^2 ]] \
@@ -1089,7 +1116,7 @@ if [[ -n "$REQUIRE_GROUP" ]]; then
   FLOW_ALIAS="require-${CLIENT_ID}"
   SUBFLOW_ALIAS="${FLOW_ALIAS}-gate"
 
-  FLOW_ID=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+  FLOW_ID=$(curl -sf -K "$_KC_AUTH" \
     "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows" \
     | jq -r --arg a "$FLOW_ALIAS" '[.[] | select(.alias == $a)] | .[0].id // empty')
 
@@ -1131,34 +1158,34 @@ if [[ -n "$REQUIRE_GROUP" ]]; then
 
     _add_subflow() {   # <flow parent> <alias>
       curl -sf -o /dev/null -X POST \
-        -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+        -K "$_KC_AUTH" -H "Content-Type: application/json" \
         -d "$(jq -n --arg a "$2" '{alias: $a, type: "basic-flow", provider: "registration-page-form"}')" \
         "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows/$(_urlenc "$1")/executions/flow" \
         || die "  Création du sous-flow '$2' échouée."
     }
     _add_exec() {      # <flow parent> <provider>
       curl -sf -o /dev/null -X POST \
-        -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+        -K "$_KC_AUTH" -H "Content-Type: application/json" \
         -d "$(jq -n --arg p "$2" '{provider: $p}')" \
         "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows/$(_urlenc "$1")/executions/execution" \
         || die "  Ajout de l'exécution '$2' échoué."
     }
     _set_req() {       # <match displayName|providerId> <requirement>
       local execs obj
-      execs=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+      execs=$(curl -s -K "$_KC_AUTH" \
         "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows/$(_urlenc "$FLOW_ALIAS")/executions")
       obj=$(echo "$execs" | jq -c --arg m "$1" \
         '[.[] | select(.displayName == $m or .providerId == $m)] | .[0] // empty')
       [[ -n "$obj" ]] || { warn "  Exécution '$1' introuvable."; return 1; }
       curl -sf -o /dev/null -X PUT \
-        -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+        -K "$_KC_AUTH" -H "Content-Type: application/json" \
         -d "$(echo "$obj" | jq -c --arg r "$2" '.requirement = $r')" \
         "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows/$(_urlenc "$FLOW_ALIAS")/executions" \
         || warn "  Requirement '$2' sur '$1' échoué."
     }
 
     curl -sf -o /dev/null -X POST \
-      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -K "$_KC_AUTH" -H "Content-Type: application/json" \
       -d "$(jq -n --arg a "$FLOW_ALIAS" --arg c "$CLIENT_ID" \
             '{alias: $a, providerId: "basic-flow", topLevel: true, builtIn: false,
               description: ("Accès réservé — client " + $c)}')" \
@@ -1191,12 +1218,12 @@ if [[ -n "$REQUIRE_GROUP" ]]; then
 
     # negate=true ⇒ la condition est vraie quand l'utilisateur N'A PAS le rôle,
     # et c'est alors seulement que Deny Access s'exécute.
-    COND_EXEC_ID=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+    COND_EXEC_ID=$(curl -s -K "$_KC_AUTH" \
       "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows/$(_urlenc "$FLOW_ALIAS")/executions" \
       | jq -r '[.[] | select(.providerId == "conditional-user-role")] | .[0].id // empty')
     if [[ -n "$COND_EXEC_ID" ]]; then
       curl -sf -o /dev/null -X POST \
-        -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+        -K "$_KC_AUTH" -H "Content-Type: application/json" \
         -d "$(jq -n --arg r "$ACCESS_ROLE" --arg a "cfg-${FLOW_ALIAS}" \
               '{alias: $a, config: {condUserRole: $r, negate: "true"}}')" \
         "$KEYCLOAK_URL/admin/realms/$REALM/authentication/executions/$COND_EXEC_ID/config" \
@@ -1206,7 +1233,7 @@ if [[ -n "$REQUIRE_GROUP" ]]; then
       warn "  Exécution 'conditional-user-role' introuvable — condition non configurée."
     fi
 
-    FLOW_ID=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+    FLOW_ID=$(curl -s -K "$_KC_AUTH" \
       "$KEYCLOAK_URL/admin/realms/$REALM/authentication/flows" \
       | jq -r --arg a "$FLOW_ALIAS" '[.[] | select(.alias == $a)] | .[0].id // empty')
     success "  Flow '$FLOW_ALIAS' créé."
@@ -1215,7 +1242,7 @@ if [[ -n "$REQUIRE_GROUP" ]]; then
   # ── Lier le flow au client ──────────────────────────────────────────────────
   if [[ -n "$FLOW_ID" ]]; then
     BIND_HTTP=$(curl -s -o /tmp/_kc_bind.json -w "%{http_code}" -X PUT \
-      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -K "$_KC_AUTH" -H "Content-Type: application/json" \
       -d "$(jq -n --arg f "$FLOW_ID" '{authenticationFlowBindingOverrides: {browser: $f}}')" \
       "$KEYCLOAK_URL/admin/realms/$REALM/clients/$CLIENT_UUID")
     [[ "$BIND_HTTP" =~ ^2 ]] \
@@ -1240,7 +1267,7 @@ if [[ -f "$SA_ROLES_FILE" ]]; then
   ADMIN_CLIENT_ID="${APP_NAME}-admin"
   info "Service account — client compagnon '$ADMIN_CLIENT_ID'..."
 
-  ADMIN_UUID=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+  ADMIN_UUID=$(curl -sf -K "$_KC_AUTH" \
     "$KEYCLOAK_URL/admin/realms/$REALM/clients?clientId=$ADMIN_CLIENT_ID" \
     | jq -r '.[0].id // empty')
 
@@ -1252,38 +1279,38 @@ if [[ -f "$SA_ROLES_FILE" ]]; then
       serviceAccountsEnabled: true, redirectUris: [], webOrigins: []
     }')
     AC_HTTP=$(curl -s -o /tmp/_kc_adminclient.json -w "%{http_code}" -X POST \
-      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -K "$_KC_AUTH" -H "Content-Type: application/json" \
       -d "$ADMIN_PAYLOAD" "$KEYCLOAK_URL/admin/realms/$REALM/clients")
     [[ "$AC_HTTP" == "201" ]] \
       || die "Création du client '$ADMIN_CLIENT_ID' échouée (HTTP $AC_HTTP) : $(cat /tmp/_kc_adminclient.json)"
-    ADMIN_UUID=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+    ADMIN_UUID=$(curl -sf -K "$_KC_AUTH" \
       "$KEYCLOAK_URL/admin/realms/$REALM/clients?clientId=$ADMIN_CLIENT_ID" | jq -r '.[0].id // empty')
     success "  Client '$ADMIN_CLIENT_ID' créé (UUID: $ADMIN_UUID)."
   else
     success "  Client '$ADMIN_CLIENT_ID' existant (UUID: $ADMIN_UUID)."
   fi
 
-  ADMIN_SECRET=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+  ADMIN_SECRET=$(curl -sf -K "$_KC_AUTH" \
     "$KEYCLOAK_URL/admin/realms/$REALM/clients/$ADMIN_UUID/client-secret" | jq -r '.value // empty')
   [[ -n "$ADMIN_SECRET" ]] || die "Secret du client '$ADMIN_CLIENT_ID' introuvable."
 
-  SA_USER_ID=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+  SA_USER_ID=$(curl -sf -K "$_KC_AUTH" \
     "$KEYCLOAK_URL/admin/realms/$REALM/clients/$ADMIN_UUID/service-account-user" | jq -r '.id // empty')
   [[ -n "$SA_USER_ID" ]] || die "Service account user introuvable pour '$ADMIN_CLIENT_ID'."
 
-  RM_UUID=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+  RM_UUID=$(curl -sf -K "$_KC_AUTH" \
     "$KEYCLOAK_URL/admin/realms/$REALM/clients?clientId=realm-management" | jq -r '.[0].id // empty')
   [[ -n "$RM_UUID" ]] || die "Client realm-management introuvable."
 
   while IFS= read -r SA_ROLE || [[ -n "$SA_ROLE" ]]; do
     SA_ROLE="$(echo "$SA_ROLE" | sed 's/[[:space:]]*#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
     [[ -z "$SA_ROLE" ]] && continue
-    SA_ROLE_JSON=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+    SA_ROLE_JSON=$(curl -sf -K "$_KC_AUTH" \
       "$KEYCLOAK_URL/admin/realms/$REALM/clients/$RM_UUID/roles/$SA_ROLE")
     [[ -n "$(echo "$SA_ROLE_JSON" | jq -r '.id // empty')" ]] \
       || { warn "  Rôle realm-management '$SA_ROLE' introuvable — ignoré."; continue; }
     curl -s -o /dev/null -X POST \
-      -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
+      -K "$_KC_AUTH" -H "Content-Type: application/json" \
       -d "[$(echo "$SA_ROLE_JSON" | jq -c '{id, name}')]" \
       "$KEYCLOAK_URL/admin/realms/$REALM/users/$SA_USER_ID/role-mappings/clients/$RM_UUID"
     success "  Rôle '$SA_ROLE' assigné au service account."
@@ -1301,10 +1328,23 @@ echo ""
 echo "─────────────────────────────────────────────────────────────"
 if $NO_ENV; then
   echo "  Aucun .env écrit (--no-env). Configuration du client :"
-  printf '  %s\n' ${_KC_SUMMARY[@]+"${_KC_SUMMARY[@]}"}
+  if [[ "${LAB_JOURNAL_REDACT:-}" == "1" ]]; then
+    printf '  %s\n' ${_KC_SUMMARY[@]+"${_KC_SUMMARY[@]}"} \
+      | sed -E 's/^(  [A-Z_]*(SECRET|PASSWORD|TOKEN)[A-Z_]*)=.*/\1=(masqué)/'
+  else
+    printf '  %s\n' ${_KC_SUMMARY[@]+"${_KC_SUMMARY[@]}"}
+  fi
 else
   echo "  $APP_ENV :"
-  grep -E "^KEYCLOAK_|^PORT_KEYCLOAK" "$APP_ENV" 2>/dev/null | sed 's/^/  /'
+  # LAB_JOURNAL_REDACT=1 (posé par setup2.sh/setup_unit.sh pour l'app d'un
+  # développeur, dont le journal lui est relayé) : les valeurs de secrets sont
+  # masquées. Elles restent dans le .env, où le conteneur les lit.
+  if [[ "${LAB_JOURNAL_REDACT:-}" == "1" ]]; then
+    grep -E "^KEYCLOAK_|^PORT_KEYCLOAK" "$APP_ENV" 2>/dev/null \
+      | sed -E -e 's/^([A-Z_]*(SECRET|PASSWORD|TOKEN)[A-Z_]*)=.*/\1=(masqué)/' -e 's/^/  /'
+  else
+    grep -E "^KEYCLOAK_|^PORT_KEYCLOAK" "$APP_ENV" 2>/dev/null | sed 's/^/  /'
+  fi
 fi
 echo "─────────────────────────────────────────────────────────────"
 echo ""

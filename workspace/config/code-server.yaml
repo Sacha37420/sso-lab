@@ -1,0 +1,19 @@
+# Configuration de code-server posée par l'image (/opt/lab/code-server.yaml),
+# passée par `--config` : celle que code-server écrirait dans la maison
+# (~/.config/code-server/config.yaml) n'est donc ni créée ni lue — un fichier
+# déposé là par le dev ne peut pas changer la façon dont le service écoute.
+#
+# auth: none — l'éditeur n'a AUCUNE protection propre. Le contrôle d'accès est
+# fait en amont, à chaque requête, par le moteur (contrat multi-dev, I3). Ce
+# conteneur ne doit jamais être joignable autrement que par ce contrôle.
+bind-addr: 0.0.0.0:8080
+auth: none
+cert: false
+disable-telemetry: true
+disable-update-check: true
+disable-getting-started-override: true
+# Mode restreint désactivé : l'espace n'ouvre qu'UN dossier, le projet du dev
+# lui-même, cloné par le moteur. Le mode restreint n'y protégerait de rien (la
+# frontière de sécurité est le conteneur) et coupe en silence l'extension
+# Python, les tâches et le débogage tant que le dev n'a pas trouvé le bouton.
+disable-workspace-trust: true

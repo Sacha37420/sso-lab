@@ -11,6 +11,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT="$SCRIPT_DIR/ports.env"
+# Registre des apps (contrat multi-dev, I1) : le dossier d'une app se demande à
+# registry_app_dir, jamais par un « $ROOT/<app> » écrit en dur.
+# shellcheck source=lib/registry.sh
+source "$SCRIPT_DIR/scripts/lib/registry.sh"
 
 {
   printf '# ══════════════════════════════════════════════════════════════════════\n'
@@ -37,8 +41,7 @@ OUTPUT="$SCRIPT_DIR/ports.env"
     printf '\n# ── %s\n' "$service_name"
     printf '%s\n' "$ports"
 
-  done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name ".env" ! -path "*/_templates/*" -print0 \
-             | sort -z)
+  done < <(registry_dirs_with .env | sed 's|$|/.env|' | tr '\n' '\0')
 
 } > "$OUTPUT"
 

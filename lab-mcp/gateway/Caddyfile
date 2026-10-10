@@ -1,0 +1,57 @@
+# lab-ws-gateway — passerelle des espaces de travail (contrat multi-dev, I3).
+#
+# POURQUOI UNE PASSERELLE À PART : le Caddy du lab ne route que vers sso-net
+# (CADDY_INGRESS_NETWORKS), et un espace de travail ne doit JAMAIS être sur
+# sso-net. Cette passerelle est le seul conteneur qui a un pied des deux côtés :
+# sso-net (le Caddy du lab l'atteint, elle atteint le moteur) et le réseau privé
+# de chaque espace ouvert (le moteur l'y connecte à l'ouverture, l'en retire à
+# la fermeture). Elle ne fait que deux choses, pour chaque requête — WebSocket
+# compris, la demande d'« upgrade » étant une requête comme une autre :
+#   1. demander au moteur si CETTE personne peut entrer dans CET espace ;
+#   2. si oui, relayer vers ws-<uid>:8080 (préfixe de nom {$LAB_WS_PREFIX}, « ws- » en service),
+#      /ws/<uid> retiré du chemin.
+#
+# L'uid visé est capturé UNE fois, par l'expression ci-dessous, et sert à la
+# fois à la question posée au moteur (en-tête X-Lab-Ws-Uid) et au choix de la
+# destination : les deux ne peuvent pas diverger sur une URL tordue.
+{
+	admin off
+	auto_https off
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+:8080 {
+	# /ws/<uid> sans barre finale : l'éditeur n'utilise que des URL relatives.
+	@bare path_regexp bare ^/ws/([a-z][a-z0-9]{1,30})$
+	redir @bare {path}/ 308
+
+	@ws path_regexp ws ^/ws/([a-z][a-z0-9]{1,30})/
+	handle @ws {
+		# `route` : l'ordre écrit est l'ordre exécuté — le contrôle d'accès AVANT tout.
+		route {
+			forward_auth {$LAB_ENGINE_ADDR:lab-mcp:8000} {
+				uri /mcp/api/ws-auth
+				header_up X-Lab-Ws-Uid {re.ws.1}
+			}
+			# code-server ne sait pas servir sous un préfixe (toutes ses URL sont
+			# relatives) : l'image d'I7 écoute à la racine, et c'est ICI que
+			# /ws/<uid> est retiré.
+			uri strip_prefix /ws/{re.ws.1}
+			# L'hôte public arrive inchangé (Host, et X-Forwarded-Host posé par le Caddy du lab) :
+			# code-server refuse en 403 tout WebSocket dont l'Origin n'est pas cet hôte.
+			# Aucun délai n'est posé sur les connexions « upgrade » (stream_timeout absent).
+			# keepalive off : aucune connexion ne reste ouverte vers l'éditeur entre deux requêtes —
+			# code-server tient un espace pour actif tant qu'il lui reste une connexion.
+			reverse_proxy {$LAB_WS_PREFIX:ws-}{re.ws.1}:8080 {
+				transport http {
+					keepalive off
+				}
+			}
+		}
+	}
+	handle {
+		respond "Introuvable" 404
+	}
+}

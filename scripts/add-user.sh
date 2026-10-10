@@ -43,6 +43,10 @@ err()  { echo -e "\n${RED}${BOLD}✘ Erreur : $*${NC}\n" >&2; exit 1; }
 info() { echo -e "  ${CYAN}→ $*${NC}"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Registre des apps (contrat multi-dev, I1) : le dossier d'une app se demande à
+# registry_app_dir, jamais par un « $ROOT/<app> » écrit en dur.
+# shellcheck source=lib/registry.sh
+source "$SCRIPT_DIR/scripts/lib/registry.sh"
 SSO_ENV="$SCRIPT_DIR/sso-lab/.env"
 ROOT_ENV="$SCRIPT_DIR/.env"
 REALM="ssolab"
@@ -164,7 +168,7 @@ while IFS= read -r _compose; do
     fi
   fi
   APP_GROUPS["$_app"]="$_groups"
-done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort)
+done < <(registry_dirs_with docker-compose.yml | sed 's|$|/docker-compose.yml|')
 
 for _app in "${!APP_GROUPS[@]}"; do
   echo "$_app"$'\t'"${APP_GROUPS[$_app]}"

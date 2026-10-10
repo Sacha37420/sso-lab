@@ -1,0 +1,8 @@
+# Le contexte de build ne porte que ce que le Dockerfile copie.
+*
+!entrypoint.sh
+!regles-lab.md
+!config/
+!config/**
+!lib/
+!lib/**

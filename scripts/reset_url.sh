@@ -38,8 +38,33 @@ upsert_env() {
   local file="$1" key="$2" val="$3"
   [[ -f "$file" ]] || return 0
   if grep -qE "^${key}[[:space:]]*=" "$file"; then
-    sed -i "s|^${key}[[:space:]]*=.*|${key}=${val}|" "$file"
-    printf "    ✓ %-30s → %s\n" "${key}" "${val}"
+    case "$key" in
+      *PASSWORD*|*SECRET*)
+        # Un secret ne passe pas par la ligne de commande de sed (lisible par
+        # `ps`) : il entre dans awk par l'environnement. Même résultat que le
+        # sed ci-dessous, octet pour octet — y compris l'absence éventuelle de
+        # saut de ligne final, et l'inode du fichier (cat >, pas mv).
+        local _tmp _nl=true
+        [[ -s "$file" && -n "$(tail -c1 "$file")" ]] && _nl=false
+        _tmp="$(umask 077; mktemp)"
+        _UPSERT_VAL="$val" awk -v key="$key" '
+          BEGIN { val = ENVIRON["_UPSERT_VAL"] }
+          $0 ~ ("^" key "[[:space:]]*=") { print key "=" val; next }
+          { print }' "$file" > "$_tmp"
+        if $_nl; then cat "$_tmp" > "$file"; else printf '%s' "$(cat "$_tmp")" > "$file"; fi
+        rm -f "$_tmp"
+        ;;
+      *)
+        sed -i "s|^${key}[[:space:]]*=.*|${key}=${val}|" "$file"
+        ;;
+    esac
+    # Un mot de passe ne s'affiche jamais : le journal de setup2.sh est relayé
+    # tel quel à qui a lancé le déploiement (serveur MCP), et ce script parcourt
+    # les .env de TOUTES les apps, pas seulement de la sienne.
+    case "$key" in
+      *PASSWORD*|*SECRET*) printf "    ✓ %-30s → %s\n" "${key}" "(masqué)" ;;
+      *)                   printf "    ✓ %-30s → %s\n" "${key}" "${val}" ;;
+    esac
   fi
 }
 
@@ -69,6 +94,12 @@ POSTGIS_PASSWORD="$(_env_val "$SCRIPT_DIR/infra/.env"   POSTGIS_PASSWORD)"
 
 REALM="ssolab"
 
+# ── Registre des apps et des développeurs (contrat multi-dev, I1/I2) ──────────
+# Sert à une seule chose ici : savoir à QUI appartient une app, pour ne lui
+# propager que le mot de passe du rôle PostgreSQL de son propriétaire.
+# shellcheck source=lib/registry.sh
+source "$SCRIPT_DIR/scripts/lib/registry.sh"
+
 # ── Lecture du domaine HTTPS ──────────────────────────────────────────────
 DOMAIN="CHANGE_ME"
 ACME_EMAIL="CHANGE_ME"
@@ -87,6 +118,18 @@ fi
 # touche que ceux-là.
 HOST_DEV_ROOT="$(_env_val "$ROOT_ENV" HOST_DEV_ROOT "")"
 [[ -z "$HOST_DEV_ROOT" ]] && HOST_DEV_ROOT="$SCRIPT_DIR"
+
+# ── Superutilisateur et dossier d'état (contrat multi-dev, I1/I3) ─────────────
+# LAB_SUPERUSER : défaut « sacha ». LAB_STATE_DIR : défaut <dépôt>/.lab-state,
+# exprimé dans le chemin que VOIT LE DÉMON DOCKER (HOST_DEV_ROOT) — c'est un
+# chemin que des services montent en volume, même piège que /mnt/dev.
+LAB_SUPERUSER_VAL="$(registry_superuser)"
+LAB_STATE_DIR_VAL="$(_env_val "$ROOT_ENV" LAB_STATE_DIR "")"
+[[ -z "$LAB_STATE_DIR_VAL" ]] && LAB_STATE_DIR_VAL="${HOST_DEV_ROOT}/.lab-state"
+# LAB_WORK_DIR (I3, v5) : clones de travail des développeurs, HORS du dépôt.
+# Défaut : « lab-work » à côté du dépôt (/home/sacha/lab-work).
+LAB_WORK_DIR_VAL="$(_env_val "$ROOT_ENV" LAB_WORK_DIR "")"
+[[ -z "$LAB_WORK_DIR_VAL" ]] && LAB_WORK_DIR_VAL="$(dirname "$HOST_DEV_ROOT")/lab-work"
 
 # ── Validation de SERVER_URL_WAN ─────────────────────────────────────────
 if [[ -z "$SERVER_URL_WAN" ]]; then
@@ -239,16 +282,51 @@ while IFS= read -r envfile; do
   upsert_env "$envfile" PORT_KEYCLOAK        "$PORT_KEYCLOAK"
   upsert_env "$envfile" HPORT_POSTGRES       "$HPORT_POSTGRES"
   upsert_env "$envfile" HPORT_DB             "$HPORT_POSTGRES"   # alias spring-app
-  # Mot de passe DB partagé : aligne chaque app sur infra/.env. upsert_env est un
-  # no-op si la clé est absente, donc infra/.env et sso-lab/.env (sans DB_PASSWORD)
-  # ne sont pas touchés. Vide ⇒ on ne propage pas (évite d'effacer une valeur).
-  [[ -n "$DB_PASSWORD" ]] && upsert_env "$envfile" DB_PASSWORD "$DB_PASSWORD"
-  # Mot de passe de l'instance PostGIS (apps SIG uniquement) : clé distincte de
-  # DB_PASSWORD, donc no-op sur tous les .env qui ne la déclarent pas déjà.
-  [[ -n "$POSTGIS_PASSWORD" ]] && upsert_env "$envfile" POSTGIS_PASSWORD "$POSTGIS_PASSWORD"
+  # ── Mot de passe PostgreSQL ────────────────────────────────────────────────
+  # Deux régimes, départagés par le DB_USER que déclare le .env :
+  #
+  #  • DB_USER=dev_<uid> (base par développeur, contrat multi-dev I2) : on ne
+  #    propage QUE le mot de passe du rôle de ce développeur
+  #    (DEV_PG_PASSWORD__<uid> → DB_PASSWORD, DEV_GIS_PASSWORD__<uid> →
+  #    POSTGIS_PASSWORD), et seulement si l'app lui appartient bien. Le mot de
+  #    passe des rôles d'administration devuser/gisuser n'entre plus jamais
+  #    dans ce .env. Une app qui déclarerait le rôle d'un AUTRE développeur ne
+  #    reçoit rien : écrire DB_USER=dev_x dans son .env ne doit pas suffire à
+  #    obtenir le mot de passe de x.
+  #
+  #  • tout autre DB_USER (devuser, gisuser — apps pas encore basculées — ou
+  #    pas de DB_USER du tout) : comportement historique inchangé. upsert_env
+  #    est un no-op si la clé est absente, donc infra/.env et sso-lab/.env
+  #    (sans DB_PASSWORD) ne sont pas touchés. Vide ⇒ on ne propage pas (évite
+  #    d'effacer une valeur).
+  _db_user="$(_env_val "$envfile" DB_USER)"
+  if [[ "$_db_user" =~ ^dev_([a-z][a-z0-9]{1,30})$ ]]; then
+    _db_uid="${BASH_REMATCH[1]}"
+    if [[ "$(registry_app_owner "$(basename "$dir")" 2>/dev/null || true)" == "$_db_uid" ]]; then
+      # Source : infra/dev-roles.env (contrat v3) — jamais infra/.env, qui est
+      # l'env_file de dev-postgres et dev-pgadmin.
+      _dev_pg_pw="$(_env_val  "$SCRIPT_DIR/infra/dev-roles.env" "DEV_PG_PASSWORD__${_db_uid}")"
+      _dev_gis_pw="$(_env_val "$SCRIPT_DIR/infra/dev-roles.env" "DEV_GIS_PASSWORD__${_db_uid}")"
+      [[ -n "$_dev_pg_pw"  ]] && upsert_env "$envfile" DB_PASSWORD      "$_dev_pg_pw"
+      [[ -n "$_dev_gis_pw" ]] && upsert_env "$envfile" POSTGIS_PASSWORD "$_dev_gis_pw"
+    else
+      echo "    ⚠ $rel déclare DB_USER=${_db_user} mais l'app n'appartient pas à « ${_db_uid} » — aucun mot de passe propagé." >&2
+    fi
+  else
+    [[ -n "$DB_PASSWORD" ]] && upsert_env "$envfile" DB_PASSWORD "$DB_PASSWORD"
+    # Mot de passe de l'instance PostGIS (apps SIG uniquement) : clé distincte de
+    # DB_PASSWORD, donc no-op sur tous les .env qui ne la déclarent pas déjà.
+    [[ -n "$POSTGIS_PASSWORD" ]] && upsert_env "$envfile" POSTGIS_PASSWORD "$POSTGIS_PASSWORD"
+  fi
   upsert_env "$envfile" DOMAIN               "$DOMAIN"
   upsert_env "$envfile" ACME_EMAIL           "$ACME_EMAIL"
   upsert_env "$envfile" HOST_DEV_ROOT        "$HOST_DEV_ROOT"
+  # Contrat multi-dev (I1/I3) : superutilisateur et dossier d'état (clés SSH,
+  # verrou de déploiement), pour les services qui les déclarent dans leur .env
+  # (lab-admin, lab-mcp). No-op partout ailleurs.
+  upsert_env "$envfile" LAB_SUPERUSER        "$LAB_SUPERUSER_VAL"
+  upsert_env "$envfile" LAB_STATE_DIR        "$LAB_STATE_DIR_VAL"
+  upsert_env "$envfile" LAB_WORK_DIR         "$LAB_WORK_DIR_VAL"
 
   after=$(md5sum "$envfile" 2>/dev/null | cut -d' ' -f1)
 
@@ -257,7 +335,9 @@ while IFS= read -r envfile; do
     STACKS_TO_RESTART+=("$dir")
   fi
 
-done < <(find "$SCRIPT_DIR" -maxdepth 2 \( -name ".env" -o -name "sso-lab.env" \) | sort)
+done < <( { find "$SCRIPT_DIR" -maxdepth 2 \( -name ".env" -o -name "sso-lab.env" \)
+             # apps de deploiement/ (contrat v5) : un niveau plus bas
+             find "$SCRIPT_DIR/deploiement" -mindepth 2 -maxdepth 2 -name ".env" 2>/dev/null; } | sort)
 
 echo ""
 echo "✅  Terminé."

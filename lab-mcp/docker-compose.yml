@@ -1,0 +1,103 @@
+# lab-mcp — le MOTEUR du lab multi-dev (contrat multi-dev, I5) et la passerelle
+# des espaces de travail (I3).
+#
+# Service partagé, à la racine du dépôt comme runner/ : pas une app, pas un
+# sous-module. Deux entrées sur les mêmes fonctions — /mcp (une IA) et
+# /mcp/api (lab-admin, donc un humain) — pour créer, déployer et observer SES
+# projets sans compte Docker, en n'exécutant que les commandes d'exploitation
+# de scripts/ (I4). Il ouvre et ferme aussi les espaces de travail (ws-<uid>).
+#
+# ⚠ Ce conteneur monte le socket Docker : il vaut un accès root à l'hôte. Tout
+# ce qui le protège est dans labmcp/ (jeton Keycloak vérifié, `azp == lab-mcp`,
+# `.devs`, propriété de l'app) et dans scripts/validate-app.sh. Ne rien y
+# ajouter qui élargisse sa surface : pas de port publié, pas d'autre réseau,
+# pas d'`env_file` (tout ce qui entre dans son environnement est à portée des
+# sous-processus).
+
+networks:
+  sso-net:
+    external: true
+    name: sso-lab_sso-net
+  # PostgreSQL n'est joignable que par dev-net : la console SQL s'y connecte
+  # comme le ferait l'app, avec le rôle dev_<uid> et SON mot de passe — jamais
+  # par `docker exec` en devuser.
+  dev-net:
+    external: true
+    name: dev-net
+
+services:
+
+  lab-mcp:
+    build:
+      context: .
+      args:
+        # UID/GID du propriétaire du dépôt sur l'hôte, et GID du groupe `docker`
+        # de l'hôte (`getent group docker`) — voir .env.example.
+        LAB_UID: "${LAB_UID:-1000}"
+        LAB_GID: "${LAB_GID:-1000}"
+        DOCKER_GID: "${DOCKER_GID:?DOCKER_GID manquant dans lab-mcp/.env (getent group docker)}"
+    container_name: lab-mcp
+    restart: unless-stopped
+    init: true            # récolte les sous-processus des scripts
+    environment:
+      DOMAIN: "${DOMAIN:?DOMAIN manquant dans lab-mcp/.env (propagé par reset_url.sh)}"
+      LAB_ROOT: "${HOST_DEV_ROOT:?HOST_DEV_ROOT manquant dans lab-mcp/.env (propagé par reset_url.sh)}"
+      LAB_WORK_DIR: "${LAB_WORK_DIR:?LAB_WORK_DIR manquant dans lab-mcp/.env (propagé par reset_url.sh)}"
+      # Espaces de travail (I3) — défauts du contrat, à ne changer qu'après mesure.
+      LAB_WS_IMAGE: "${LAB_WS_IMAGE:-lab-workspace:latest}"
+      LAB_WS_MAX: "${LAB_WS_MAX:-3}"
+      LAB_WS_IDLE_MIN: "${LAB_WS_IDLE_MIN:-30}"
+    networks:
+      - sso-net            # Keycloak (clés du realm), oauth-hub, lab-runner, Caddy, passerelle
+      - dev-net            # PostgreSQL (console SQL)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Le dépôt, AU MÊME CHEMIN que sur l'hôte et en écriture : les scripts
+      # lancent `docker compose -f <chemin>` et `docker run -v <chemin>:…`, que
+      # le démon de l'hôte résout tel quel — aucune traduction de chemin
+      # (piège HOST_DEV_ROOT, cf. CLAUDE.md). Le verrou de déploiement
+      # (<racine>/.lab-state/deploy.lock) est ainsi le MÊME fichier que celui
+      # que prend un `setup2.sh` lancé à la main sur l'hôte.
+      - ${HOST_DEV_ROOT}:${HOST_DEV_ROOT}
+      # Clones de travail et maisons des devs, HORS du dépôt, au même chemin
+      # (le moteur les monte ensuite dans les espaces : le démon de l'hôte doit
+      # résoudre ce chemin tel quel). Si LAB_STATE_DIR est hors du dépôt, le
+      # monter de la même façon.
+      - ${LAB_WORK_DIR}:${LAB_WORK_DIR}
+    labels:
+      # /mcp exactement, et /mcp/… — deux blocs plutôt qu'un « /mcp* » qui
+      # capterait aussi /mcp-autre-chose. `handle` et non `handle_path` : le
+      # serveur sert lui-même sous /mcp, rien n'est retiré du chemin.
+      caddy: "${DOMAIN}"
+      caddy.handle_0: "/mcp"
+      caddy.handle_0.reverse_proxy: "{{upstreams 8000}}"
+      caddy.handle_1: "/mcp/*"
+      caddy.handle_1.reverse_proxy: "{{upstreams 8000}}"
+
+  # ── Passerelle des espaces de travail ──────────────────────────────────────
+  # Le Caddy du lab ne route que vers sso-net, où un espace ne doit jamais
+  # être. Cette passerelle est le SEUL conteneur à cheval : sso-net d'un côté,
+  # et — connectée par le moteur à l'ouverture, retirée à la fermeture — le
+  # réseau privé de chaque espace ouvert. Pour chaque requête (WebSocket
+  # compris) elle demande au moteur si cette personne peut entrer dans cet
+  # espace (gateway/Caddyfile). Aucun secret, aucun volume, aucun socket.
+  # Même image que le Caddy du lab (déjà sur l'hôte), lancée en Caddy simple.
+  ws-gateway:
+    image: lucaslorentz/caddy-docker-proxy:ci-alpine
+    command: ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    container_name: lab-ws-gateway
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges"]
+    tmpfs: [/config, /data]
+    environment:
+      LAB_ENGINE_ADDR: "lab-mcp:8000"
+    networks:
+      - sso-net
+    volumes:
+      - ${HOST_DEV_ROOT}/lab-mcp/gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+    labels:
+      caddy: "${DOMAIN}"
+      caddy.handle_2: "/ws/*"
+      caddy.handle_2.reverse_proxy: "{{upstreams 8080}}"

@@ -1,0 +1,18 @@
+# /etc/gitconfig de l'image lab-workspace (niveau « system » : la maison du dev
+# n'est jamais touchée, son ~/.gitconfig garde la priorité sur tout ceci).
+#
+# Identifiants GitHub : lus dans l'ENVIRONNEMENT (GH_TOKEN) au moment de
+# l'appel, jamais écrits sur disque. `gh auth git-credential` rend le jeton de
+# GH_TOKEN ; sans GH_TOKEN il ne rend rien et git demande comme d'habitude.
+# La première ligne `helper =` vide efface tout assistant hérité (un `store`
+# écrirait le jeton dans ~/.git-credentials).
+[credential "https://github.com"]
+	helper =
+	helper = !gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !gh auth git-credential
+[init]
+	defaultBranch = main
+[pull]
+	ff = only

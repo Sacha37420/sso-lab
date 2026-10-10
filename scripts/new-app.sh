@@ -9,8 +9,25 @@
 #   4) Django + Angular
 #   5) Angular seul
 #
-# Prérequis : docker, curl, unzip
-# Usage     : bash new-app.sh
+# Prérequis : docker, curl, unzip, jq
+# Usage     : bash new-app.sh [--owner <uid>]
+#
+# --owner <uid> (contrat multi-dev, I1/I2/I4) : l'app appartient au développeur
+#   <uid> (inscrit dans .devs). Elle vit comme les autres dans $ROOT/<app>, mais
+#   son schéma est créé dans la base de <uid> (dev_<uid>, ou gis_<uid> pour une
+#   app SIG), son .env porte le rôle dev_<uid>, et une ligne « <app>:<uid> » est
+#   écrite dans .owners. Sans --owner, l'app appartient au superutilisateur
+#   (LAB_SUPERUSER) et aucune ligne .owners n'est écrite.
+#
+# Le nom est contrôlé par check-app-name.sh pour TOUT créateur ; le contrôle et
+# l'écriture de .ports/.owners se font sous le verrou de déploiement
+# (scripts/lib/lock.sh) : deux créations simultanées ne peuvent obtenir ni le
+# même nom ni le même port.
+#
+# Entrée non interactive (inchangée) — une réponse par ligne :
+#   nom, type [1-5], port backend, port frontend, scaffold [O/n], groupe(s), instance [1-2]
+#   (ligne de port vide = port suggéré ; seules les lignes des questions
+#   réellement posées pour le type choisi sont lues)
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -25,6 +42,32 @@ err()  { echo -e "\n${RED}${BOLD}✘ Erreur : $*${NC}\n" >&2; exit 1; }
 info() { echo -e "  ${CYAN}→ $*${NC}"; }
 
 DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/registry.sh
+source "$DEV_DIR/scripts/lib/registry.sh"
+# shellcheck source=lib/lock.sh
+source "$DEV_DIR/scripts/lib/lock.sh"
+
+# ── Options ───────────────────────────────────────────────────────────────────
+OWNER=""
+OWNER_EXPLICIT=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --owner)   [[ $# -gt 1 ]] || err "--owner requiert un uid"; OWNER="$2"; OWNER_EXPLICIT=true; shift ;;
+    --owner=*) OWNER="${1#*=}"; OWNER_EXPLICIT=true ;;
+    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)         err "Argument inconnu : '$1' (usage : bash new-app.sh [--owner <uid>])" ;;
+  esac
+  shift
+done
+SUPERUSER="$(registry_superuser)"
+[[ -n "$OWNER" ]] || OWNER="$SUPERUSER"
+registry_valid_uid "$OWNER" || err "--owner : uid invalide '${OWNER}' (attendu : ^[a-z][a-z0-9]{1,30}\$)"
+OWNER_IS_SUPERUSER=false
+registry_is_superuser "$OWNER" && OWNER_IS_SUPERUSER=true
+if ! $OWNER_IS_SUPERUSER && ! registry_is_dev "$OWNER"; then
+  err "« ${OWNER} » n'est pas un développeur inscrit (.devs) — bash scripts/dev-enroll.sh ${OWNER}"
+fi
+
 INFRA_SCHEMAS="$DEV_DIR/infra/init/00_schemas.sql"
 INFRA_SCHEMAS_POSTGIS="$DEV_DIR/infra/init-postgis/00_schemas.sql"
 DOCKER_UID="$(id -u):$(id -g)"
@@ -54,7 +97,13 @@ _registered_ports() {
 
 # Retourne 0 si le port est actuellement actif sur la machine
 port_in_use() {
-  ss -tlnp 2>/dev/null | grep -qE ":$1\b"
+  # La sortie de ss est CAPTURÉE puis cherchée, jamais passée par un tube à
+  # `grep -q` : sous `set -o pipefail`, grep sort dès la première ligne trouvée,
+  # ss reçoit SIGPIPE, le tube « échoue »… et le port en écoute est déclaré
+  # LIBRE. Constaté : le port 8085, en écoute, a été attribué à une app.
+  local listening
+  listening="$(ss -tln 2>/dev/null || true)"
+  grep -qE ":$1[[:space:]]" <<< "$listening"
 }
 
 # Retourne le premier port libre >= $1 (non dans le registre, non actif)
@@ -63,7 +112,7 @@ next_port() {
   local taken
   taken="$(_registered_ports)"
   while true; do
-    if ! echo "$taken" | grep -qx "$port" && ! port_in_use "$port"; then
+    if ! grep -qx "$port" <<< "$taken" && ! port_in_use "$port"; then
       echo "$port"; return
     fi
     (( port++ ))
@@ -89,7 +138,12 @@ read -rp "Nom de l'application (ex: my-app) : " APP_NAME
 [[ ! "$APP_NAME" =~ ^[a-z][a-z0-9-]*$ ]] \
   && err "Nom invalide. Minuscules, chiffres et tirets uniquement (ex: my-app)."
 
-APP_DIR="$DEV_DIR/$APP_NAME"
+# (v5) Toute nouvelle app naît dans $ROOT/deploiement/<app>. Le contrôle « ce
+# nom existe déjà » (à la racine comme dans deploiement/) est fait par
+# check-app-name.sh, sous verrou, plus bas.
+APP_DIR="$(registry_deploy_dir "$APP_NAME")" || err "Nom invalide : '$APP_NAME'."
+APP_REL="deploiement/$APP_NAME"
+[[ -d "$DEV_DIR/$APP_NAME" ]] && err "Le dossier '$APP_NAME' existe déjà dans dev/."
 [[ -d "$APP_DIR" ]] && err "Le dossier '$APP_NAME' existe déjà dans dev/."
 
 DB_SCHEMA="${APP_NAME//-/_}"   # my-app → my_app  (nom de schéma SQL valide)
@@ -107,9 +161,16 @@ read -rp "Choix [1-5] : " APP_TYPE
 BACKEND_PORT=""
 ANGULAR_PORT=""
 
+# Port laissé vide = port suggéré. On retient si le port a été CHOISI ou
+# simplement accepté : la valeur suggérée ici n'est qu'indicative (calculée hors
+# verrou), elle est recalculée sous le verrou plus bas ; un port choisi
+# explicitement y est, lui, vérifié libre.
+BACKEND_PORT_AUTO=false
+ANGULAR_PORT_AUTO=false
 if [[ "$APP_TYPE" =~ ^[1234]$ ]]; then
   _suggest_b=$(next_port 8083)
   read -rp "Port backend  [suggéré : ${_suggest_b}, Entrée pour confirmer] : " BACKEND_PORT
+  [[ -z "$BACKEND_PORT" ]] && BACKEND_PORT_AUTO=true
   BACKEND_PORT="${BACKEND_PORT:-$_suggest_b}"
   [[ ! "$BACKEND_PORT" =~ ^[0-9]+$ ]] && err "Port invalide."
 fi
@@ -117,6 +178,7 @@ fi
 if [[ "$APP_TYPE" =~ ^[245]$ ]]; then
   _suggest_f=$(next_port 4200)
   read -rp "Port frontend [suggéré : ${_suggest_f}, Entrée pour confirmer] : " ANGULAR_PORT
+  [[ -z "$ANGULAR_PORT" ]] && ANGULAR_PORT_AUTO=true
   ANGULAR_PORT="${ANGULAR_PORT:-$_suggest_f}"
   [[ ! "$ANGULAR_PORT" =~ ^[0-9]+$ ]] && err "Port invalide."
 fi
@@ -169,6 +231,87 @@ if [[ "$APP_TYPE" =~ ^[1234]$ ]]; then
 fi
 
 # ──────────────────────────────────────────────────────────────────────────────
+# CONTRÔLES SOUS VERROU (contrat multi-dev I1/I4)
+# ──────────────────────────────────────────────────────────────────────────────
+# Tout ce qui suit lit puis écrit le registre (.ports, .owners) et crée le
+# dossier : le verrou est pris ICI, après la saisie (on ne bloque pas le lab
+# pendant qu'un humain réfléchit à un nom), et gardé jusqu'à la fin du script.
+lab_lock_acquire "new-app.sh ${APP_NAME}" || exit $?
+
+# ── Règles propres à une app de développeur ───────────────────────────────────
+if ! $OWNER_IS_SUPERUSER; then
+  # Les gabarits Spring n'écrivent pas de .keycloak-client-opts : l'app serait
+  # refusée par validate-app.sh à son premier déploiement. Autant le dire ici.
+  [[ "$APP_TYPE" =~ ^[345]$ ]] \
+    || err "Types disponibles pour un développeur : 3 (Django), 4 (Django + Angular), 5 (Angular)."
+  # Le lab est exposé sur Internet : une app sans groupe requis accepte tout
+  # compte du realm. Toléré (avec avertissement) pour le superutilisateur, pas ici.
+  [[ -n "$REQUIRE_GROUP" ]] \
+    || err "Un groupe requis est obligatoire (cloisonnement) — ex. : developers"
+fi
+if [[ -n "$REQUIRE_GROUP" && ! "$REQUIRE_GROUP" =~ ^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$ ]]; then
+  err "Groupe(s) invalide(s) : '${REQUIRE_GROUP}' (noms séparés par des virgules, sans espace)"
+fi
+
+# ── Règles de nommage (pour TOUT créateur) ────────────────────────────────────
+step "Contrôle du nom (check-app-name.sh)"
+if ! _name_reasons="$(bash "$DEV_DIR/scripts/check-app-name.sh" "$APP_NAME")"; then
+  echo "$_name_reasons" | sed 's/^/  ✘ /' >&2
+  err "Le nom '${APP_NAME}' est refusé."
+fi
+ok "Nom '${APP_NAME}' accepté"
+
+# ── Ports : recalcul (port suggéré) ou vérification (port choisi) ─────────────
+_port_registered() { local reg; reg="$(_registered_ports)"; grep -qx "$1" <<< "$reg"; }
+_check_port() {  # $1 = libellé, $2 = port choisi explicitement
+  (( $2 >= 1024 && $2 <= 65535 )) || err "Port $1 hors plage (1024-65535) : $2"
+  _port_registered "$2" && err "Port $1 $2 déjà enregistré dans .ports."
+  port_in_use "$2"      && err "Port $1 $2 déjà en écoute sur cet hôte."
+  return 0
+}
+if [[ -n "$BACKEND_PORT" ]]; then
+  if $BACKEND_PORT_AUTO; then BACKEND_PORT="$(next_port 8083)"; else _check_port backend "$BACKEND_PORT"; fi
+fi
+if [[ -n "$ANGULAR_PORT" ]]; then
+  if $ANGULAR_PORT_AUTO; then ANGULAR_PORT="$(next_port 4200)"; else _check_port frontend "$ANGULAR_PORT"; fi
+fi
+[[ -n "$BACKEND_PORT" && "$BACKEND_PORT" == "$ANGULAR_PORT" ]] && err "Ports backend et frontend identiques."
+
+# ── Base de données cible (contrat multi-dev I2) ──────────────────────────────
+# Mode « base par développeur » : dev_<uid> (ou gis_<uid>) avec le rôle
+# dev_<uid>. C'est le mode de tout développeur, et celui du superutilisateur
+# DÈS QUE sa base dédiée a été provisionnée (clé DEV_PG_PASSWORD__<uid> dans
+# infra/dev-roles.env). Tant qu'elle ne l'est pas, le superutilisateur reste sur le mode
+# historique (devdb/devuser, gisdb/gisuser) : rien ne change pour lui avant la
+# bascule.
+_infra_has_key() { grep -qE "^$1=" "$DEV_DIR/infra/dev-roles.env" 2>/dev/null; }
+DB_MODE="legacy"
+if [[ "$APP_TYPE" =~ ^[1234]$ ]]; then
+  if ! $OWNER_IS_SUPERUSER; then
+    DB_MODE="dev"
+  elif [[ "$DB_INSTANCE" == "postgis" ]] && _infra_has_key "DEV_GIS_PASSWORD__${OWNER}"; then
+    DB_MODE="dev"
+  elif [[ "$DB_INSTANCE" != "postgis" ]] && _infra_has_key "DEV_PG_PASSWORD__${OWNER}"; then
+    DB_MODE="dev"
+  fi
+fi
+if [[ "$DB_MODE" == "dev" ]]; then
+  step "Base de données de « ${OWNER} » (dev-db.sh ensure)"
+  if [[ "$DB_INSTANCE" == "postgis" ]]; then
+    bash "$DEV_DIR/scripts/dev-db.sh" ensure "$OWNER" --gis || err "Provisionnement de gis_${OWNER} impossible."
+    ENV_DB_NAME="gis_${OWNER}"; ENV_DB_PASS_KEY="DEV_GIS_PASSWORD__${OWNER}"
+  else
+    bash "$DEV_DIR/scripts/dev-db.sh" ensure "$OWNER" || err "Provisionnement de dev_${OWNER} impossible."
+    ENV_DB_NAME="dev_${OWNER}"; ENV_DB_PASS_KEY="DEV_PG_PASSWORD__${OWNER}"
+  fi
+  ENV_DB_USER="dev_${OWNER}"
+elif [[ "$DB_INSTANCE" == "postgis" ]]; then
+  ENV_DB_NAME="gisdb";  ENV_DB_USER="gisuser"; ENV_DB_PASS_KEY="POSTGIS_PASSWORD"
+else
+  ENV_DB_NAME="devdb";  ENV_DB_USER="devuser"; ENV_DB_PASS_KEY="POSTGRES_PASSWORD"
+fi
+
+# ──────────────────────────────────────────────────────────────────────────────
 # FONCTIONS COMMUNES
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -183,6 +326,17 @@ fi
 add_schema() {
   local schema="$1" instance="${2:-postgres}"
   local schemas_file container db_user db_name
+
+  # Base par développeur : le schéma est créé à chaud dans dev_<uid>/gis_<uid>
+  # par ensure-schemas.sh (qui lit le .env tout juste écrit et le registre), et
+  # il n'entre PAS dans infra/init*/00_schemas.sql — ces fichiers n'initialisent
+  # que devdb/gisdb. Sur un volume vierge, c'est `dev-db.sh ensure-all` puis
+  # ensure-schemas.sh (appelés par setup2.sh) qui le recréent.
+  if [[ "$DB_MODE" == "dev" ]]; then
+    bash "$DEV_DIR/scripts/ensure-schemas.sh" "$APP_NAME" \
+      || err "Création du schéma '${schema}' dans ${ENV_DB_NAME} impossible."
+    return 0
+  fi
   if [[ "$instance" == "postgis" ]]; then
     schemas_file="$INFRA_SCHEMAS_POSTGIS"; container="dev-postgis"
     db_user="gisuser"; db_name="gisdb"
@@ -199,7 +353,7 @@ add_schema() {
   fi
 
   # Sans effet si le container n'est pas démarré : le schéma viendra du fichier d'init.
-  if docker ps --format '{{.Names}}' | grep -qx "$container"; then
+  if grep -qx "$container" <<< "$(docker ps --format '{{.Names}}')"; then
     docker exec "$container" psql -U "$db_user" -d "$db_name" -q \
       -c "CREATE SCHEMA IF NOT EXISTS \"${schema}\" AUTHORIZATION ${db_user};" \
       && ok "Schéma '${schema}' créé dans la base en cours d'exécution (${container})" \
@@ -229,9 +383,9 @@ _render_env_content() {
     echo "# ── Base de données (instance PostGIS partagée — apps SIG) ───────"
     echo "DB_HOST=postgis"
     echo "DB_PORT=5432"
-    echo "DB_NAME=gisdb"
+    echo "DB_NAME=${ENV_DB_NAME}"
     echo "DB_SCHEMA=${schema}"
-    echo "DB_USER=gisuser"
+    echo "DB_USER=${ENV_DB_USER}"
     # POSTGIS_PASSWORD (et non DB_PASSWORD) : clé distincte propagée par
     # reset_url.sh depuis infra/.env, pour ne jamais interférer avec le
     # DB_PASSWORD des apps sur l'instance 'postgres' partagée.
@@ -241,9 +395,9 @@ _render_env_content() {
     echo "# ── Base de données ──────────────────────────────────────────────"
     echo "DB_HOST=postgres"
     echo "DB_PORT=5432"
-    echo "DB_NAME=devdb"
+    echo "DB_NAME=${ENV_DB_NAME}"
     echo "DB_SCHEMA=${schema}"
-    echo "DB_USER=devuser"
+    echo "DB_USER=${ENV_DB_USER}"
     echo "DB_PASSWORD=${db_pass_val}"
     echo ""
   fi
@@ -303,9 +457,15 @@ write_env_files() {
     # que de coder 'devpassword' en dur — sinon toute nouvelle app naîtrait avec
     # l'ancienne valeur, et reset_url.sh devrait la corriger. Au pire (infra/.env
     # absent au scaffold), reset_url.sh l'alignera au 1er setup2.
-    local _pass_var="POSTGRES_PASSWORD"
-    [[ "$db_instance" == "postgis" ]] && _pass_var="POSTGIS_PASSWORD"
-    _db_pass="$(grep -E "^${_pass_var}=" "$DEV_DIR/infra/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+    # Mode « base par développeur » : c'est le mot de passe du rôle dev_<uid>
+    # (DEV_PG_PASSWORD__<uid> / DEV_GIS_PASSWORD__<uid>), jamais celui du rôle
+    # d'administration de l'instance.
+    local _pass_var="$ENV_DB_PASS_KEY"
+    # … lu dans infra/dev-roles.env pour un rôle dev_<uid> (contrat v3),
+    # dans infra/.env pour les rôles historiques.
+    local _pass_file="$DEV_DIR/infra/.env"
+    [[ "$DB_MODE" == "dev" ]] && _pass_file="$DEV_DIR/infra/dev-roles.env"
+    _db_pass="$(grep -E "^${_pass_var}=" "$_pass_file" 2>/dev/null | head -1 | cut -d= -f2-)"
     _db_pass="${_db_pass:-devpassword}"
   fi
   if [[ "$framework" == "django" ]]; then
@@ -317,6 +477,9 @@ write_env_files() {
   _render_env_content "$schema" "$has_db" "$client_id" "$bport" "$fport" \
     "$framework" "$script_name" "$db_instance" "$_db_pass" "$_secret" > "${dir}/.env"
 
+  # Le .env porte des secrets (mot de passe de base, SECRET_KEY) : lisible du
+  # seul propriétaire, sans dépendre du chmod final (qui passe par sudo).
+  chmod 600 "${dir}/.env" 2>/dev/null || true
   ok ".env et .env.example créés"
 }
 
@@ -486,7 +649,9 @@ networks:
 services:
   ${name}:
     build: .
-    container_name: ${name}
+    # « <app>-app » et non « <app> » : tout conteneur d'une app porte le préfixe
+    # « <app>- » (règle contrôlée par validate-app.sh, contrat multi-dev I4).
+    container_name: ${name}-app
     restart: unless-stopped
     env_file: .env
     ports:
@@ -518,7 +683,9 @@ networks:
 services:
   ${name}:
     build: .
-    container_name: ${name}
+    # « <app>-app » et non « <app> » : tout conteneur d'une app porte le préfixe
+    # « <app>- » (règle contrôlée par validate-app.sh, contrat multi-dev I4).
+    container_name: ${name}-app
     restart: unless-stopped
     env_file: .env
     ports:
@@ -550,7 +717,9 @@ networks:
 services:
   ${name}:
     build: .
-    container_name: ${name}
+    # « <app>-app » et non « <app> » : tout conteneur d'une app porte le préfixe
+    # « <app>- » (règle contrôlée par validate-app.sh, contrat multi-dev I4).
+    container_name: ${name}-app
     restart: unless-stopped
     env_file: .env
     ports:
@@ -659,6 +828,12 @@ EOF
   ok "docker-compose.yml (backend + frontend)"
 }
 
+# Un scaffold raté (réseau, Docker…) laisse un dossier sans manage.py ni
+# angular.json : le script va au bout (le résumé reste utile pour reprendre à la
+# main) mais se termine en ERREUR, pour qu'un appelant non interactif ne prenne
+# pas cette coquille pour une app créée.
+SCAFFOLD_FAILED=false
+
 # ──────────────────────────────────────────────────────────────────────────────
 # SCAFFOLDING : SPRING BOOT (via Spring Initializr)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -682,6 +857,7 @@ scaffold_spring() {
     rm -rf "$tmpdir"
     warn "Échec de Spring Initializr — vérifier la connexion internet."
     info  "Créer manuellement sur https://start.spring.io"
+    SCAFFOLD_FAILED=true
     return
   fi
 
@@ -752,6 +928,7 @@ scaffold_django() {
       sh -c "mkdir -p /app && cd /app && pip install django -q 2>/dev/null && django-admin startproject config ."; then
     docker rm -f "$cname" >/dev/null 2>&1 || true
     warn "Échec du scaffold Django."
+    SCAFFOLD_FAILED=true
     return
   fi
 
@@ -799,6 +976,7 @@ scaffold_angular() {
     docker rm -f "$cname" >/dev/null 2>&1 || true
     warn "Échec du scaffold Angular."
     info  "Créer manuellement : ng new ${name}"
+    SCAFFOLD_FAILED=true
     return
   fi
 
@@ -909,12 +1087,46 @@ PYEOF
 # ORCHESTRATION PRINCIPALE
 # ──────────────────────────────────────────────────────────────────────────────
 # Création du dossier principal et correction des permissions
+# ── Retour arrière en cas d'échec (app d'un propriétaire explicite) ───────────
+# À partir d'ici le script crée des choses à plusieurs endroits (registre,
+# dossier, schéma PostgreSQL, .gitignore). S'il sort en erreur avant la fin —
+# scaffold raté, base injoignable, interruption — il DÉFAIT ce qu'il a fait :
+# un appelant non interactif (serveur MCP) retrouve l'état d'avant, sans schéma
+# ni ligne de registre orphelins. La ligne .owners est écrite EN PREMIER (juste
+# en dessous) : c'est elle qui autorise app-remove.sh à agir.
+# Sans --owner (usage historique, à la main), rien n'est défait
+# automatiquement : le dossier incomplet reste, pour être repris.
+CREATION_DONE=false
+_rollback_on_failure() {
+  local rc=$?
+  trap - EXIT
+  if [[ $rc -ne 0 ]] && ! $CREATION_DONE && $OWNER_EXPLICIT; then
+    echo -e "\n${YELLOW}⚠ Création de '$APP_NAME' interrompue (code $rc) — retour arrière…${NC}" >&2
+    bash "$DEV_DIR/scripts/app-remove.sh" "$APP_NAME" --yes >&2 \
+      || echo -e "${RED}✘ Retour arrière incomplet — relancer : bash scripts/app-remove.sh $APP_NAME --yes${NC}" >&2
+  fi
+  exit $rc
+}
+# (v5) La ligne .owners est écrite pour TOUTE app créée ici, superutilisateur
+# compris : c'est elle qui marque « app créée après le chantier multi-dev »,
+# donc soumise aux portes de qualité d'I8 (feuille de route, tests avant mise
+# en service). Les apps historiques, sans ligne, gardent leur déploiement.
+sed -i "/^${APP_NAME}:/d" "$DEV_DIR/.owners" 2>/dev/null || true
+echo "${APP_NAME}:${OWNER}" >> "$DEV_DIR/.owners"
+$OWNER_EXPLICIT && trap _rollback_on_failure EXIT
+
+mkdir -p "$(registry_deploy_root)"
 mkdir -p "$APP_DIR"
 step "Création de $APP_DIR"
+# Propriétaire (contrat multi-dev I1) : une ligne « <app>:<uid> » dans .owners,
+# écrite AVANT tout le reste — ensure-schemas.sh et reset_url.sh s'y réfèrent.
+# Sans --owner, aucune ligne : l'app appartient au superutilisateur par défaut,
+# exactement comme les apps existantes.
+ok "Propriétaire enregistré dans .owners (${APP_NAME}:${OWNER})"
 # Ajoute le dossier de l'app au .gitignore si absent
-if ! grep -qxF "$APP_NAME/" "$DEV_DIR/.gitignore"; then
-  echo "$APP_NAME/" >> "$DEV_DIR/.gitignore"
-  ok "$APP_NAME/ ajouté à .gitignore"
+if ! grep -qxF "$APP_REL/" "$DEV_DIR/.gitignore"; then
+  echo "$APP_REL/" >> "$DEV_DIR/.gitignore"
+  ok "$APP_REL/ ajouté à .gitignore"
 fi
 
 # .gitignore PROPRE À L'APP (pas celui du dépôt parent ci-dessus) : indispensable
@@ -949,6 +1161,28 @@ frontend/.angular/
 .DS_Store
 EOF
 ok ".gitignore (propre à l'app)"
+
+# ── Règles de développement (contrat v5, I8) ──────────────────────────────────
+# Tout projet scaffoldé naît avec sa feuille de route et les consignes lues par
+# les IA (CLAUDE.md pour Claude Code, AGENTS.md pour Mistral Vibe — même
+# contenu). validate-app.sh refuse de déployer une app sans feuille de route au
+# bon format : la présence du fichier n'est pas laissée à la bonne volonté.
+_RULES_TMPL="$DEV_DIR/_templates/regles"
+if [[ -d "$_RULES_TMPL" ]]; then
+  case "$APP_TYPE" in
+    3|4) _TEST_CMD="python manage.py test" ;;
+    *)   _TEST_CMD="aucune" ;;   # pas de backend Django : app-test.sh n'a rien à lancer
+  esac
+  for _rf in FEUILLE_DE_ROUTE.md CLAUDE.md AGENTS.md; do
+    sed -e "s|__APP_NAME__|${APP_NAME}|g" \
+        -e "s|__TEST_COMMAND__|${_TEST_CMD}|g" \
+        -e "s|__DATE__|$(date +%F)|g" \
+        "$_RULES_TMPL/$_rf" > "$APP_DIR/$_rf"
+  done
+  ok "FEUILLE_DE_ROUTE.md, CLAUDE.md, AGENTS.md (règles de développement)"
+else
+  err "Gabarit des règles introuvable ($_RULES_TMPL) — une app sans feuille de route ne serait pas déployable."
+fi
 
 case "$APP_TYPE" in
 
@@ -1061,10 +1295,10 @@ echo -e "  ${BOLD}Dossier  ${NC}: $APP_DIR"
 [[ -n "$ANGULAR_PORT" ]] && echo -e "  ${BOLD}Frontend ${NC}: http://localhost:${ANGULAR_PORT}"
 echo ""
 echo -e "  ${YELLOW}${BOLD}Étapes suivantes :${NC}"
-echo -e "  ${BOLD}1.${NC} Remplir ${CYAN}${APP_NAME}/.env${NC} (DOMAIN, KEYCLOAK_CLIENT_SECRET…)"
+echo -e "  ${BOLD}1.${NC} Remplir ${CYAN}${APP_REL}/.env${NC} (DOMAIN, KEYCLOAK_CLIENT_SECRET…)"
 if [[ "$APP_TYPE" =~ ^[45]$ ]]; then
   echo -e "  ${BOLD}2.${NC} Créer le client Keycloak automatiquement :"
-  echo -e "     ${CYAN}bash create-app-client.sh ${APP_NAME} \$(cat ${APP_NAME}/.keycloak-client-opts)${NC}"
+  echo -e "     ${CYAN}bash create-app-client.sh ${APP_NAME} \$(cat ${APP_REL}/.keycloak-client-opts)${NC}"
 else
   echo -e "  ${BOLD}2.${NC} Créer le client '${APP_NAME}' dans Keycloak"
   echo -e "     → ${CYAN}http://localhost:8080${NC} — realm ssolab — Clients — Create client"
@@ -1074,7 +1308,9 @@ else
     echo -e "     Valid redirect URIs : ${CYAN}http://localhost:${ANGULAR_PORT}/*${NC}"
   fi
 fi
-if [[ "$APP_TYPE" != "5" ]]; then
+if [[ "$APP_TYPE" != "5" && "$DB_MODE" == "dev" ]]; then
+  echo -e "  ${BOLD}3.${NC} Schéma '${DB_SCHEMA}' créé dans ${CYAN}${ENV_DB_NAME}${NC} (rôle ${ENV_DB_USER})"
+elif [[ "$APP_TYPE" != "5" ]]; then
   if [[ "$DB_INSTANCE" == "postgis" ]]; then
     echo -e "  ${BOLD}3.${NC} Si le container postgis tourne déjà (schéma absent du volume) :"
     echo -e "     ${CYAN}docker exec -it dev-postgis psql -U gisuser -d gisdb \\"
@@ -1118,3 +1354,10 @@ else
   chmod -R u+rwx,go-rwx "$APP_DIR" 2>/dev/null || true
   echo -e "  ${YELLOW}✔ Propriétaire et permissions définis (sans sudo) (${OWNER_USER}:${OWNER_GROUP})${NC}"
 fi
+
+if $SCAFFOLD_FAILED; then
+  echo -e "\n${RED}${BOLD}✘ Le scaffold a échoué : '$APP_NAME' est incomplète.${NC}" >&2
+  $OWNER_EXPLICIT || echo -e "  Pour tout retirer : bash scripts/app-remove.sh ${APP_NAME} --yes --superuser-app" >&2
+  exit 1
+fi
+CREATION_DONE=true

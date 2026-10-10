@@ -57,10 +57,67 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# ── Registre, verrou, contrôle de sûreté (contrat multi-dev, I1/I4) ───────────
+# shellcheck source=lib/registry.sh
+source "$SCRIPT_DIR/lib/registry.sh"
+# shellcheck source=lib/lock.sh
+source "$SCRIPT_DIR/lib/lock.sh"
+
+APP_DIR=""
+if [[ -n "$APP_NAME" ]]; then
+  APP_DIR="$(registry_app_dir "$APP_NAME")" || { echo "Nom d'app invalide : '$APP_NAME'" >&2; exit 1; }
+fi
+
+# Un seul déploiement (ou une seule création) à la fois sur l'hôte : 2 vCPU,
+# deux builds concurrents se ralentissent au point de sembler bloqués. Attente
+# bornée (LAB_LOCK_TIMEOUT, défaut 900 s) puis échec explicite. Ré-entrant : si
+# l'appelant tient déjà le verrou (scripts/lab-lock.sh), il n'est pas repris.
+lab_lock_acquire "setup2.sh ${APP_NAME:-tout le lab}" || exit $?
+
+# App d'un développeur : son dépôt est validé AVANT toute action — échec ⇒ rien
+# n'est lancé (ni nettoyage, ni client Keycloak, ni build). Les apps du
+# superutilisateur ne passent pas par ce contrôle : il a de toute façon Docker.
+#
+# JOURNAL SANS SECRET (contrat v3, I4) : pour une telle app, la sortie de ce
+# script est relayée telle quelle à son développeur. Elle ne doit contenir ni
+# secret, ni rien qui concerne les apps des autres. Deux mécanismes :
+#   • LAB_JOURNAL_REDACT=1, exporté : create-app-client.sh (et tout script
+#     appelé) n'affiche alors aucune valeur de secret ;
+#   • run_shared : les étapes qui portent sur TOUT le lab (reset_url.sh,
+#     runner, ports.env, Bbox) tournent sans rien afficher — leur sortie
+#     complète va dans <LAB_STATE_DIR>/setup2-shared.log (600), pour
+#     l'administrateur. Seul leur code de retour est rapporté.
+# Pour une app du superutilisateur, rien ne change : sortie intégrale.
+DEV_JOURNAL=false
+run_shared() {  # run_shared <libellé> <commande…>
+  local label="$1"; shift
+  if ! $DEV_JOURNAL; then "$@"; return $?; fi
+  local log rc
+  log="$(registry_state_dir)/setup2-shared.log"
+  ( umask 077; : >> "$log" ) 2>/dev/null || log=/dev/null
+  { printf '\n=== %s — %s (%s) ===\n' "$(date '+%F %T')" "$label" "$APP_NAME"; } >> "$log" 2>/dev/null || true
+  "$@" >> "$log" 2>&1; rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "   (étape commune « $label » : code $rc — détail réservé à l'administrateur du lab)"
+  fi
+  return $rc
+}
+if [[ -n "$APP_NAME" ]] && ! registry_is_superuser "$(registry_app_owner "$APP_NAME")"; then
+  DEV_JOURNAL=true
+  export LAB_JOURNAL_REDACT=1
+  echo -e "\033[0;36m══ Contrôle de sûreté de $APP_NAME (validate-app.sh)\033[0m"
+  if ! bash "$SCRIPT_DIR/validate-app.sh" "$APP_NAME"; then
+    echo -e "\033[0;31m✗ ERROR : $APP_NAME refusée par validate-app.sh — rien n'a été lancé.\033[0m" >&2
+    exit 1
+  fi
+  echo -e "\033[0;32m✓ Contenu validé.\033[0m"
+fi
+
 # Calculés tôt (juste après le parsing des options) car ils conditionnent
 # l'étape 1 : quand `setup_unit.sh` va être délégué plus bas, il fait déjà son
 # propre `clean2.sh <app>` — inutile (et redondant) de nettoyer deux fois la
 # même app ici.
+DEPLOY_FAILED=false
 USE_UNIT_DELEGATION=false
 if [[ -n "$APP_NAME" ]] && ! $RESTART_SSO_LAB && ! $ROTATE_SECRETS; then
   USE_UNIT_DELEGATION=true
@@ -104,7 +161,7 @@ fi
 
 # ── Auto-enregistrement des ports si l'app est absente de .ports ──────
 if [[ -n "$APP_NAME" ]] && ! grep -qE "^${APP_NAME}:" "$PORTS_REGISTRY" 2>/dev/null; then
-  DC="$ROOT_DIR/$APP_NAME/docker-compose.yml"
+  DC="$APP_DIR/docker-compose.yml"
   if [[ -f "$DC" ]]; then
     # Convention : container port 8000 = backend Django, port 80 = frontend nginx
     BPORT=$(grep -E '^\s+- "[0-9]+:8000"' "$DC" | sed 's/.*"\([0-9]*\):8000".*/\1/' | head -1)
@@ -154,14 +211,14 @@ if $ROTATE_SECRETS; then
       _app="$(basename "$(dirname "$_envf")")"
       [[ "$_app" == "sso-lab" || "$_app" == "infra" ]] && continue
       bash "$SCRIPT_DIR/rotate-app-secret.sh" "$_app" || true
-    done < <(find "$ROOT_DIR" -maxdepth 2 -name ".env" | sort)
+    done < <(registry_dirs_with .env | sed 's|$|/.env|')
   fi
   echo -e "\033[0;32m✓ Secrets applicatifs rotés.\033[0m"
 fi
 
 # ── 2. Propagation des adresses réseau ────────────────────────────────
 echo -e "\033[0;36m══ 2/7  Propagation des adresses réseau (reset_url.sh)\033[0m"
-bash "$SCRIPT_DIR/reset_url.sh"
+run_shared "reset_url.sh" bash "$SCRIPT_DIR/reset_url.sh"
 echo -e "\033[0;32m✓ Adresses réseau propagées.\033[0m"
 
 # ── 3. Génération des mots de passe forts ─────────────────────────────
@@ -201,7 +258,7 @@ fi
 # deux cas.
 if ! docker inspect -f '{{.State.Running}}' lab-runner 2>/dev/null | grep -q true; then
   echo -e "\033[0;36m══ Runner E2E (runner/)\033[0m"
-  bash "$SCRIPT_DIR/recompose_docker.sh" --app runner 2>&1 | sed 's/^/  /' \
+  run_shared "runner E2E" bash "$SCRIPT_DIR/recompose_docker.sh" --app runner 2>&1 | sed 's/^/  /' \
     && echo -e "\033[0;32m✓ Runner E2E démarré.\033[0m" \
     || echo -e "\033[1;33m⚠ Runner E2E non démarré — le catalogue des tests sera ignoré (best-effort).\033[0m"
 fi
@@ -223,8 +280,14 @@ fi
 # séquencement. (USE_UNIT_DELEGATION/USE_PARALLEL_DISPATCH calculés plus haut.)
 if $USE_UNIT_DELEGATION; then
   echo -e "\033[0;36m══ 4-7/7  Déploiement de $APP_NAME (setup_unit.sh)\033[0m"
-  bash "$SCRIPT_DIR/setup_unit.sh" "$APP_NAME" --yes
-  echo -e "\033[0;32m✓ $APP_NAME déployée.\033[0m"
+  if bash "$SCRIPT_DIR/setup_unit.sh" "$APP_NAME" --yes; then
+    echo -e "\033[0;32m✓ $APP_NAME déployée.\033[0m"
+  else
+    # On va quand même au bout (ports.env, Bbox) — ces étapes ne dépendent pas
+    # de l'app — mais le script se terminera en erreur.
+    echo -e "\033[0;31m✗ ERROR : le déploiement de $APP_NAME a échoué.\033[0m" >&2
+    DEPLOY_FAILED=true
+  fi
 else
   # ── 4. Démarrage de sso-lab ───────────────────────────────────────────
   echo -e "\033[0;36m══ 4/7  Démarrage de sso-lab (Keycloak + LDAP)\033[0m"
@@ -247,6 +310,16 @@ else
   echo -e "\033[0;36m══ 4bis/7  Démarrage de l'infra (PostgreSQL)\033[0m"
   bash "$SCRIPT_DIR/recompose_docker.sh" --app infra
   echo -e "\033[0;32m✓ Infra démarrée.\033[0m"
+
+  # Bases par développeur (contrat multi-dev, I2) : infra/init*/ ne connaît que
+  # devdb/gisdb. Sur un volume recréé, les rôles et bases dev_<uid>/gis_<uid>
+  # n'existent plus — on les rejoue depuis infra/.env avant ensure-schemas.sh.
+  # Sans effet (et sans rien afficher d'autre) tant qu'aucun dev n'est déclaré.
+  if grep -qE '^DEV_PG_PASSWORD__' "$ROOT_DIR/infra/.env" 2>/dev/null; then
+    echo -e "\033[0;36m══ Bases par développeur (dev-db.sh ensure-all)\033[0m"
+    bash "$SCRIPT_DIR/dev-db.sh" ensure-all \
+      || echo -e "\033[1;33m⚠ dev-db.sh ensure-all a échoué — les apps de développeurs ne démarreront pas.\033[0m"
+  fi
 
   # ── 5. Attente Keycloak ───────────────────────────────────────────────
   echo -e "\033[0;36m══ 5/7  Attente de Keycloak\033[0m"
@@ -348,7 +421,7 @@ else
       # démarré séparément à l'étape 3bis, comme infra/sso-lab.
       [[ "$_name" == "infra" || "$_name" == "sso-lab" || "$_name" == "runner" ]] && continue
       DISPATCH_APPS+=("$_name")
-    done < <(find "$ROOT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort)
+    done < <(registry_dirs_with docker-compose.yml | sed 's|$|/docker-compose.yml|')
 
     SORTED_APPS=()
     while IFS='|' read -r _ _app; do
@@ -410,7 +483,7 @@ fi
 
 # ── 8. Génération de ports.env ───────────────────────────────────────
 echo -e "\033[0;36m══ Génération de ports.env (get-ports-list.sh)\033[0m"
-bash "$SCRIPT_DIR/get-ports-list.sh"
+run_shared "get-ports-list.sh" bash "$SCRIPT_DIR/get-ports-list.sh"
 echo -e "\033[0;32m✓ ports.env généré.\033[0m"
 
 # ── 9. Ouverture des ports Bbox ──────────────────────────────────────
@@ -419,8 +492,11 @@ echo -e "\033[0;36m══ Ouverture des ports sur la Bbox (open-bbox-ports2.sh)\
 BBOX_IP=$(grep -E '^BBOX_IP=' "$ROOT_DIR/bbox.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
 BBOX_IP="${BBOX_IP:-192.168.1.254}"
 if curl -sk --max-time 3 "https://${BBOX_IP}/api/v1/device" > /dev/null 2>&1; then
-  bash "$SCRIPT_DIR/open-bbox-ports2.sh"
-  echo -e "\033[0;32m✓ Ports ouverts sur la Bbox.\033[0m"
+  if run_shared "open-bbox-ports2.sh" bash "$SCRIPT_DIR/open-bbox-ports2.sh"; then
+    echo -e "\033[0;32m✓ Ports ouverts sur la Bbox.\033[0m"
+  else
+    echo -e "\033[1;33m⚠ Ouverture des ports sur la Bbox en échec — le déploiement n'en dépend pas.\033[0m"
+  fi
 else
   echo -e "\033[1;33m⚠ Bbox non détectée sur ${BBOX_IP} — ouvrez les ports manuellement.\033[0m"
   echo -e "\033[1;33m⚠ Relancez manuellement : bash open-bbox-ports2.sh\033[0m"
@@ -431,3 +507,8 @@ echo ""
 echo "════════════════════════════════════════════════════════════════════"
 echo "  Setup terminé."
 echo "════════════════════════════════════════════════════════════════════"
+
+if $DEPLOY_FAILED; then
+  echo -e "\033[0;31m✗ ERROR : $APP_NAME n'est PAS déployée (échec ci-dessus).\033[0m" >&2
+  exit 1
+fi

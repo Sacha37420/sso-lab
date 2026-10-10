@@ -20,8 +20,16 @@ function envVal(file, key) {
   return m[1].trim().replace(/^["']|["']$/g, '');
 }
 
+/** Dossier d'une app : `deploiement/<app>` s'il existe (emplacement cible, voir
+ * CLAUDE.md), sinon `<app>` à la racine (apps pas encore déménagées). Même règle
+ * que registry_app_dir dans scripts/lib/registry.sh. */
+function appDir(app) {
+  const deployed = path.join(DEV_ROOT, 'deploiement', app);
+  return fs.existsSync(deployed) ? deployed : path.join(DEV_ROOT, app);
+}
+
 function frontendPath(app) {
-  const composeFile = path.join(DEV_ROOT, app, 'docker-compose.yml');
+  const composeFile = path.join(appDir(app), 'docker-compose.yml');
   if (!fs.existsSync(composeFile)) return null;
   const content = fs.readFileSync(composeFile, 'utf8');
   const paths = [...content.matchAll(HANDLE_PATH_RE)].map((m) => m[1]);
@@ -31,7 +39,7 @@ function frontendPath(app) {
 /** Chemin du dossier e2e/ d'une app — seule chose nécessaire pour cataloguer
  * (--list, pas de navigateur, pas besoin de DOMAIN ni de secrets). */
 export function e2eDirFor(app) {
-  return path.join(DEV_ROOT, app, 'frontend', 'e2e');
+  return path.join(appDir(app), 'frontend', 'e2e');
 }
 
 /** Résolution complète pour un run réel : URL publique de l'app + identifiants

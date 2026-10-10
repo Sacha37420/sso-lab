@@ -15,6 +15,10 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Registre des apps (contrat multi-dev, I1) : le dossier d'une app se demande à
+# registry_app_dir, jamais par un « $ROOT/<app> » écrit en dur.
+# shellcheck source=lib/registry.sh
+source "$SCRIPT_DIR/scripts/lib/registry.sh"
 
 # ── Parsing des arguments ──────────────────────────────────────────────────────
 APP_NAME=""
@@ -38,16 +42,17 @@ while IFS= read -r compose; do
   dir="$(dirname "$compose")"
   [[ "$dir" == "$SCRIPT_DIR/sso-lab" || "$dir" == "$SCRIPT_DIR/infra" ]] && continue
   ORDERED_DIRS+=("$dir")
-done < <(find "$SCRIPT_DIR" -mindepth 2 -maxdepth 2 -name "docker-compose.yml" ! -path "*/_templates/*" | sort)
+done < <(registry_dirs_with docker-compose.yml | sed 's|$|/docker-compose.yml|')
 
 # ── Fonctions utilitaires ──────────────────────────────────────────────────────
 
 # Retourne le dossier d'une stack par son nom, exit 1 si introuvable
 find_dir() {
-  local name="$1"
-  for dir in "${ORDERED_DIRS[@]}"; do
-    [[ "$(basename "$dir")" == "$name" ]] && echo "$dir" && return 0
-  done
+  local name="$1" dir
+  # Le chemin vient du registre ; la stack n'existe que si ce dossier porte un
+  # docker-compose.yml (même critère que la découverte de ORDERED_DIRS).
+  dir="$(registry_app_dir "$name")" || return 1
+  [[ -f "$dir/docker-compose.yml" ]] && echo "$dir" && return 0
   return 1
 }
 
@@ -116,21 +121,27 @@ process_stack() {
   local label
   label="$(build_label "$dir")"
 
+  # Le code de retour de `docker compose up` est REMONTÉ : un build raté ne doit
+  # pas ressortir en succès (constaté : setup2.sh affichait « ✓ déployée », code
+  # 0, sur un `pip install` en échec). Seul le mode mono-stack s'en sert pour
+  # son code de sortie ; les boucles « toutes stacks » continuent comme avant.
+  local status=0
   if [[ "$FORCE" == true ]]; then
     echo "■ $name — arrêt..."
     compose_down "$dir"
     echo "▶ $name — démarrage${label}..."
-    compose_up "$dir"
+    compose_up "$dir" || status=$?
     echo ""
   else
     if is_active "$dir"; then
       echo "✓ $name — déjà actif"
     else
       echo "▶ $name — démarrage${label}..."
-      compose_up "$dir"
+      compose_up "$dir" || status=$?
       echo ""
     fi
   fi
+  return $status
 }
 
 # ── Point d'entrée ─────────────────────────────────────────────────────────────
@@ -144,6 +155,7 @@ if [[ -n "$APP_NAME" ]]; then
     exit 1
   }
   process_stack "$APP_DIR"
+  exit $?
 
 else
 
