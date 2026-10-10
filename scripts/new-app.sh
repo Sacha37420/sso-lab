@@ -103,7 +103,32 @@ port_in_use() {
   # LIBRE. Constaté : le port 8085, en écoute, a été attribué à une app.
   local listening
   listening="$(ss -tln 2>/dev/null || true)"
-  grep -qE ":$1[[:space:]]" <<< "$listening"
+  grep -qE ":$1[[:space:]]" <<< "$listening" && return 0
+  # `ss` ne voit que l'espace réseau où tourne CE script : lancé par le moteur
+  # (conteneur lab-mcp), il ne voit aucun port de l'hôte. Constaté le 2026-10-11 :
+  # 8085/4203, tenus par google-agenda (cadriciel dev2/, même démon Docker, registre
+  # .ports distinct), ont été attribués à un projet, dont le premier déploiement a
+  # échoué (« port is already allocated »). On interroge donc aussi le démon : ports
+  # liés par TOUT conteneur, démarré ou non, des deux cadriciels.
+  grep -qx "$1" <<< "$(_docker_bound_ports)"
+}
+
+# Ports d'hôte liés par un conteneur quelconque du démon (un par ligne). Mis en
+# cache : next_port appelle port_in_use en boucle.
+_DOCKER_BOUND_PORTS_CACHE=""; _DOCKER_BOUND_PORTS_DONE=false
+_docker_bound_ports() {
+  if ! $_DOCKER_BOUND_PORTS_DONE; then
+    local ids
+    ids="$(docker ps -aq 2>/dev/null || true)"
+    if [[ -n "$ids" ]]; then
+      # shellcheck disable=SC2086
+      _DOCKER_BOUND_PORTS_CACHE="$(docker inspect --format \
+        '{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{println .HostPort}}{{end}}{{end}}' \
+        $ids 2>/dev/null | grep -E '^[0-9]+$' | sort -u || true)"
+    fi
+    _DOCKER_BOUND_PORTS_DONE=true
+  fi
+  printf '%s\n' "$_DOCKER_BOUND_PORTS_CACHE"
 }
 
 # Retourne le premier port libre >= $1 (non dans le registre, non actif)

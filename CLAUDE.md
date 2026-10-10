@@ -176,6 +176,15 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
   espace pour actif tant qu'une connexion lui reste (`keepalive off` dans la passerelle).
 - **`ss … | grep -q` sous `pipefail`** déclare libre un port en écoute (`grep` sort tôt, `ss`
   reçoit SIGPIPE) : c'était dans `new-app.sh`.
+- **`ss` ne voit que l'espace réseau où il tourne** : lancé par le moteur (conteneur), `new-app.sh`
+  ne voyait aucun port de l'hôte et a attribué 8085/4203, tenus par `google-agenda` (`dev2/`, même
+  démon Docker, registre `.ports` distinct). Premier déploiement réel d'un projet en échec
+  (« port is already allocated »). La vérification interroge maintenant aussi le démon (ports liés
+  par tout conteneur, démarré ou non, des deux cadriciels).
+- **Fermer `CONNECT` sur la base `postgres` casse le lanceur de tests de Django** : il s'y connecte
+  pour créer et supprimer la base de test (« cannot drop the currently open database », après des
+  tests pourtant verts). `app-test.sh` donne ce droit à son rôle transitoire, et le lui retire
+  avant `DROP ROLE` (un droit sur une base est une dépendance qui bloque la suppression du rôle).
 - **Depuis un conteneur, `localhost` n'est pas l'hôte** : une sonde Keycloak sur `localhost`
   concluait à tort que le SSO était arrêté (`scripts/lib/kcprobe.sh`).
 - **`vibe mcp add` sur un nom existant répond « already configured », code 0, sans rien changer** ;
@@ -196,7 +205,8 @@ Le moteur, la passerelle, `lab-admin` et le runner sont en service et vérifiés
 test. Ce qui reste à faire avant d'ouvrir le lab à un autre développeur (autorisations `oauth-hub`,
 durcissement de l'hôte, bascule des 17 apps vers `dev_sacha` et `deploiement/`, parcours réel d'un
 dev) est suivi dans `chantiers/multi-dev/BASCULE.md` — non versionné, à lire avant toute action
-sur ce sujet. **Tant que la bascule n'est pas finie, la séparation des bases n'est pas effective.**
+sur ce sujet. Depuis le 2026-10-11 la séparation des bases est effective pour les rôles de dev (voir « Base de
+données ») ; les apps historiques partagent encore le rôle `devuser` jusqu'à leur bascule.
 
 ---
 
@@ -378,6 +388,15 @@ bash scripts/setup2.sh mon-app --yes
 
 **Aucune des deux instances ne publie jamais le port 5432** sur l'hôte ni sur Internet — même
 règle que pour toute base du lab.
+
+**Aucune connexion réseau sans mot de passe** (depuis le 2026-10-11) : `pg_hba.conf` ne garde le
+`trust` que pour le socket local et la boucle locale — c'est par là que passent
+`docker exec … psql` (tous les scripts) et les healthchecks. Tout conteneur présente un mot de
+passe, `devuser`/`gisuser` compris. Les scripts d'init qui inséraient un `trust` réseau
+(`infra/init*/01_pg_hba_trust.sh`) sont supprimés : ne pas les réintroduire. `CONNECT` est retiré
+à `PUBLIC` sur `devdb`, `gisdb`, `postgres` et les modèles : un rôle `dev_<uid>` n'entre que dans
+sa propre base (`carto_reader` a un `CONNECT` explicite sur `gisdb`). État lisible par
+`bash scripts/dev-db.sh hba-status`.
 
 ### Convention de nommage des identifiants
 

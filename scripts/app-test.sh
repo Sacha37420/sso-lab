@@ -122,6 +122,9 @@ cleanup() {
       psql_admin <<< "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE);" > /dev/null 2>&1 || true
     done < <(docker exec "$PG_CONTAINER" psql -X -U "$PG_ADMIN" -d postgres -tAc \
                "SELECT datname FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE r.rolname = '${TEST_ROLE}'" < /dev/null 2>/dev/null || true)
+    # Le droit CONNECT sur « postgres » est une dépendance : sans ce REVOKE,
+    # DROP ROLE échoue et le rôle transitoire resterait en base.
+    psql_admin <<< "REVOKE CONNECT ON DATABASE postgres FROM \"${TEST_ROLE}\";" > /dev/null 2>&1 || true
     psql_admin <<< "DROP ROLE IF EXISTS \"${TEST_ROLE}\";" > /dev/null 2>&1 \
       || log "⚠ le rôle transitoire ${TEST_ROLE} n'a pas pu être supprimé (${PG_CONTAINER}) — à retirer à la main"
   fi
@@ -141,6 +144,11 @@ if [[ "$DB_USER" =~ ^dev_[a-z][a-z0-9]{1,30}$ && -n "$DB_NAME" ]]; then
   if ! psql_admin <<SQL
 CREATE ROLE "${TEST_ROLE}" WITH LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD '${TEST_PW}' VALID UNTIL 'tomorrow';
 GRANT "${DB_USER}" TO "${TEST_ROLE}";
+-- La base de maintenance « postgres » est fermée à PUBLIC (dev-db.sh
+-- lockdown-connect) : sans ce droit, le lanceur de tests de Django ne peut ni
+-- créer ni SUPPRIMER sa base de test (« cannot drop the currently open
+-- database », constaté le 2026-10-11). Droit limité à ce rôle transitoire.
+GRANT CONNECT ON DATABASE postgres TO "${TEST_ROLE}";
 SQL
   then
     TEST_ROLE=""

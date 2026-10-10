@@ -112,7 +112,6 @@ services:
     volumes:
       - postgis-data:/var/lib/postgresql/data
       - ./init-postgis/00_schemas.sql:/docker-entrypoint-initdb.d/00_schemas.sql:ro
-      - ./init-postgis/01_pg_hba_trust.sh:/docker-entrypoint-initdb.d/01_pg_hba_trust.sh:ro
     networks:
       - dev-net
     healthcheck:
