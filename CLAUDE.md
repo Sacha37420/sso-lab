@@ -168,18 +168,13 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
 - **Le lien direct vers une page de `lab-admin` retombe sur l'accueil** après le passage par
   Keycloak (`redirectUri = appUrl`, antérieur au chantier) — y compris `/projets/<app>`.
 
-### État de la bascule (à tenir à jour)
+### État de la bascule
 
-- [x] Moteur, passerelle, `lab-admin`, runner : en service et vérifiés avec les comptes de test.
-- [ ] `oauth-hub` : autoriser `lab-mcp` et `lab-admin` ; corriger les portées GitHub
-      (`read:user repo`). Tant que ce n'est pas fait : ni création de projet, ni ticket, ni `GH_TOKEN`.
-- [ ] **Ports publiés par l'hôte** joignables depuis un espace de travail (sshd avec mot de passe,
-      LDAP 389, pgAdmin 5050, Keycloak 8080) — à fermer avant d'ouvrir le lab à un autre dev.
-- [ ] pgAdmin : ouvert à tout `developers` avec le rôle superutilisateur `devuser`.
-- [ ] Bascule des 17 apps, une par une : base `dev_sacha` / `gis_sacha`, `app-relocate.sh`,
-      redéploiement. Puis `dev-db.sh lockdown-connect` et `lockdown-hba` (retrait du `trust`).
-      **Tant que le `trust` existe, la séparation des bases est fictive.**
-- [ ] Parcours réel d'un dev (première connexion, GitHub, projet, VS Code, déploiement).
+Le moteur, la passerelle, `lab-admin` et le runner sont en service et vérifiés avec les comptes de
+test. Ce qui reste à faire avant d'ouvrir le lab à un autre développeur (autorisations `oauth-hub`,
+durcissement de l'hôte, bascule des 17 apps vers `dev_sacha` et `deploiement/`, parcours réel d'un
+dev) est suivi dans `chantiers/multi-dev/BASCULE.md` — non versionné, à lire avant toute action
+sur ce sujet. **Tant que la bascule n'est pas finie, la séparation des bases n'est pas effective.**
 
 ---
 
