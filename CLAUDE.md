@@ -76,6 +76,113 @@ quand une app déployée n'expose aucun spec, pour que le trou ne puisse plus r�
 
 ---
 
+## Lab multi-développeurs — moteur, projets, espaces de travail
+
+Mis en service le 2026-10-10 (moteur et `lab-admin`) ; **la bascule des apps existantes n'est pas
+faite** (voir « État de la bascule » en fin de section). Contrat complet, interfaces et preuves :
+`chantiers/multi-dev/` (non versionné tant que la bascule n'est pas finie — il décrit des
+faiblesses encore ouvertes et ce dépôt est public).
+
+### Qui est quoi
+
+- **Superutilisateur** : `LAB_SUPERUSER` dans le `.env` racine (`sacha`). **Jamais un groupe LDAP** :
+  `e2e_member` est dans `admins` *et* `developers`.
+- **Développeur** : membre du groupe `developers` dont l'uid a la forme `^[a-z][a-z0-9]{1,30}$`.
+  Il est inscrit (`.devs`) **automatiquement à sa première connexion à `lab-admin`** : rôle et base
+  PostgreSQL `dev_<uid>`, dossier de travail. Mettre un compte dans `developers` (`add-user.sh`)
+  est donc l'acte d'autorisation. `e2e_member` (tiret bas) ne peut pas être inscrit — voulu, mais
+  il n'existe par conséquent **aucun compte synthétique pour tester le parcours « dev »**.
+- **Propriété d'une app** : `.owners` (`<app>:<uid>`), gitignoré comme `.ports` et `.devs`. Une app
+  sans ligne est une app historique du superutilisateur.
+
+### Les pièces
+
+| Pièce | Où | Rôle |
+|---|---|---|
+| **Moteur** | `lab-mcp/` (racine, pas un sous-module), conteneurs `lab-mcp` + `lab-ws-gateway` | **Seul composant privilégié** (monte `docker.sock`). Deux entrées sur les mêmes fonctions : `/mcp` pour une IA, `/mcp/api/…` pour l'interface. Description faisant foi : `lab-mcp/API.md` |
+| **Interface** | `lab-admin` | « Mes projets » et page projet : tout se fait **sans IA**. N'a ni socket Docker ni script ; son frontend appelle le moteur |
+| **Espace de travail** | `workspace/` (image `lab-workspace`), conteneur `ws-<uid>` | Un VS Code par projet, à la demande : code-server, Claude Code, Mistral Vibe. Pas de Docker, pas de `sudo`, ni `dev-net` ni `sso-net` |
+| **Scripts** | `scripts/app-*.sh`, `validate-app.sh`, `check-app-name.sh`, `dev-db.sh`, `lab-lock.sh`, `lib/registry.sh` | Les seules commandes que le moteur exécute |
+
+### Règles à ne pas rouvrir
+
+- **Un dev n'a ni compte Unix, ni SSH, ni Docker.** Ce qui tient la séparation n'est pas l'absence
+  du groupe `docker` mais `validate-app.sh` : un dépôt libre déployé par le moteur serait un accès
+  root. Il refuse `privileged`, `cap_add`, `devices`, `docker.sock`, tout montage hors du dossier
+  de l'app, tout réseau autre que `dev-net`/`sso-net`, tout `ports:` hors `.ports`, tout chemin
+  Caddy autre que `/<app>` et `/<app>-api`, un `.keycloak-service-account-roles` non vide (rôles
+  d'administration du realm), un `.env` suivi par git.
+- **On ne déploie qu'un commit présent sur GitHub.** Le dev pousse ; le moteur récupère
+  (`app-sync.sh`, clé de déploiement en lecture seule par dépôt, `<LAB_STATE_DIR>/deploy-keys/`),
+  valide, construit, **lance les tests backend, puis seulement démarre**. Un test rouge laisse
+  l'ancienne version en service (pas de `clean2.sh` ni de `down` sur ce chemin).
+- **Toute app vit dans `deploiement/<app>`** (sous-module). Les nouvelles y naissent ; une app
+  historique reste à la racine jusqu'à sa bascule. Ne jamais écrire `$ROOT/<app>` en dur :
+  `registry_app_dir` (shell), `appDir` (`runner/lib/resolve-app.js`), `app_dir`
+  (`lab-admin/backend/api/lab_groups.py`) appliquent la même règle — `deploiement/` d'abord.
+- **Un déploiement ou un build à la fois sur l'hôte** : `scripts/lab-lock.sh <commande>` (code 75 si
+  occupé). `setup2.sh` le prend lui-même ; ne jamais poser un `flock` à part.
+- **Nom d'app** : `check-app-name.sh` (unicité, noms réservés, pas de préfixe/extension d'un nom
+  existant, pas de `-api`/`-admin`, chemins Caddy réellement servis). S'applique aussi au
+  superutilisateur.
+- **Le jeton GitHub est toujours celui de l'appelant** (via `oauth-hub`), jamais le `gh` de l'hôte
+  (il porte `delete_repo`). Pas de portée `delete_repo` : une création ratée après la création du
+  dépôt nomme le dépôt vide à supprimer à la main.
+- **`lab-admin` a deux niveaux** : la porte (`admins,developers`) et l'administration (`admins`,
+  permission DRF par défaut `IsLabAdmin`). Toute nouvelle vue est d'admin tant qu'elle ne déclare
+  rien ; toute nouvelle route Angular porte `adminGuard`. Ne jamais recréer `lab-admin-backend`
+  sur une image antérieure au commit `c4449e8` avec `KEYCLOAK_REQUIRED_GROUPS=admins,developers`.
+- **`code-server` (`/code`) reste réservé au superutilisateur** : il monte tout le dépôt, le socket
+  Docker, `~/.ssh` et `~/.claude`.
+- **Mots de passe des rôles `dev_<uid>`** : `infra/dev-roles.env`, jamais `infra/.env` (c'est
+  l'`env_file` de `dev-postgres` et `dev-pgadmin`).
+
+### Règles de développement imposées à tout projet (IA comprises)
+
+Chaque projet scaffoldé porte `FEUILLE_DE_ROUTE.md` (lots, tests à passer par lot, « vérifié le »),
+`CLAUDE.md` et `AGENTS.md` (lu par Mistral Vibe) — gabarits dans `_templates/regles/`, copie
+globale dans chaque espace de travail (`workspace/regles-lab.md`). **Imposé par la machine** :
+feuille de route présente et bien formée, `frontend/e2e/cloisonnement.spec.ts` présent, tests
+backend verts avant mise en service, verdicts enregistrés avec chaque déploiement
+(`<LAB_STATE_DIR>/deployed/<app>.json`). Non imposable : la qualité des tests écrits.
+
+Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to_do_<sujet>.md`
+(lots, tests par lot, date de vérification), et le régime chantier garde son contrat.
+
+### Pièges constatés
+
+- **Deux secteurs lancés en parallèle sur une API dont seules les routes étaient écrites** : le
+  consommateur s'est arrêté (à raison), la forme des réponses n'existait pas. Une interface n'est
+  « écrite » que si les réponses le sont ; sinon le producteur publie d'abord sa description.
+- **Une règle pare-feu `--gid-owner <groupe>` ne voit que le groupe primaire**, et les ponts Docker
+  ne tiennent pas tous dans `172.16.0.0/12` (`atelier3d-net` est en `192.168.16.0/20`).
+- **code-server n'a pas d'option de préfixe** : c'est le proxy qui retire `/ws/<uid>`, et il doit
+  transmettre l'hôte public inchangé, sinon tout WebSocket est refusé en 403. Il tient aussi un
+  espace pour actif tant qu'une connexion lui reste (`keepalive off` dans la passerelle).
+- **`ss … | grep -q` sous `pipefail`** déclare libre un port en écoute (`grep` sort tôt, `ss`
+  reçoit SIGPIPE) : c'était dans `new-app.sh`.
+- **Depuis un conteneur, `localhost` n'est pas l'hôte** : une sonde Keycloak sur `localhost`
+  concluait à tort que le SSO était arrêté (`scripts/lib/kcprobe.sh`).
+- **`vibe mcp add` sur un nom existant répond « already configured », code 0, sans rien changer** ;
+  Vibe pose des dossiers en lecture seule dans `~/.vibe` (`chmod -R u+rwX` avant tout `rm -rf`).
+- **Le lien direct vers une page de `lab-admin` retombe sur l'accueil** après le passage par
+  Keycloak (`redirectUri = appUrl`, antérieur au chantier) — y compris `/projets/<app>`.
+
+### État de la bascule (à tenir à jour)
+
+- [x] Moteur, passerelle, `lab-admin`, runner : en service et vérifiés avec les comptes de test.
+- [ ] `oauth-hub` : autoriser `lab-mcp` et `lab-admin` ; corriger les portées GitHub
+      (`read:user repo`). Tant que ce n'est pas fait : ni création de projet, ni ticket, ni `GH_TOKEN`.
+- [ ] **Ports publiés par l'hôte** joignables depuis un espace de travail (sshd avec mot de passe,
+      LDAP 389, pgAdmin 5050, Keycloak 8080) — à fermer avant d'ouvrir le lab à un autre dev.
+- [ ] pgAdmin : ouvert à tout `developers` avec le rôle superutilisateur `devuser`.
+- [ ] Bascule des 17 apps, une par une : base `dev_sacha` / `gis_sacha`, `app-relocate.sh`,
+      redéploiement. Puis `dev-db.sh lockdown-connect` et `lockdown-hba` (retrait du `trust`).
+      **Tant que le `trust` existe, la séparation des bases est fictive.**
+- [ ] Parcours réel d'un dev (première connexion, GitHub, projet, VS Code, déploiement).
+
+---
+
 ## Infrastructure partagée entre cadriciels (`dev/` / `dev2/`)
 
 Cet hôte fait tourner **deux cadriciels indépendants** : `dev/` (ce dépôt, « lab1 ») et
@@ -825,6 +932,9 @@ chaud. `rotate-secrets-full.sh` termine lui-même par `recompose_docker.sh --for
 | `robot-lab` | `Sacha37420/robot-lab` | Django + Angular (+ `engine/` Playwright) | 8094 / 4212 |
 | `storage` | `Sacha37420/storage` | Django + Angular | 8093 / 4211 |
 | `traitement-de-fichiers-compils` | `Sacha37420/traitement-de-fichiers-compils` | Django + Angular | 8089 / 4207 |
+
+> `lab-admin` et `lab-mcp` font partie du cadriciel : ils restent à la racine, jamais dans
+> `deploiement/` (`app-relocate.sh` les refuse).
 
 > `peripheriques` a un **troisième service**, `media/` (MediaMTX + ffmpeg, conteneur
 > `peripheriques-media`) : seul détenteur de la caméra et du micro de l'hôte, il publie le port ICE
