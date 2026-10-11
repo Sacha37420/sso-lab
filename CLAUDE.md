@@ -51,10 +51,12 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
 
 - **`to_do_storage.md`** — `storage` est un service du cadriciel dont l'interface n'a presque aucun
   geste usuel de gestionnaire de fichiers (analyse du 2026-10-11 : 1 geste présent sur 27). Plan
-  par lots, neuf questions à trancher par le propriétaire. **Lot 0 fait** : un fichier déposé ne
-  s'exécute plus sur l'origine du lab (`api/content_safety.py`, liste blanche des types servis
-  `inline`, 49 tests — `python manage.py test --settings=config.settings_test api`). Restes
-  connus : `?token=` en paramètre d'URL (trois frontends s'en servent), `DEBUG=True` en service.
+  par lots ; décisions du propriétaire du 2026-10-11 dans le fichier. **Lots 0, 1 et 2 en
+  service** : contenu actif neutralisé (`api/content_safety.py`), sélection, clavier, menu
+  contextuel, suppression annulable, glisser-déposer, file d'envoi, conflits de nom. Tests :
+  `python manage.py test --settings=config.settings_test api` (backend) et
+  `LAB_ROOT=$PWD bash storage/frontend/e2e/jouer-gestes.sh --deploye` (25 gestes en navigateur
+  réel, compte `e2edev`). Reste connu : `?token=` en paramètre d'URL (trois frontends s'en servent).
   **Neuf apps consomment son API** (les six listées plus bas, plus `code-route`, `craft-lab` et
   son propre frontend) : aucune route existante ne doit changer.
 - **Sauvegardes** — aucune procédure (voir « Installer le lab »).
@@ -220,11 +222,24 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
   continuer à le faire : les `.env` portent `SCRIPT_NAME=/<app>-api`, gunicorn exige alors que
   chaque chemin commence par ce préfixe — que Caddy retire — et répond 500 à tout. Pas de journal
   d'accès : il écrirait en clair les `?key=` et `?ticket=` passés en paramètre.
-- Ces corrections sont commitées dans les 17 apps ; la première est en service partout, les deux
-  autres **seulement là où l'image a été reconstruite depuis** (suivi :
-  `chantiers/multi-dev/BASCULE.md`). Un dossier d'app peut donc être en avance sur son image :
-  avant tout `setup2.sh <app>`, regarder ce que la reconstruction embarque (`git log` depuis la
-  date de création du conteneur).
+- Ces trois corrections sont **en service** dans toutes les apps depuis le 2026-10-11, sauf
+  `atelier-3d` et `bilan-thermique` (reconstruction reportée par le propriétaire : heures de
+  compilation pour l'une, commit « wip » en tête pour l'autre) et `test` (au prochain déploiement
+  par le moteur). Ces trois-là ont la première règle seulement ; leur documentation d'API répond
+  encore sans connexion.
+- **Reconstruire sans couper** : construire l'image pendant que l'ancienne tourne, lancer
+  `scripts/app-test.sh <app>` dessus, puis `up -d --no-build` — c'est l'ordre du chemin à portes.
+  `setup2.sh` sur une app historique commence au contraire par `clean2.sh` (arrêt, volumes non
+  externes supprimés) et laisse l'app coupée pendant tout le build.
+- **Un lanceur de tests qui a besoin d'options le dit dans `FEUILLE_DE_ROUTE.md`** (section
+  « Commande de test ») : `peripheriques` et `storage` exigent `--settings=config.settings_test`,
+  sans quoi leurs tests prennent le `.env` de service et échouent. `lab-admin` reste à part : son
+  rôle `lab` ne peut pas créer de base de test, `app-test.sh` ne sait pas le tester (procédure à
+  PostgreSQL jetable en tête de `lab-admin/backend/api/tests.py`).
+- **Une amorce de test ne doit rien exécuter sur la connexion de maintenance** (base `postgres`,
+  `NAME` vide) : le rôle de test n'y a que `CONNECT`. Une erreur y fait retomber Django sur la base
+  de test, qu'il ne peut alors plus supprimer (« cannot drop the currently open database » après
+  des tests verts — vu sur `restauration`).
 
 ### Pièges constatés
 
