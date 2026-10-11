@@ -137,9 +137,9 @@ EXISTING_EMAIL=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
 # Ce script listait autrefois les groupes en excluant ceux de .hidden-groups.
 # Ce fichier a été retiré le 2026-07-30 : il n'existait que pour cacher
 # dom/harem du temps où ils ne servaient qu'à google-agenda (app déplacée vers
-# dev2/). Ces deux groupes sont maintenant requis par app-builder et storage —
-# les masquer ici donnait une vue fausse des droits à attribuer à un nouveau
-# compte, ce qui est exactement l'inverse du but de ce script.
+# dev2/). Ces deux groupes ont été supprimés du lab le 2026-10-11. Masquer un
+# groupe donnait une vue fausse des droits à attribuer à un nouveau compte, ce
+# qui est exactement l'inverse du but de ce script.
 #
 # Les apps, elles, sont toutes affichées : c'est un outil d'administration, il
 # doit montrer l'état réel du lab. (.app-descriptions ne sert plus qu'à la

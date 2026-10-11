@@ -768,7 +768,7 @@ mobile) :
 | `traitement-de-fichiers-compils` | [Sacha37420/traitement-de-fichiers-compils](https://github.com/Sacha37420/traitement-de-fichiers-compils) | 8089 / 4207 | `developers` | postgres | Dépôt de fichiers : édition, suivi des modifications, historique |
 | `arbre-genealogique` | [Sacha37420/arbre-genealogique](https://github.com/Sacha37420/arbre-genealogique) | 8090 / 4208 | *(aucun — ouvert à tout compte du realm ; autorisation par arbre via `Tree.owner_email`/`is_public`/`TreeShare`)* | postgres | Arbre généalogique : personnes, relations, périodes d'union |
 | `carto-lab` | [Sacha37420/carto-lab](https://github.com/Sacha37420/carto-lab) | 8091 / 4209 | `developers` | **postgis** (dédiée) | SIG : import de cartes, systèmes de coordonnées, calculs géo, météo France |
-| `storage` | [Sacha37420/storage](https://github.com/Sacha37420/storage) | 8093 / 4211 | `famille`,`amis`,`developers`,`admins`,`dom`,`harem`,`manager`,`cuisinier`,`serveur`,`proprietaires` (tous — API interne au lab) | postgres | Stockage de fichiers du lab : espaces personnels, partages par groupe, API consommée par les autres apps |
+| `storage` | [Sacha37420/storage](https://github.com/Sacha37420/storage) | 8093 / 4211 | `famille`,`amis`,`developers`,`admins`,`manager`,`cuisinier`,`serveur`,`proprietaires` (tous — API interne au lab) | postgres | Stockage de fichiers du lab : espaces personnels, partages par groupe, API consommée par les autres apps |
 | `atelier-3d` | [Sacha37420/atelier-3d](https://github.com/Sacha37420/atelier-3d) | 8092 / 4210 | `developers`, `famille`, `amis` | postgres | Reconstruction 3D (COLMAP+OpenMVS, CPU-only), impression 3D, mouvements, sémantique de bâtiment |
 | `robot-lab` | [Sacha37420/robot-lab](https://github.com/Sacha37420/robot-lab) | 8094 / 4212 (+ `engine` 8095) | `developers` | postgres | Robots de navigation web (Playwright + Claude/Mistral) : enregistrement de parcours, assistant IA, exécution + téléchargements |
 | `code-route` | [Sacha37420/code-route](https://github.com/Sacha37420/code-route) | 8096 / **4200** | tous les groupes | postgres | Apprentissage du code de la route : fiches, quiz thématiques, bilan personnalisé, génération IA de questions (+ Celery) |
@@ -796,9 +796,7 @@ Le code de chaque app vit intégralement dans son propre dépôt GitHub — clon
 précis via le pointeur de sous-module.
 
 > `storage`, `code-route` et `oauth-hub` requièrent volontairement **tous** les groupes existants
-> du realm, y compris `dom` (aujourd'hui sans membre réel côté `dev/`, hors compte de test
-> `e2e_member`) : les masquer donnerait une vue fausse des droits à attribuer à un nouveau
-> compte. Une app « ouverte à tout compte du realm » se déclare ainsi — par la liste complète des
+> du realm. Une app « ouverte à tout compte du realm » se déclare ainsi — par la liste complète des
 > groupes — et non en laissant `--require-group` vide, ce qui laisserait aussi passer les
 > auto-inscrits sans groupe.
 >
@@ -947,7 +945,7 @@ Les **outils d'administration** (page « Apps du lab » de `lab-admin`, catalogu
 
 | Utilisateur | Groupes | code-server |
 |---|---|---|
-| sacha | developers, admins, famille, amis, harem, manager, cuisinier, serveur, proprietaires | ✓ |
+| sacha | developers, admins, famille, amis, manager, cuisinier, serveur, proprietaires | ✓ |
 | hassan | developers, amis | ✓ |
 | lea | famille, amis | ✗ |
 | elodie | famille, manager, proprietaires | ✗ |

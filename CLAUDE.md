@@ -1186,10 +1186,10 @@ apps déployées (`conciergerie`, `storage`, `robot-lab`) n'apparaissaient nulle
 jamais testées**. Découplé le 2026-07-30. Une app hors vitrine est signalée par une étiquette
 « hors vitrine » dans lab-admin, pas masquée.
 
-> Il n'y a **plus** de fichier `.hidden-groups`. Il n'existait que pour cacher `dom`/`harem` du temps
-> où ils ne servaient qu'à `google-agenda` (app déplacée vers `dev2/` le 2026-07-29). Ces deux
-> groupes sont désormais requis par `app-builder` et `storage` : les masquer donnait une vue fausse
-> des droits à attribuer à un nouveau compte. Ne pas réintroduire ce mécanisme — si un groupe ne doit
+> Il n'y a **plus** de fichier `.hidden-groups`, ni de groupes `dom` et `harem` : ils ne servaient
+> qu'à `google-agenda` (déplacée vers `dev2/`) et ont été supprimés le 2026-10-11 de l'annuaire, de
+> Keycloak et des listes de groupes requis, à la demande du propriétaire. Ne pas les recréer, ni
+> réintroduire un mécanisme de masquage — si un groupe ne doit
 > pas apparaître, c'est qu'il ne doit pas exister dans le realm.
 
 ---

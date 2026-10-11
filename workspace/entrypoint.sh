@@ -170,7 +170,13 @@ fi
 # que la redirection de ports /absproxy/<port>/.
 cd "$WORK" || die "impossible d'entrer dans $WORK"
 log "code-server sur :8080, dossier $WORK, à servir sous /ws/$LAB_UID/"
+# --ignore-last-opened : la maison du dev (~/.local/share/code-server) est
+# commune à tous ses projets, et code-server y retient le dernier dossier
+# ouvert — qu'il préfère au dossier donné ici. Or l'espace ne monte que le
+# projet en cours : sans cette option, ouvrir un second projet affichait
+# « Workspace does not exist » sur le dossier du précédent.
 exec code-server \
   --config "$LAB_DIR/code-server.yaml" \
   --abs-proxy-base-path "/ws/$LAB_UID" \
+  --ignore-last-opened \
   "$WORK"
