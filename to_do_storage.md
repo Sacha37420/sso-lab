@@ -629,6 +629,20 @@ espace, 356 Go libres).
 
 ---
 
+## Décisions du propriétaire (2026-10-11) — font foi sur les recommandations ci-dessous
+
+- **Q1 Suppression** : **définitive, avec annulation** (bandeau « Annuler » quelques secondes). Pas
+  de corbeille.
+- **Q2 Partages gérés par une app** : **tout y est permis, comme ailleurs** (il assume le risque
+  qu'une app perde une référence). L'interface signale simplement qu'un partage est géré par une
+  app ; elle n'interdit rien.
+- **Q3 Changement d'espace** : oui, entre espaces humains où l'on peut écrire.
+- **Q4 Liens publics** : non. « Copier le lien » exige une connexion et un droit.
+- **Q5 Quotas** : non pour l'instant ; afficher l'espace occupé.
+- **Q6 Tests de gestes** : un second fichier E2E propre à `storage`, lancé à la main, hors catalogue.
+- **Q8** : passer à `gunicorn`.
+- **Lots lancés** : 1 et 2 (frontend seul). Le lot 3 n'est pas lancé.
+
 ## 6. Questions à trancher
 
 **Q1 — Corbeille ou suppression définitive ?**

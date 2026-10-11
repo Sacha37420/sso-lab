@@ -259,8 +259,7 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
 ### État de la bascule
 
 Bascule des 16 apps historiques faite le 2026-10-11 (bases `dev_sacha`, `gis_sacha`, `lab` ;
-applications dans `deploiement/`). **Les anciens schémas de `devdb`/`gisdb` sont encore là, comme
-retour arrière** : ne les supprimer que sur demande explicite. Le moteur, la passerelle, `lab-admin` et le runner sont en
+applications dans `deploiement/`). Les anciens schémas de `devdb`/`gisdb` sont supprimés. Le moteur, la passerelle, `lab-admin` et le runner sont en
 service et vérifiés avec les comptes de test. Ce qui reste à faire avant d'ouvrir le lab à un autre développeur (autorisations `oauth-hub`,
 durcissement de l'hôte, bascule des 17 apps vers `dev_sacha` et `deploiement/`, parcours réel d'un
 dev) est suivi dans `chantiers/multi-dev/BASCULE.md` — non versionné, à lire avant toute action
@@ -485,8 +484,9 @@ bash scripts/setup2.sh mon-app --yes
   la même base). Personne n'utilise ce rôle à la main ; `reset_url.sh` ne propage son mot de passe
   qu'à ces quatre dossiers ;
 - `devdb` / `gisdb` et les rôles `devuser` / `gisuser` ne servent plus qu'à l'administration
-  (`docker exec … psql`, pgAdmin partagé). **Les anciens schémas y sont encore, intacts, comme
-  retour arrière** : ne pas les supprimer sans demande explicite ; ne jamais y remettre une app.
+  (`docker exec … psql`, pgAdmin partagé). Les anciens schémas en ont été supprimés le 2026-10-11,
+  à la demande du propriétaire, après restauration contrôlée de la sauvegarde d'avant bascule
+  (`~/sauvegardes/postgres-2026-10-11-0108.sql.gz`, `postgis-…`). **Ne jamais y remettre une app.**
 - Une nouvelle app naît dans la base de son propriétaire (`new-app.sh --owner`). Les valeurs
   `DB_NAME=devdb` / `DB_USER=devuser` du gabarit ne sont plus que des défauts historiques.
 
