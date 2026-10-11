@@ -47,6 +47,26 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
 
 ## Chantiers ouverts (à traiter, pas encore faits)
 
+### Feuilles de route en cours
+
+- **`to_do_storage.md`** — `storage` est un service du cadriciel dont l'interface n'a presque aucun
+  geste usuel de gestionnaire de fichiers (analyse du 2026-10-11 : 1 geste présent sur 27). Plan
+  par lots, neuf questions à trancher par le propriétaire. **Lot 0 fait** : un fichier déposé ne
+  s'exécute plus sur l'origine du lab (`api/content_safety.py`, liste blanche des types servis
+  `inline`, 49 tests — `python manage.py test --settings=config.settings_test api`). Restes
+  connus : `?token=` en paramètre d'URL (trois frontends s'en servent), `DEBUG=True` en service.
+  **Neuf apps consomment son API** (les six listées plus bas, plus `code-route`, `craft-lab` et
+  son propre frontend) : aucune route existante ne doit changer.
+- **`to_do_lab_media.md`** et `chantiers/lab-media/CONTRAT.md` — MediaMTX quitte `peripheriques`
+  pour une brique du cadriciel (`lab-media/`). Point de conception tranché par essai :
+  `authHTTPExclude` ouvre l'action à tous (à proscrire) ; un mini-service d'authentification
+  relaie `read` à l'app. La bascule de la caméra se fait avec le propriétaire.
+- **Sauvegardes** — aucune procédure (voir « Installer le lab »).
+- **Constats de relecture laissés au propriétaire** : `chantiers/multi-dev/rapports/` (`relecture-lab-admin.md`,
+  `audit-installation.md`) — documentation d'API publique et `.env` complet dans le conteneur
+  nginx du frontend (défauts du gabarit, donc de toutes les apps), deux lanceurs de tests de
+  cloisonnement, page « Apps du lab » redondante avec « Projets ».
+
 ### Huit apps sur quinze n'ont aucun test de cloisonnement ⚠️
 
 `analyse-lora`, `app-builder`, `arbre-genealogique`, `atelier-3d`, `conciergerie`, `lab-admin`,
@@ -78,10 +98,23 @@ quand une app déployée n'expose aucun spec, pour que le trou ne puisse plus r�
 
 ## Lab multi-développeurs — moteur, projets, espaces de travail
 
-Mis en service le 2026-10-10 (moteur et `lab-admin`) ; **la bascule des apps existantes n'est pas
-faite** (voir « État de la bascule » en fin de section). Contrat complet, interfaces et preuves :
-`chantiers/multi-dev/` (non versionné tant que la bascule n'est pas finie — il décrit des
-faiblesses encore ouvertes et ce dépôt est public).
+Mis en service le 2026-10-10 ; bascule des apps historiques faite le 2026-10-11 (voir « État de
+la bascule » en fin de section). Contrat complet, interfaces et preuves : `chantiers/multi-dev/`
+(non versionné : il décrit des points encore ouverts et ce dépôt est public).
+
+**Ce que voit un utilisateur — `lab-admin`** (seule interface du lab multi-dev) :
+- **Accueil** : présente le lab, joue l'initialisation à la première connexion, parcours en étapes.
+- **Services** (a absorbé « Outils ») : Keycloak, « Ma base et pgAdmin », Email (comptes d'envoi),
+  Storage, OAuth Hub, MCP ; cartes d'administration pour `admins` seulement.
+- **Projets** (a absorbé « Conception ») : sections « Projets de déploiement » (`deploiement/`) et
+  « Outils de dev » (cadriciel), d'après le champ `kind` du moteur ; état, version en service,
+  écart avec GitHub, liens vers l'app et son VS Code ; bloc App Builder pour `admins`.
+- Pour `admins` en plus : « Apps du lab », « Nouvel utilisateur », « Debug ». Les anciennes routes
+  `/outils`, `/conception` et `/code` (la route Angular, pas code-server) sont des redirections.
+- Toute nouvelle vue backend est d'admin tant qu'elle ne déclare rien (`IsLabAdmin` par défaut) ;
+  toute nouvelle route Angular d'admin porte `adminGuard`. Les tests backend demandent un
+  PostgreSQL jetable (le rôle `lab` ne peut pas créer de base) : commande en tête de
+  `lab-admin/backend/api/tests.py`.
 
 ### Qui est quoi
 
@@ -104,6 +137,7 @@ faiblesses encore ouvertes et ce dépôt est public).
 | **Interface** | `lab-admin` | « Mes projets » et page projet : tout se fait **sans IA**. N'a ni socket Docker ni script ; son frontend appelle le moteur |
 | **Espace de travail** | `workspace/` (image `lab-workspace`), conteneur `ws-<uid>` | Un VS Code par projet, à la demande : code-server, Claude Code, Mistral Vibe. Pas de Docker, pas de `sudo`, ni `dev-net` ni `sso-net` |
 | **pgAdmin par dev** | conteneur `pg-<uid>`, relais `lab-pg-relay` (`lab-mcp/pg-relay/`) | Un pgAdmin à la demande vers la **seule** base du dev, sans mot de passe enregistré, sur un réseau interne qui ne joint que le relais PostgreSQL |
+| **Comptes d'envoi d'email** | `lab-mcp/labmcp/smtp.py`, `scripts/app-smtp.sh`, `scripts/app-restart.sh` | Un dev définit ses comptes SMTP ; le lab pose les variables `EMAIL_*` de Django dans l'app. **Pas de service d'envoi** : l'app parle à son fournisseur |
 | **Scripts** | `scripts/app-*.sh`, `validate-app.sh`, `check-app-name.sh`, `dev-db.sh`, `lab-lock.sh`, `lib/registry.sh` | Les seules commandes que le moteur exécute |
 
 ### Règles à ne pas rouvrir
@@ -134,8 +168,22 @@ faiblesses encore ouvertes et ce dépôt est public).
   permission DRF par défaut `IsLabAdmin`). Toute nouvelle vue est d'admin tant qu'elle ne déclare
   rien ; toute nouvelle route Angular porte `adminGuard`. Ne jamais recréer `lab-admin-backend`
   sur une image antérieure au commit `c4449e8` avec `KEYCLOAK_REQUIRED_GROUPS=admins,developers`.
-- **`code-server` (`/code`) reste réservé au superutilisateur** : il monte tout le dépôt, le socket
-  Docker, `~/.ssh` et `~/.claude`.
+- **`code-server` (`/code`) est réservé au groupe `admins`** (`OAUTH2_PROXY_ALLOWED_GROUPS`,
+  `sso-lab/docker-compose.yml`) : il monte tout le dépôt, le socket Docker, `~/.ssh` et
+  `~/.claude` — y entrer vaut un accès root à l'hôte. Il était ouvert à `developers` jusqu'au
+  2026-10-11 (constaté par audit, refermé). **Ne jamais y remettre `developers`.** `e2e_member`,
+  membre d'`admins`, y entre : c'est un compte synthétique à mot de passe long, mais c'est un
+  second chemin vers l'hôte à garder en tête.
+- **Comptes d'envoi d'email (SMTP)** : mot de passe en écriture seule (jamais rendu, jamais
+  journalisé) ; identifiant et mot de passe en ASCII seulement (`smtplib` échoue sur un accent) ;
+  l'email d'essai ne part que vers l'adresse du compte de l'appelant et que vers Internet (jamais
+  une adresse interne : le moteur servirait de sonde de `sso-net`/`dev-net`) ; rien par MCP sauf
+  `smtp_status`. Aucun profil par défaut : le SMTP du lab (Keycloak) n'est jamais proposé aux devs.
+  Tant que le marqueur `LAB_SMTP_PROFILE` est dans le `.env` d'une app, ses sept clés `EMAIL_*`
+  sont gérées. Un déploiement ne réapplique pas un profil modifié : c'est `PUT …/smtp` qui le fait.
+- **Changer la configuration d'une app sans la reconstruire** : `scripts/app-restart.sh <app>`
+  (`up -d --no-build`, contrôle que l'image de chaque conteneur est la même avant et après, refus
+  si l'étiquette d'image ne désigne plus ce qui tourne).
 - **Mots de passe des rôles `dev_<uid>`** : `infra/dev-roles.env`, jamais `infra/.env` (c'est
   l'`env_file` de `dev-postgres` et `dev-pgadmin`). Le dev lit le sien dans `lab-admin` (bloc
   « Ma base », au clic seulement, `Cache-Control: no-store`, journalisé) — décision utilisateur
@@ -215,7 +263,8 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
 ### État de la bascule
 
 Bascule des 16 apps historiques faite le 2026-10-11 (bases `dev_sacha`, `gis_sacha`, `lab` ;
-applications dans `deploiement/`). Le moteur, la passerelle, `lab-admin` et le runner sont en
+applications dans `deploiement/`). **Les anciens schémas de `devdb`/`gisdb` sont encore là, comme
+retour arrière** : ne les supprimer que sur demande explicite. Le moteur, la passerelle, `lab-admin` et le runner sont en
 service et vérifiés avec les comptes de test. Ce qui reste à faire avant d'ouvrir le lab à un autre développeur (autorisations `oauth-hub`,
 durcissement de l'hôte, bascule des 17 apps vers `dev_sacha` et `deploiement/`, parcours réel d'un
 dev) est suivi dans `chantiers/multi-dev/BASCULE.md` — non versionné, à lire avant toute action
@@ -257,7 +306,42 @@ complète, schéma et fichiers de config : `README.md` section 1.5.
 
 ---
 
+## Installer le lab sur une machine neuve
+
+`bash scripts/install.sh` — rejouable ; **`--check` ne fait rien et dit ce qui manque** (c'est le
+seul mode à lancer sur une machine en service, où il doit conclure « rien à faire »). Il crée les
+`.env` depuis les gabarits (base selon l'emplacement : `lab` à la racine, `dev_<uid>` dans
+`deploiement/`), génère les secrets restés à `CHANGE_ME`, reconstruit `.ports`, crée `edge-net`,
+les rôles et bases (`dev-db.sh ensure-lab`, `ensure <superutilisateur> --gis`), ferme `CONNECT`,
+déploie le cadriciel d'abord (`storage`, `oauth-hub`, `lab-admin`, `lab-mcp`) puis les apps,
+construit `lab-workspace`. Détail et gestes qui restent humains (fiche GitHub d'`oauth-hub`, SMTP
+de Keycloak, domaine, routeur, `~/edge-router/`) : `README.md` §1.2.
+
+- Prouvé par morceaux (clone de test, instances PostgreSQL jetables), **jamais joué de bout en
+  bout** : cet hôte ne peut pas porter un second lab. À la première vraie installation, s'attendre
+  à des écarts dans les étapes de démarrage de `sso-lab`, des apps et de l'image d'espace.
+- **Rien de ce qui suit n'est dans un dépôt** — le perdre, c'est perdre le lab : tous les `.env`,
+  `infra/dev-roles.env`, `sso-lab/ldap/init.ldif`, `.ports`, `.devs`, `.owners`, `.lab-state/`
+  (clés de déploiement, comptes d'envoi), `~/edge-router/`, `~/lab-work/`, et les volumes Docker.
+  `OAUTH_HUB_ENCRYPTION_KEY` en fait partie. **Aucune sauvegarde n'est programmée** (chantier
+  ouvert) ; les seules existantes sont manuelles, dans `~/sauvegardes/`.
+- Un projet privé enregistré comme sous-module porte `update = none` dans `.gitmodules` (posé par
+  `app-register.sh`) : sans cela, `git clone --recurse-submodules` avorte pour quiconque n'y a pas
+  accès, et n'extrait aucun sous-module.
+
+---
+
 ## Créer une nouvelle application
+
+> **Voie normale depuis le 2026-10-10 : `lab-admin` → Projets → « Nouveau projet »** (ou l'outil
+> `create_app` du MCP). Le moteur enchaîne tout ce que décrivent les étapes ci-dessous :
+> vérification du nom, dépôt GitHub sous le compte du développeur, scaffold dans
+> **`deploiement/<app>`**, ligne `.owners`, schéma dans la base du propriétaire, clé de
+> déploiement, enregistrement comme sous-module, puis déploiement par le bouton « Déployer ».
+> Les étapes qui suivent décrivent ce que font les scripts appelés — utiles pour comprendre ou
+> dépanner, plus pour créer une app à la main. À la main, le superutilisateur passe par
+> `new-app.sh --owner <uid>` puis `app-register.sh` ; l'étape 2 (dépôt + sous-module) est faite
+> par `app-register.sh`, et l'app naît dans `deploiement/`, jamais à la racine.
 
 ### Étape 1 — Scaffold : `new-app.sh`
 
@@ -660,7 +744,7 @@ require-<client>                        (top level)
 - Toute nouvelle app **doit** avoir un `--require-group`. Sans lui, elle accepte tout compte du realm.
 - Un nouvel inscrit n'a **aucun groupe** ⇒ accès à **aucune** app. C'est voulu.
 - `code-server` est l'exception : pas de flow, protégé en amont par **oauth2-proxy**
-  (`OAUTH2_PROXY_ALLOWED_GROUPS`). Il tourne en `--auth=none` et n'a **aucune protection propre**.
+  (`OAUTH2_PROXY_ALLOWED_GROUPS=admins` — voir « Lab multi-développeurs »). Il tourne en `--auth=none` et n'a **aucune protection propre**.
 - Après tout changement de cloisonnement, **tester dans les deux sens** : un membre du groupe passe,
   un non-membre est refusé — et vérifier qu'un non-membre avec une session SSO active est aussi refusé.
   Ce test est maintenant automatisable — voir section « Tests end-to-end » ci-dessous.
@@ -1055,7 +1139,14 @@ ci-dessous, lancé avec `bash sso-lab/…`).
 
 | Script | Rôle |
 |---|---|
-| `new-app.sh` | Scaffold d'une nouvelle app (interactif) |
+| `install.sh [--check]` | Installation rejouable du lab ; `--check` ne fait rien et dit ce qui manque |
+| `new-app.sh [--owner <uid>]` | Scaffold d'une nouvelle app dans `deploiement/` (appelé par le moteur) |
+| `app-register.sh`, `app-sync.sh`, `app-remote.sh`, `app-status.sh`, `app-logs.sh`, `app-env.sh`, `app-test.sh`, `app-smtp.sh`, `app-restart.sh`, `app-remove.sh`, `app-relocate.sh` | Les commandes d'exploitation d'une app — les seules que le moteur exécute. Chacune documente son usage en tête de fichier |
+| `validate-app.sh`, `check-app-name.sh` | Contrôle de sûreté d'un dépôt avant déploiement ; règles de nommage |
+| `dev-db.sh ensure\|ensure-lab\|ensure-all\|status\|hba-status\|rotate\|lockdown-*` | Rôles et bases par propriétaire |
+| `lab-lock.sh <commande>` | Exécute sous le verrou de déploiement (code 75 si occupé) |
+| `workspace-image.sh` | Construit l'image `lab-workspace` des espaces VS Code |
+| `storage-shares.sh [--check]` | Partages de groupe de `storage` attendus par les apps |
 | `setup2.sh <app> --yes` | Déploiement complet d'une app (ou de tout le lab) |
 | `create-app-client.sh <app>` | Créer/mettre à jour le client Keycloak seul (`--native-redirect`, `--pkce`, `--no-env`) |
 | `sso-lab/setup-code-server-auth.sh` | Créer le client Keycloak pour oauth2-proxy/code-server |
