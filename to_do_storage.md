@@ -1,8 +1,66 @@
 # to_do_storage — rendre `storage` simple à utiliser et à modifier
 
-Analyse du 2026-10-11. Rien n'a été modifié dans le code : ce fichier est le seul livrable.
+Analyse du 2026-10-11. L'analyse n'a rien modifié dans le code ; seul le Lot 0 (sécurité) a été écrit
+ensuite, le même jour — voir la section qui suit.
 Convention de lecture : **[C]** = constaté (navigateur réel du lab avec le compte `e2edev`, ou lecture
 directe du code / de la base) ; **[D]** = déduit du code sans l'avoir exécuté.
+
+---
+
+## Lot 0 — fait le 2026-10-11 (code écrit et vérifié, **non commité, non déployé**)
+
+La faille décrite en 2.3 est corrigée dans `storage/backend/` ; le reste de ce document (analyse et
+lots 1 à 7) est inchangé et reste à décider.
+
+**Ce qui change**
+- `storage/backend/api/content_safety.py` (nouveau) : la politique de service, par listes blanches.
+- `storage/backend/api/views.py` (`FileContentView.get`) : n'émet plus le type du déposant, applique
+  la politique.
+- `storage/backend/api/tests/` (nouveau, 49 tests) et `storage/backend/config/settings_test.py`.
+
+**La règle.** Le type déclaré par le déposant n'est jamais recopié dans la réponse ; il sert de clé
+dans des listes tenues dans le code.
+
+| Type déclaré | Type émis | Disposition | CSP |
+|---|---|---|---|
+| PNG, JPEG, GIF, WebP, AVIF, BMP, ICO ; audio et vidéo courants | forme canonique | `inline` | `sandbox` |
+| PDF | `application/pdf` | `inline` | aucune (sinon la visionneuse intégrée ne se charge pas) |
+| `text/plain` | `text/plain; charset=utf-8` (ou latin-1 / windows-1252 déclaré) | `inline` | `sandbox` |
+| formats inertes connus : `model/*`, `font/*`, autres `image/*` `audio/*` `video/*`, JSON, zip, CSV, bureautique | inchangé | `attachment` | `sandbox; default-src 'none'` |
+| **tout le reste** — HTML, XHTML, SVG, tout XML (`*/xml`, `*+xml`), JavaScript, CSS, type inconnu, vide ou illisible | `application/octet-stream` | `attachment` | `sandbox; default-src 'none'` |
+
+`X-Content-Type-Options: nosniff` sur toutes les réponses de contenu. Octets, codes de retour,
+routes et authentification inchangés.
+
+**Écart avec le Lot 0 décrit plus bas** : un SVG n'est **plus** affichable par `<img>` directement
+depuis `storage` (il sort en `application/octet-stream`). Raison : conciergerie rouvre les factures
+depuis un `Blob` dans un nouvel onglet, et un blob `image/svg+xml` s'exécute sur l'origine de la
+page, quels que soient les en-têtes de `storage`. Aucun SVG n'est stocké à ce jour.
+
+**Vérifié**
+- 49 tests Django verts (conteneur jetable, SQLite en mémoire, sans réseau) :
+  `docker run --rm --env-file storage/.env --network none -v "$PWD/storage/backend:/app:ro" -w /app storage-backend:latest python manage.py test --settings=config.settings_test api`
+- Essai d'origine rejoué dans Chromium (`lab-runner`) contre un backend jetable portant ce code :
+  HTML, SVG, XML-XHTML, HTML en majuscules et HTML sans type → téléchargés, **aucun ne s'exécute** ;
+  HTML déclaré `image/png` → image cassée ; HTML déclaré `text/plain` → affiché comme texte ;
+  PNG réel → affiché, y compris par `<img src="…?token=">`.
+- **Non vérifié** : l'affichage d'un PDF dans la visionneuse (le Chromium sans écran du runner
+  télécharge tous les PDF) — ses en-têtes sont ceux d'avant, `nosniff` en plus.
+
+**À rejouer après déploiement** (script gardé hors dépôt, à recopier si besoin) : même essai avec
+`TARGET=https://<domaine>/storage-api`, puis une facture PDF dans conciergerie, une photo et un
+maillage dans atelier-3d, une icône dans craft-lab.
+
+**Reste ouvert**
+- **`?token=`** : toujours accepté, sur toutes les routes. Trois frontends s'en servent (atelier-3d,
+  craft-lab, arbre-genealogique) pour `<img>`, `GLTFLoader` et un lien de téléchargement. S'en passer :
+  charger par `fetch` avec en-tête puis `Blob`, ou des adresses signées à courte durée liées à un
+  chemin. À défaut, le limiter au `GET` de la route de contenu.
+- **`DEBUG=True`** dans `storage/.env` en service (page 404 technique de Django visible).
+- **Proxys des apps** (conciergerie, restauration, atelier-3d) : ils relaient le `Content-Type` de
+  `storage` en `inline` sans `nosniff`. Ils héritent maintenant d'un type sûr, mais ne se protègent
+  pas eux-mêmes.
+- Le dépôt accepte toujours n'importe quel type : le filtrage est fait à la lecture, pas à l'écriture.
 
 ---
 
@@ -399,6 +457,9 @@ Chaque lot est livrable seul et se clôt par ses tests. Efforts en jours de trav
 suivie, vérification en navigateur réel comprise.
 
 ### Lot 0 — Neutraliser le contenu actif (sécurité) — ½ j
+
+> **Fait le 2026-10-11** — voir la section en tête de ce document, qui fait foi (le SVG n'est
+> finalement plus servi comme image). Le texte ci-dessous est la proposition d'origine.
 
 - **Objectif** : fermer la faille 2.3.
 - **Backend** : sur `FileContentView.get`, `X-Content-Type-Options: nosniff` toujours ; pour les
