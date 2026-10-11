@@ -195,6 +195,7 @@ Référence : `deploiement/peripheriques/backend/api/media_client.py`, `kick.py`
 | Aujourd'hui (MediaMTX en direct) | Remplacé par | À adapter côté app |
 |---|---|---|
 | `MEDIA_API_URL=http://peripheriques-media:9997` et `MEDIA_PLAYBACK_URL=http://peripheriques-media:9996`, Basic `MEDIA_INTERNAL_USER:PASSWORD` | une seule base `http://lab-media-auth:9100`, Basic = identifiants de contrôle de l'app | les deux clés pointent sur la même base ; `MEDIA_INTERNAL_USER/PASSWORD` peuvent garder leurs valeurs (elles deviennent les identifiants de contrôle, à recopier dans `lab-media/.env`) |
+| *(depuis la phase B : `MEDIA_PLAYBACK_URL` disparaît côté app — une seule base, `MEDIA_API_URL=http://lab-media-auth:9100`)* | | |
 | `GET /v3/paths/get/<slug>/av` → `.ready` | `GET /v1/paths/<slug>/av` → `.ready` | chemin d'URL ; un chemin inconnu rend `404` (comme avant) |
 | `GET /v3/webrtcsessions/list` et `GET /v3/hlssessions/list` (paginés, `items[].id`, `.path`) | `GET /v1/sessions?protocol=webrtc` et `?protocol=hls` → `items[].id`, `.path` | plus de pagination (`page`, `itemsPerPage`, `pageCount` disparaissent) ; la liste ne contient que les sessions de l'app |
 | `POST /v3/webrtcsessions/kick/<id>`, `POST /v3/hlssessions/kick/<id>` → `200`, ou `404` si déjà terminée | `POST /v1/sessions/webrtc/<id>/kick`, `POST /v1/sessions/hls/<id>/kick` → **`204`**, ou `404` | le succès passe de `200` à `204` ; `404` garde son sens (« but atteint ») |

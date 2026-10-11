@@ -952,8 +952,16 @@ dossier vide avec un `.env` orphelin que rien ne déployait. Utilisé par `stora
 - **Les enregistrements ne passent pas par `storage`** (dérogation assumée) : flux machine
   d'environ 11 Go/jour écrit directement par MediaMTX dans le volume `external`
   `peripheriques-recordings`, rétention 7 jours.
-- **MediaMTX est privé à l'app, provisoirement.** La migration vers une brique commune `lab-media`
-  dans `infra/` est décrite dans `to_do_lab_media.md` — non commencée.
+- **MediaMTX est privé à l'app, provisoirement.** La brique commune **`lab-media/`** (racine du
+  dépôt, pas `infra/`) est construite et prouvée sur sources synthétiques, **non déployée** ; l'app
+  adaptée est sur la branche `lab-media` de son dépôt. **Ne jamais déployer cette branche, ni
+  démarrer `lab-media`, hors de la procédure `lab-media/BASCULE.md`** : la caméra et le port ICE
+  8189 ne se partagent pas, et le hook de la branche ne répond qu'à `read`. Le marqueur
+  `lab-media/.no-autodeploy` tient la brique hors du mode « tout le lab ».
+- **Caddy lit les labels de tous les conteneurs de l'hôte** : une pile de test qui garde ses
+  labels `caddy` modifie le Caddy en service. Toute pile jetable doit renommer ce label.
+- **Du code non commité dans le dossier d'une app en service est un déploiement en attente** :
+  le sortir sur une branche poussée et revenir à la version en service.
 - Hors vitrine : `peripheriques` n'est pas dans `.app-descriptions`.
 
 ---

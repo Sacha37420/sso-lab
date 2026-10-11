@@ -95,15 +95,37 @@ Si la capture n'obtient pas la caméra : `docker logs lab-media-capture` le dit 
 
 ## 7. Déploiement de `peripheriques` adaptée
 
-Dans `deploiement/peripheriques/.env` : `MEDIA_API_URL=http://lab-media-auth:9100` et `MEDIA_PLAYBACK_URL=http://lab-media-auth:9100`. Puis le déploiement de l'app, par la commande que rapporte le secteur de la phase B.
+Le code adapté de l'app est sur la branche **`lab-media`** de son dépôt
+(`Sacha37420/peripheriques`), poussée ; le dossier déployé est resté sur `main`, la version en
+service. **Ne jamais déployer cette branche avant l'étape 5** : son hook ne répond qu'à `read`,
+et l'ancien MediaMTX de l'app lui demande encore `publish` — l'enregistrement s'arrêterait.
 
-Contrôle depuis le backend de l'app, avec ses propres identifiants :
+Entre l'arrêt de `peripheriques-media` (étape 5) et la fin de cette étape, direct et relecture
+sont indisponibles dans l'app ; l'enregistrement, lui, reprend dès l'étape 6.
+
 ```bash
-docker exec peripheriques-backend python -c "
-import os, requests
-r = requests.get(os.environ['MEDIA_API_URL'] + '/v1/paths/webcam/av', auth=(os.environ['MEDIA_INTERNAL_USER'], os.environ['MEDIA_INTERNAL_PASSWORD']), timeout=5)
-print(r.status_code, r.json())"                                              # 200, ready: true, tracks H264 + Opus
+cd deploiement/peripheriques
+git checkout lab-media
+cp docker-compose.lab-media.yml docker-compose.yml
+sed -i 's#^MEDIA_API_URL=.*#MEDIA_API_URL=http://lab-media-auth:9100#' .env
+sed -i -E '/^(MEDIA_PLAYBACK_URL|MEDIA_PUBLISH_USER|MEDIA_PUBLISH_PASSWORD|MEDIA_DEVICE_VIDEO|MEDIA_DEVICE_AUDIO|MEDIA_WEBRTC_PORT|MEDIA_WEBRTC_HOSTS)=/d' .env
+bash ../../scripts/lab-lock.sh docker compose -f docker-compose.yml up -d --build backend frontend
 ```
+
+- `MEDIA_HOOK_KEY` et `MEDIA_INTERNAL_*` ne changent pas : ce sont les valeurs recopiées dans
+  `lab-media/.env` à l'étape 1.
+- **Pas de `setup2.sh` à cette étape** : `clean2.sh` fait `down --remove-orphans`, ce qui
+  supprimerait le conteneur arrêté `peripheriques-media`, gardé pour le retour arrière.
+- Contrôles : les 121 tests dans le conteneur (`python manage.py test api
+  --settings=config.settings_test`), puis depuis le backend, avec ses identifiants,
+  `GET http://lab-media-auth:9100/v1/paths/webcam/av` → 200, `ready: true`. Un 401 signifie que
+  `MEDIA_INTERNAL_*` (app) et `LAB_MEDIA_APP_PERIPHERIQUES_CONTROL_*` (brique) diffèrent.
+- Retour arrière de cette étape : `git checkout main && git checkout -- docker-compose.yml`,
+  restaurer `.env` depuis la copie de l'étape 4, puis `up -d --build` avec l'ancien compose,
+  qui relance `peripheriques-media` (après `docker compose -f lab-media/docker-compose.yml
+  --profile capture down`).
+- Une fois la bascule validée : fusionner `lab-media` dans `main` (dépôt de l'app), y supprimer
+  `media/` et `docker-compose.lab-media.yml`, puis retirer `lab-media/.no-autodeploy`.
 
 ## 8. Contrôles réels
 
