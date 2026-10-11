@@ -65,32 +65,28 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
   nginx du frontend (défauts du gabarit, donc de toutes les apps), deux lanceurs de tests de
   cloisonnement, page « Apps du lab » redondante avec « Projets ».
 
-### Huit apps sur quinze n'ont aucun test de cloisonnement ⚠️
+### Tests : état au 2026-10-12
 
-`analyse-lora`, `app-builder`, `arbre-genealogique`, `atelier-3d`, `conciergerie`, `lab-admin`,
-`restauration` et `traitement-de-fichiers-compils` n'ont **pas** de
-`frontend/e2e/cloisonnement.spec.ts` (recompté le 2026-08-16 sur l'arborescence réelle ; le relevé
-du 2026-08-09 en oubliait un et ignorait `oauth-hub`, créée depuis). Les sept autres l'ont.
-
-Ce qui rend le trou dangereux : **le runner répond `[]` pour ces apps, sans erreur ni
-avertissement** — une app sans spec est donc indiscernable, dans lab-admin comme en ligne de
-commande, d'une app dont tous les tests passent. Or ce test est présenté plus bas comme *le*
-contrôle automatisé du cloisonnement, et le lab est exposé sur Internet.
-
-C'est peu coûteux à combler : le spec est **copiable tel quel** depuis
-`_templates/django-angular/frontend/e2e/cloisonnement.spec.ts` (il ne doit dépendre d'aucun contenu
-propre à l'app — c'est sa règle de conception), et `e2e_member` porte désormais une adresse email,
-donc les tests peuvent aller au-delà du simple accès à la page. Vérifier ensuite app par app :
-
-```bash
-docker exec lab-runner sh -c "curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{\"app\":\"<app>\"}' http://localhost:4300/run"
-```
-
-Une réponse `[]` signifie « aucun test trouvé », jamais « tout va bien ».
-
-À envisager en même temps : faire échouer bruyamment `setup_unit.sh` (ou l'affichage de lab-admin)
-quand une app déployée n'expose aucun spec, pour que le trou ne puisse plus réapparaître en silence.
+- **Tests backend** : toutes les apps en ont (≈ 1 500 au total), joués par `scripts/app-test.sh`
+  avant chaque mise en service. Écrits par le chantier `chantiers/tests/` (contrat, rapports par
+  secteur — non versionnés : ils décrivent des défauts). Ils ont révélé une trentaine de défauts
+  réels, dont plusieurs trous de cloisonnement (traversée de chemin dans
+  `traitement-de-fichiers-compils`, prise de contrôle d'un arbre dans `arbre-genealogique`,
+  corrections lisibles pendant un quiz dans `code-route`…), corrigés et en service.
+  **Restent au propriétaire** les points de comportement listés en fin de chaque rapport.
+- **Patron commun** : jetons RS256 signés par une clé locale passant par la vraie classe
+  d'authentification (seul le téléchargement du JWKS est remplacé), tout appel sortant simulé —
+  le conteneur de test n'a que la base. Un test `expectedFailure` qui se met à passer rend la
+  suite rouge : retirer le décorateur avec le correctif.
+- **Test de cloisonnement navigateur** (`frontend/e2e/cloisonnement.spec.ts`) : présent partout
+  où il s'applique. **Deux apps n'en ont pas, à dessein** : `arbre-genealogique` (aucun groupe
+  requis) et `traitement-de-fichiers-compils` (page publique en `check-sso`, atelier dans le
+  navigateur) — leur protection est entièrement dans l'API, tenue par leurs tests backend.
+  Pour elles le runner répond `[]`, ce qui veut dire « aucun test », jamais « tout va bien ».
+- `carto-lab` teste par `--settings=config.settings_test` (base clonée de `template_postgis` :
+  créer l'extension demande un superutilisateur ; la migration du rôle lecteur y est neutralisée).
+- Pour lancer une suite sans tenir le verrou de déploiement ni toucher une base du lab :
+  `bash chantiers/tests/essai.sh <app>` (PostgreSQL jetable, réseau fermé, code monté).
 
 ---
 
@@ -222,20 +218,18 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
   continuer à le faire : les `.env` portent `SCRIPT_NAME=/<app>-api`, gunicorn exige alors que
   chaque chemin commence par ce préfixe — que Caddy retire — et répond 500 à tout. Pas de journal
   d'accès : il écrirait en clair les `?key=` et `?ticket=` passés en paramètre.
-- Ces trois corrections sont **en service** dans toutes les apps depuis le 2026-10-11, sauf
-  `atelier-3d` et `bilan-thermique` (reconstruction reportée par le propriétaire : heures de
-  compilation pour l'une, commit « wip » en tête pour l'autre) et `test` (au prochain déploiement
-  par le moteur). Ces trois-là ont la première règle seulement ; leur documentation d'API répond
-  encore sans connexion.
+- Ces trois corrections sont **en service** dans toutes les apps (2026-10-12).
+- **`api/authentication.py` attrape aussi `PyJWKClientError`** : un jeton forgé avec un `kid`
+  inconnu (ou un JWKS injoignable) doit donner un refus, pas une erreur 500. Défaut du gabarit,
+  corrigé partout.
 - **Reconstruire sans couper** : construire l'image pendant que l'ancienne tourne, lancer
   `scripts/app-test.sh <app>` dessus, puis `up -d --no-build` — c'est l'ordre du chemin à portes.
   `setup2.sh` sur une app historique commence au contraire par `clean2.sh` (arrêt, volumes non
   externes supprimés) et laisse l'app coupée pendant tout le build.
 - **Un lanceur de tests qui a besoin d'options le dit dans `FEUILLE_DE_ROUTE.md`** (section
   « Commande de test ») : `peripheriques` et `storage` exigent `--settings=config.settings_test`,
-  sans quoi leurs tests prennent le `.env` de service et échouent. `lab-admin` reste à part : son
-  rôle `lab` ne peut pas créer de base de test, `app-test.sh` ne sait pas le tester (procédure à
-  PostgreSQL jetable en tête de `lab-admin/backend/api/tests.py`).
+  sans quoi leurs tests prennent le `.env` de service et échouent. Les services du cadriciel
+  (rôle `lab`) passent par le même rôle de test transitoire que les apps (`app-test.sh`).
 - **Une amorce de test ne doit rien exécuter sur la connexion de maintenance** (base `postgres`,
   `NAME` vide) : le rôle de test n'y a que `CONNECT`. Une erreur y fait retomber Django sur la base
   de test, qu'il ne peut alors plus supprimer (« cannot drop the currently open database » après

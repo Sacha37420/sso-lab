@@ -3163,6 +3163,45 @@ en grille.
 
 ---
 
+## Lot AM — Poses des photos par photogrammétrie (pycolmap) ⏳ en service depuis le 2026-09-27, validé sur photos réelles le 2026-10-12, non validé sur un bâtiment
+
+### Pourquoi
+Le recalage photo par photo des Lots AK–AL ne tenait pas (« Reste ouvert » du Lot AL) : position
+GPS à ~4 m, cap annoncé faux de plusieurs degrés, inclinaison variable. Seule la reconstruction
+d'ensemble des photos donne des poses relatives exactes.
+
+### Implémenté (`api/facade_sfm.py`, branché dans `api/facades.analyse`)
+- Jusqu'à 36 photos de la zone reconstruites ensemble par COLMAP (`pycolmap`, caméra
+  équirectangulaire, sans GPU, 2 fils), masque de −25° à +50° d'inclinaison (bandeau incrusté,
+  véhicule, ciel), amorçage à 2° de triangulation.
+- Calage dans le repère du bâtiment : verticale = moyenne des axes « haut » ; similitude
+  horizontale par RANSAC sur les positions GPS de toutes les photos du modèle ; hauteur = terrain
+  LiDAR + hauteur d'appareil.
+- Les photos non reconstruites retombent sur l'ancien recalage (source `gps`) ; la texture
+  n'emploie que les 16 photos les plus utiles ; une photo à pose photogrammétrique ne subit plus
+  de recalage local. Le résultat porte `method: 'photogrammetrie'` et un rapport `sfm`.
+- Tests : `SfmAlignmentTest` (calage retrouvé malgré le bruit GPS et une position aberrante,
+  convention de projection COLMAP). Suite complète : 244 tests verts.
+
+### Mesure réelle du 2026-10-12 (image en service, 2 vCPU, Tours quartier Velpeau, sans bâtiment)
+36 photos de 8 séquences → **27 placées dans un seul modèle** (24 retenues par le calage GPS),
+erreur de reprojection 0,70 px, résidu GPS médian 1,66 m ; un second petit modèle rejeté
+(« photos trop groupées »). Écart entre le cap reconstruit et le cap annoncé par Panoramax :
+médiane −4,3°, de −40° à +17° — ce qui confirme que le cap annoncé n'est pas fiable.
+**Durée : 554 s**, dont 226 s de points caractéristiques et 276 s d'appariement.
+
+### Reste ouvert — à trancher par le propriétaire
+- **Le coût** : environ 9 minutes de plus par analyse de façades (le Lot AL avait ramené l'analyse
+  à 3–6 min en limitant à 16 photos). Pistes : option à la demande, appariement séquentiel au
+  lieu d'exhaustif, moins de photos, largeur réduite.
+- **Jamais vérifié sur un bâtiment** : depuis la mise en service, aucune analyse n'a porté sur un
+  lieu couvert par des photos (le seul bâtiment en base n'en a aucune). La qualité des textures
+  et des baies avec ces poses reste à juger à l'œil sur une maison et sur le collectif d'essai.
+- L'interface n'affiche ni la source de la pose (`sfm` / `gps`) ni le rapport `sfm`.
+- Le dossier de travail (`sfm/<id>` dans le cache des façades) n'est pas nettoyé après analyse.
+
+---
+
 ## Hors scope — décisions déjà prises, à ne pas entreprendre sans en rediscuter
 
 La page Théorie (section « Portée et hypothèses ») exclut déjà explicitement, comme choix assumé et
