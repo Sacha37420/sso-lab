@@ -57,10 +57,6 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
   connus : `?token=` en paramètre d'URL (trois frontends s'en servent), `DEBUG=True` en service.
   **Neuf apps consomment son API** (les six listées plus bas, plus `code-route`, `craft-lab` et
   son propre frontend) : aucune route existante ne doit changer.
-- **`to_do_lab_media.md`** et `chantiers/lab-media/CONTRAT.md` — MediaMTX quitte `peripheriques`
-  pour une brique du cadriciel (`lab-media/`). Point de conception tranché par essai :
-  `authHTTPExclude` ouvre l'action à tous (à proscrire) ; un mini-service d'authentification
-  relaie `read` à l'app. La bascule de la caméra se fait avec le propriétaire.
 - **Sauvegardes** — aucune procédure (voir « Installer le lab »).
 - **Constats de relecture laissés au propriétaire** : `chantiers/multi-dev/rapports/` (`relecture-lab-admin.md`,
   `audit-installation.md`) — documentation d'API publique et `.env` complet dans le conteneur
@@ -943,7 +939,7 @@ dossier vide avec un `.env` orphelin que rien ne déployait. Utilisé par `stora
   `1.21.1`) : sous-playlists et segments passent ensuite sans contrôle. Une révocation doit donc
   **expulser** les sessions ouvertes, WebRTC *et* HLS (`webrtcsessions/kick`, `hlssessions/kick`) ;
   refuser au hook ne suffit pas.
-- **Aucun `devices:` figé dans le compose.** Une ré-énumération USB a interverti `video0`/`video1`
+- *(vaut désormais pour `lab-media/`, qui a repris la capture)* **Aucun `devices:` figé dans le compose.** Une ré-énumération USB a interverti `video0`/`video1`
   et le conteneur pointait sur le nœud de métadonnées. `/dev` de l'hôte est monté en lecture seule
   sous `/hostdev` avec `device_cgroup_rules` (81 = video4linux, 116 = ALSA), et le chemin est
   résolu à chaque (re)publication.
@@ -951,18 +947,44 @@ dossier vide avec un `.env` orphelin que rien ne déployait. Utilisé par `stora
   jamais la query de `/api/media-auth/` (`api/log_filters.py`).
 - **Les enregistrements ne passent pas par `storage`** (dérogation assumée) : flux machine
   d'environ 11 Go/jour écrit directement par MediaMTX dans le volume `external`
-  `peripheriques-recordings`, rétention 7 jours.
-- **MediaMTX est privé à l'app, provisoirement.** La brique commune **`lab-media/`** (racine du
-  dépôt, pas `infra/`) est construite et prouvée sur sources synthétiques, **non déployée** ; l'app
-  adaptée est sur la branche `lab-media` de son dépôt. **Ne jamais déployer cette branche, ni
-  démarrer `lab-media`, hors de la procédure `lab-media/BASCULE.md`** : la caméra et le port ICE
-  8189 ne se partagent pas, et le hook de la branche ne répond qu'à `read`. Le marqueur
-  `lab-media/.no-autodeploy` tient la brique hors du mode « tout le lab ».
+  `lab-media-recordings` (possédé par `lab-media`), rétention 7 jours.
+- **MediaMTX n'est plus dans l'app** (bascule du 2026-10-11) : la brique **`lab-media/`** du
+  cadriciel détient la caméra et le micro, publie `webcam/{av,video,audio}`, enregistre et sert
+  la relecture. L'app ne parle qu'à l'API de contrôle de `lab-media-auth`
+  (`MEDIA_API_URL=http://lab-media-auth:9100`, description : `lab-media/API.md`) et ne garde que
+  le hook de lecture (`read`). Voir « Flux audio et vidéo — `lab-media` » ci-dessous.
 - **Caddy lit les labels de tous les conteneurs de l'hôte** : une pile de test qui garde ses
   labels `caddy` modifie le Caddy en service. Toute pile jetable doit renommer ce label.
 - **Du code non commité dans le dossier d'une app en service est un déploiement en attente** :
   le sortir sur une branche poussée et revenir à la version en service.
 - Hors vitrine : `peripheriques` n'est pas dans `.app-descriptions`.
+
+---
+
+### Flux audio et vidéo — `lab-media`
+
+`lab-media/` (racine du dépôt, service du cadriciel comme `lab-mcp/`) est le point d'entrée unique
+des flux, au même titre que PostgreSQL pour les données et `storage` pour les fichiers :
+conteneurs `lab-media` (MediaMTX), `lab-media-auth` (mini-service d'authentification) et
+`lab-media-capture` (périphériques de l'hôte). Contrat et preuves : `chantiers/lab-media/`.
+
+- **Un préfixe de chemin = une app**, qui est l'autorité de lecture pour ce préfixe
+  (`lab-media/registry.json` ; secrets dans `lab-media/.env`). Ajouter une app est une entrée de
+  configuration. Une app ne publie, ne lit, ne liste, ne coupe et ne relit que sous ses préfixes.
+- **`lab-media-auth` décide lui-même** publication, API et relecture, et **relaie `read`** au hook
+  de l'app propriétaire, en échec fermé (hook arrêté, en erreur ou qui pend ⇒ refus). Conséquence
+  voulue : **redéployer une app ne troue pas l'enregistrement** ; personne ne lit pendant ce temps.
+- **`authHTTPExclude` est interdit** : une action exclue n'est pas renvoyée aux identifiants
+  internes, elle est ouverte à tous, publication WebRTC comprise (essai réel, MediaMTX 1.21.1).
+- **Aucune app n'a les identifiants de MediaMTX** (tirés au hasard à chaque démarrage, en mémoire) :
+  elle passe par l'API de contrôle de `lab-media-auth` (`lab-media/API.md`).
+- **Aucune app n'ouvre un périphérique ni ne monte le volume d'enregistrements.**
+- Arrêter `lab-media-auth` ne coupe ni publication ni enregistrement, mais plus rien ne
+  s'authentifie et les expulsions sont impossibles ; redémarrer `lab-media` coupe tout.
+- Port ICE **8189 udp/tcp** publié par `lab-media`, redirigé à la main sur la Bbox.
+- Vérification rejouable sans matériel : `bash lab-media/verify.sh` (sources synthétiques, deux
+  apps fictives, 99 contrôles). MediaMTX écrit l'URL du hook, donc sa clé, dans son journal quand
+  le hook est injoignable : limite connue.
 
 ---
 
@@ -1093,7 +1115,7 @@ pour le chemin réel, toujours passer par `registry_app_dir`.
 | `craft-lab` | `Sacha37420/craft-lab` | Django + Angular (+ `relay/` WebSocket) | 8097 / 4213 |
 | `lab-admin` | `Sacha37420/lab-admin` | Django + Angular | 8083 / 4201 |
 | `oauth-hub` | `Sacha37420/oauth-hub` | Django + Angular | 8100 / 4215 |
-| `peripheriques` | `Sacha37420/peripheriques` | Django + Angular (+ `media/` MediaMTX) | 8101 / 4216 |
+| `peripheriques` | `Sacha37420/peripheriques` | Django + Angular | 8101 / 4216 |
 | `restauration` | `Sacha37420/restauration` | Django + Angular | 8088 / 4206 |
 | `robot-lab` | `Sacha37420/robot-lab` | Django + Angular (+ `engine/` Playwright) | 8094 / 4212 |
 | `storage` | `Sacha37420/storage` | Django + Angular | 8093 / 4211 |
@@ -1102,10 +1124,9 @@ pour le chemin réel, toujours passer par `registry_app_dir`.
 > `lab-admin` et `lab-mcp` font partie du cadriciel : ils restent à la racine, jamais dans
 > `deploiement/` (`app-relocate.sh` les refuse).
 
-> `peripheriques` a un **troisième service**, `media/` (MediaMTX + ffmpeg, conteneur
-> `peripheriques-media`) : seul détenteur de la caméra et du micro de l'hôte, il publie le port ICE
-> **8189 udp/tcp** (redirection Bbox faite à la main) et écrit les enregistrements. Décisions et
-> pièges : section « Périphériques de l'hôte » plus haut.
+> `peripheriques` n'a plus de service `media/` depuis le 2026-10-11 : la caméra, le micro et les
+> enregistrements sont tenus par la brique `lab-media/` du cadriciel (section « Flux audio et
+> vidéo »). L'app ne décide plus que des droits.
 
 > `robot-lab` a un **troisième service**, `engine/` (Node + Playwright + `ws`, port 8095) : le
 > navigateur qu'il pilote est isolé là, jamais dans l'image Django — même règle que `runner/`.
