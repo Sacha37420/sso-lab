@@ -23,7 +23,7 @@ from .errors import LabError
 TOOL_OPS = {
     "whoami": "me", "list_apps": "projects", "check_name": "check_name", "create_app": "create_project",
     "deploy": "deploy", "job_status": "job", "status": "project", "logs": "logs",
-    "env_list": "env_list", "env_set": "env_set", "env_unset": "env_unset", "sql": "sql",
+    "env_list": "env_list", "env_get": "env_get", "env_set": "env_set", "env_unset": "env_unset", "sql": "sql",
     "run_tests": "run_tests", "open_ticket": "open_ticket", "smtp_status": "smtp_status",
 }
 
@@ -134,8 +134,13 @@ def build(cfg: Config, engine: Engine) -> FastMCP:
 
     @mcp.tool()
     async def env_list(app: str, ctx: Context) -> dict:
-        """Variables du `.env` déployé. Les clés gérées par le lab sont marquées et leur valeur n'est jamais rendue."""
+        """Noms des variables du `.env` déployé (`managed`, `has_value`) — jamais leurs valeurs : voir `env_get`."""
         return await call(ctx, "env_list", app=app)
+
+    @mcp.tool()
+    async def env_get(app: str, key: str, ctx: Context) -> dict:
+        """Valeur d'UNE variable non gérée du projet (son propriétaire seulement). `env_list` ne rend que les noms."""
+        return await call(ctx, "env_get", app=app, key=key)
 
     @mcp.tool()
     async def env_set(app: str, key: str, value: str, ctx: Context) -> dict:

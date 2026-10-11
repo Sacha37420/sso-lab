@@ -115,6 +115,19 @@ def routes(engine: Engine) -> list[Route]:
         return await call("env_set", c, app=app(r), key=r.path_params["key"], value=value)
 
     async def env_unset(r, c): return await call("env_unset", c, app=app(r), key=r.path_params["key"])
+    async def run_all(r, c): return await call("run_all_tests", c)
+
+    async def env_get(request: Request) -> Response:
+        """Valeur d'une variable : comme le mot de passe de la base, jamais mise en cache."""
+        caller = request.scope.get("lab.caller")
+        headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+        try:
+            if not isinstance(caller, Caller):
+                raise LabError("unauthorized", "Jeton requis.")
+            return JSONResponse(await call("env_get", caller, app=request.path_params["app"],
+                                           key=request.path_params["key"]), headers=headers)
+        except LabError as exc:
+            return JSONResponse(exc.body(), status_code=exc.status, headers=headers)
 
     async def sql(r, c):
         (query,) = need(await body(r), "query")
@@ -196,7 +209,9 @@ def routes(engine: Engine) -> list[Route]:
         R("/projects/{app}/commits", commits, "GET"),
         R("/projects/{app}/logs", logs, "GET"),
         R("/projects/{app}/env", env_list, "GET"),
+        Route(P + "/projects/{app}/env/{key}", env_get, methods=["GET"]),
         R("/projects/{app}/env/{key}", env_set, "PUT"), R("/projects/{app}/env/{key}", env_unset, "DELETE"),
+        R("/tests/run-all", run_all, "POST"),
         R("/projects/{app}/sql", sql, "POST"),
         R("/projects/{app}/tests", tests, "POST"),
         R("/projects/{app}/tickets", tickets, "POST"),

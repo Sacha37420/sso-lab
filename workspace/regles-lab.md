@@ -19,7 +19,7 @@ développeur. Ces règles s'imposent à toute IA comme à tout humain. Les règl
 ## Déployer — par le moteur du lab, jamais autrement
 
 - Le serveur MCP **`lab`** est déjà déclaré. Outils disponibles pour ce projet : `whoami`,
-  `status`, `logs`, `env_list` / `env_set` / `env_unset`, `deploy`, `run_tests`, `job_status`,
+  `status`, `logs`, `env_list` / `env_get` / `env_set` / `env_unset`, `deploy`, `run_tests`, `job_status`,
   `sql` (ta base, schéma de ce projet), `smtp_status` (quel compte d'envoi d'email est rattaché).
 - **Pousse, puis appelle `deploy`.** Seul un commit présent sur GitHub est déployable. Suis le
   job avec `job_status` jusqu'au bout et lis le résultat des tests.

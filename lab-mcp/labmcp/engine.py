@@ -64,8 +64,9 @@ MAX_LOG_LINES = 4000
 # (v8) `sql` en fait partie : c'est le projet du dev, l'IA qui y travaille doit pouvoir lire sa base —
 # même exécution que pour lui (rôle dev_<uid> du propriétaire, schéma du projet).
 # (v9) `smtp_status` : quel profil SMTP est rattaché au projet (identifiant et libellé, aucun secret).
-WS_OPS = frozenset({"me", "project", "logs", "env_list", "env_set", "env_unset", "deploy", "run_tests", "job", "sql",
-                    "smtp_status"})
+# (v11) `env_get` : lire la valeur d'une de SES variables, une à la fois.
+WS_OPS = frozenset({"me", "project", "logs", "env_list", "env_get", "env_set", "env_unset", "deploy", "run_tests",
+                    "job", "sql", "smtp_status"})
 
 # Écart avec GitHub (I5 v8) : cache en mémoire, rafraîchi en arrière-plan.
 REMOTE_MAX_AGE = 300      # au plus un rafraîchissement automatique toutes les 5 minutes par projet
@@ -106,6 +107,10 @@ class Engine:
             if job.kind == "deploy":
                 # Ce qui tourne vient peut-être de changer : l'écart avec GitHub est à relire.
                 self._remote_refresh(job.app, force=True)
+                # Le déploiement a rejoué le test de cloisonnement : son verdict devient le dernier connu.
+                verdict = (job.result.get("tests") or {}).get("cloisonnement")
+                if job.result.get("ok") and verdict in ("ok", "ko", "absent"):
+                    self._tests_write(job.app, verdict, [], "déploiement")
 
         self.jobs.on_done = job_done
         self.ws.on_idle_close = lambda uid: audit("(moteur)", "workspace_idle_close", "", "ok", f"espace de {uid}")
@@ -306,7 +311,8 @@ class Engine:
     def _submit(self, kind: str, app: str, launched_by: str, work) -> dict:
         active = self.jobs.active_for(app)
         if active:
-            raise LabError("job_exists", f"Un job est déjà en file ou en cours pour « {app} ».", job_id=active.id)
+            what = f"pour « {app} »" if app else "(lancement de tous les tests de cloisonnement)"
+            raise LabError("job_exists", f"Un job est déjà en file ou en cours {what}.", job_id=active.id)
         try:
             job = self.jobs.submit(kind, app, launched_by, work)
         except QueueFull:
@@ -731,7 +737,90 @@ class Engine:
             "workspace": {"open": bool(ws and ws.app == app)},
         }
         item["github"] = self._github_field(app, item)
+        # (v11) Vitrine publique et dernier test de cloisonnement connu.
+        showcase = self.registry.showcase()
+        item["showcased"] = app in showcase
+        item["description"] = (showcase.get(app) or None) if app in showcase else None
+        item["tests"] = {"cloisonnement": self._tests_field(app, status)}
         return item
+
+    # ── résultats des tests de cloisonnement (v11) ──────────────────────────
+    def _tests_path(self, app: str) -> str:
+        return os.path.join(self.registry.state_dir(), "tests", app + ".json")
+
+    def _tests_write(self, app: str, verdict: str, cases: list[dict], origin: str) -> None:
+        """Dernier lancement du test de cloisonnement d'un projet — le moteur est le seul à l'écrire."""
+        path = self._tests_path(app)
+        try:
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            tmp = f"{path}.{secrets.token_hex(4)}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"verdict": verdict, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                           "cases": [{"title": c.get("title"), "status": c.get("status")} for c in cases],
+                           "origin": origin}, fh, ensure_ascii=False)
+            os.replace(tmp, path)
+        except OSError:
+            log.error("résultat de test non enregistré pour %s", app)
+
+    def _tests_field(self, app: str, status: dict) -> dict:
+        """`tests.cloisonnement` d'un projet : le plus récent de ce que le moteur a lancé lui-même
+        (bouton, MCP, « tout lancer ») et du verdict enregistré par le dernier déploiement."""
+        out = {"verdict": "non-lancé", "at": None, "cases": []}
+        stamp = 0.0
+        try:
+            with open(self._tests_path(app), encoding="utf-8") as fh:
+                saved = json.load(fh)
+            if saved.get("verdict") in ("ok", "ko", "absent", "non-lancé"):
+                out = {"verdict": saved["verdict"], "at": saved.get("at"),
+                       "cases": [{"title": c.get("title"), "status": c.get("status")}
+                                 for c in saved.get("cases") or [] if isinstance(c, dict)]}
+                stamp = datetime.datetime.fromisoformat(str(saved.get("at")).replace("Z", "+00:00")).timestamp()
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        # Un déploiement plus récent (lancé ici ou à la main) a rejoué le test : son verdict prime.
+        deployed = (status.get("tests") or {}).get("cloisonnement") if isinstance(status.get("tests"), dict) else None
+        if deployed in ("ok", "ko", "absent"):
+            try:
+                at = datetime.datetime.fromisoformat(str(status.get("at")))
+                if at.timestamp() > stamp:
+                    out = {"verdict": deployed, "at": at.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                           "cases": []}
+            except (TypeError, ValueError):
+                pass
+        return out
+
+    async def _cloisonnement(self, app: str, say) -> dict:
+        """Joue le test de cloisonnement d'UN projet sur lab-runner. Rend {verdict, cases, error?}.
+        Le runner ne fait qu'un test à la fois sur tout le lab : son 409 s'attend (10 min au plus)."""
+        for _ in range(60):
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(1200, connect=10)) as client:
+                    resp = await client.post(f"{self.cfg.runner_url}/run", json={"app": app})
+            except httpx.HTTPError as exc:
+                return {"verdict": "non-lancé", "cases": [], "error": f"lab-runner injoignable ({type(exc).__name__})"}
+            if resp.status_code != 409:
+                break
+            say("   … un autre test est en cours sur le lab, attente")
+            await asyncio.sleep(10)
+        else:
+            return {"verdict": "non-lancé", "cases": [], "error": "lab-runner occupé depuis 10 minutes"}
+        try:
+            data = resp.json()
+        except ValueError:
+            data = None
+        if resp.status_code != 200 or not isinstance(data, list):
+            detail = data.get("error", "") if isinstance(data, dict) else ""
+            return {"verdict": "non-lancé", "cases": [],
+                    "error": f"lab-runner : HTTP {resp.status_code} {str(detail)[:500]}"}
+        if not data:
+            # [] du runner = aucun test trouvé. Relayé tel quel, ce serait indiscernable d'un succès.
+            self._tests_write(app, "absent", [], "moteur")
+            return {"verdict": "absent", "cases": []}
+        cases = [{"title": t.get("title"), "status": t.get("status"),
+                  "message": str(t.get("message") or "")[:4000], "duration_ms": t.get("durationMs")} for t in data]
+        verdict = "ok" if all(c["status"] == "PASSED" for c in cases) else "ko"
+        self._tests_write(app, verdict, cases, "moteur")
+        return {"verdict": verdict, "cases": cases}
 
     async def op_projects(self, c: Caller, as_uid: str | None = None, refresh: bool = False) -> dict:
         uid = self._as(c, as_uid)
@@ -880,18 +969,41 @@ class Engine:
             raise LabError("invalid", "Clé invalide : majuscules, chiffres et « _ », commençant par une lettre (64 max).")
         return key
 
-    async def op_env_list(self, c: Caller, app: str) -> dict:
-        self._app(c, app)
+    async def _env_lines(self, app: str) -> list[tuple[str, bool, str]]:
+        """[(clé, gérée, valeur)] d'après app-env.sh — la valeur ne quitte cette fonction que par env_get."""
         code, out, err = await self._script("app-env.sh", ["list", app])
         if code != 0:
             raise LabError("failed", f"app-env.sh list a rendu {code} : {self._last(err)}")
-        variables = []
+        rows = []
         for line in out.splitlines():
             key, sep, value = line.partition("=")
             if sep:
                 managed = value == "******** #géré"
-                variables.append({"key": key, "managed": managed, "value": None if managed else value})
-        return {"app": app, "variables": variables}
+                rows.append((key, managed, "" if managed else value))
+        return rows
+
+    async def op_env_list(self, c: Caller, app: str) -> dict:
+        """(v11) Les NOMS des variables, jamais leurs valeurs — pour personne."""
+        self._app(c, app)
+        return {"app": app, "variables": [
+            {"key": key, "managed": managed,
+             "has_value": bool(self.registry.app_env(app, key)) if managed else bool(value)}
+            for key, managed, value in await self._env_lines(app)]}
+
+    async def op_env_get(self, c: Caller, app: str, key: str) -> dict:
+        """La valeur d'UNE variable non gérée — son propriétaire seulement, pas même le superutilisateur
+        sur le projet d'un autre."""
+        uid = self._dev(c)
+        self._app(c, app)
+        if self.registry.app_owner(app) != uid:
+            raise LabError("forbidden", "Seul le propriétaire du projet lit la valeur de ses variables.")
+        self._key(key)
+        for name, managed, value in await self._env_lines(app):
+            if name == key:
+                if managed:
+                    raise LabError("managed_key", f"La variable {key} est gérée par le lab : sa valeur ne se lit pas ici.")
+                return {"app": app, "key": key, "value": value}
+        raise LabError("not_found", f"Variable {key} absente de ce projet.")
 
     async def op_env_set(self, c: Caller, app: str, key: str, value: str) -> dict:
         self._app(c, app)
@@ -924,52 +1036,62 @@ class Engine:
     # ── tests ───────────────────────────────────────────────────────────────
     async def op_run_tests(self, c: Caller, app: str) -> dict:
         self._app(c, app)
-        cfg = self.cfg
 
         async def work(job: Job) -> dict:
             job.add_line(f"══ [lab-mcp] étape « cloisonnement » — test de cloisonnement de {app} (lab-runner, navigateur réel)")
-            for _ in range(60):   # le runner ne fait qu'un test à la fois sur tout le lab
-                try:
-                    async with httpx.AsyncClient(timeout=httpx.Timeout(1200, connect=10)) as client:
-                        resp = await client.post(f"{cfg.runner_url}/run", json={"app": app})
-                except httpx.HTTPError as exc:
-                    return {"ok": False, "step": "cloisonnement", "error": f"lab-runner injoignable ({type(exc).__name__})"}
-                if resp.status_code != 409:
-                    break
-                job.add_line("   … un autre test est en cours sur le lab, attente")
-                await asyncio.sleep(10)
-            else:
-                return {"ok": False, "step": "cloisonnement", "error": "lab-runner occupé depuis 10 minutes"}
-            try:
-                data = resp.json()
-            except ValueError:
-                data = None
-            if resp.status_code != 200 or not isinstance(data, list):
-                detail = data.get("error", "") if isinstance(data, dict) else ""
-                return {"ok": False, "step": "cloisonnement",
-                        "error": f"lab-runner : HTTP {resp.status_code} {str(detail)[:500]}"}
-            if not data:
-                # Le runner répond [] sans erreur pour une app sans spec : relayé tel quel,
-                # ce serait indiscernable d'un succès.
+            run = await self._cloisonnement(app, job.add_line)
+            if run.get("error"):
+                return {"ok": False, "step": "cloisonnement", "error": run["error"]}
+            if run["verdict"] == "absent":
                 summary = (f"AUCUN TEST TROUVÉ pour « {app} » — ce n'est PAS un succès : le cloisonnement de ce "
                            "projet n'est vérifié par rien (frontend/e2e/cloisonnement.spec.ts absent).")
                 job.add_line("   ✗ " + summary)
                 return {"ok": False, "step": "cloisonnement", "found": False, "all_passed": False,
-                        "summary": summary, "tests": [], "error": summary}
-            tests = [{"title": t.get("title"), "status": t.get("status"),
-                      "message": str(t.get("message") or "")[:4000], "duration_ms": t.get("durationMs")}
-                     for t in data]
+                        "verdict": "absent", "summary": summary, "tests": [], "error": summary}
+            tests = run["cases"]
             passed = sum(1 for t in tests if t["status"] == "PASSED")
             for t in tests:
                 job.add_line(f"   {'✓' if t['status'] == 'PASSED' else '✗'} {t['title']} — {t['status']}")
             summary = f"{passed}/{len(tests)} test(s) réussi(s)"
-            out = {"ok": passed == len(tests), "step": "cloisonnement", "found": True,
-                   "all_passed": passed == len(tests), "summary": summary, "tests": tests}
+            out = {"ok": run["verdict"] == "ok", "step": "cloisonnement", "found": True,
+                   "all_passed": run["verdict"] == "ok", "verdict": run["verdict"], "summary": summary, "tests": tests}
             if not out["ok"]:
                 out["error"] = summary
             return out
 
         return self._submit("tests", app, c.uid or "?", work)
+
+    async def op_run_all_tests(self, c: Caller) -> dict:
+        """(v11) Le test de cloisonnement de chaque projet qui a un spec, l'un après l'autre."""
+        uid = self._dev(c)
+        if not c.is_superuser:
+            raise LabError("forbidden", "Réservé au superutilisateur.")
+        apps = [a for a in self.registry.all_apps() if self.registry.has_spec(a)]
+
+        async def work(job: Job) -> dict:
+            results = []
+            for app in apps:
+                job.add_line(f"══ [lab-mcp] étape « {app.replace('-', '_')} » — test de cloisonnement de {app}")
+                run = await self._cloisonnement(app, job.add_line)
+                if run.get("error"):
+                    job.add_line(f"   ✗ non lancé : {run['error']}")
+                elif run["verdict"] == "absent":
+                    job.add_line("   ✗ AUCUN TEST TROUVÉ — ce n'est pas un succès")
+                else:
+                    for t in run["cases"]:
+                        job.add_line(f"   {'✓' if t['status'] == 'PASSED' else '✗'} {t['title']} — {t['status']}")
+                results.append({"app": app, "verdict": run["verdict"],
+                                "cases": [{"title": t.get("title"), "status": t.get("status")} for t in run["cases"]]})
+            ok = bool(results) and all(r["verdict"] == "ok" for r in results)
+            out = {"ok": ok, "step": "done", "results": results}
+            if not ok:
+                bad = [r["app"] for r in results if r["verdict"] != "ok"]
+                out["error"] = ("aucun projet n'a de test de cloisonnement" if not results
+                                else f"{len(bad)} projet(s) sans verdict « ok » : {', '.join(bad)}")
+            return out
+
+        job = self._submit("tests_all", "", uid, work)
+        return {"job_id": job["job_id"], "kind": "tests_all", "apps": apps}
 
     # ── tickets ─────────────────────────────────────────────────────────────
     async def op_open_ticket(self, c: Caller, title: str, body: str, scope: str = "app", app: str = "") -> dict:

@@ -113,6 +113,19 @@ class Registry:
             pass
         return value
 
+    def showcase(self) -> dict[str, str]:
+        """Vitrine publique : `.app-descriptions`, une ligne NON commentée par app —
+        `dossier | Nom affiché | Description | [lien]`. Rend {dossier: description}."""
+        out: dict[str, str] = {}
+        for line in self._lines(".app-descriptions"):
+            parts = [p.strip() for p in line.split("|")]
+            if valid_app(parts[0]):
+                out[parts[0]] = parts[2] if len(parts) > 2 else ""
+        return out
+
+    def has_spec(self, app: str) -> bool:
+        return os.path.isfile(os.path.join(self.app_dir(app), "frontend", "e2e", "cloisonnement.spec.ts"))
+
     def lab_groups(self) -> list[str]:
         """Noms des groupes du lab, lus dans sso-lab/ldap/init.ldif (aucun
         identifiant d'administration utilisé, rien d'autre de l'annuaire)."""

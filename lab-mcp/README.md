@@ -55,7 +55,7 @@ d'autorisation échoue (le realm a un chemin, `/auth/realms/ssolab`) :
 
 ### Outils MCP
 `whoami` · `list_apps` · `check_name` · `create_app` · `deploy` · `job_status` · `status` · `logs` ·
-`env_list` / `env_set` / `env_unset` · `sql` · `run_tests` · `open_ticket`.
+`env_list` / `env_get` / `env_set` / `env_unset` · `sql` · `run_tests` · `smtp_status` · `open_ticket`.
 `create_app`, `deploy`, `run_tests` rendent un `job_id` : rappeler `job_status` jusqu'à
 `terminal: true`. Résultats et erreurs : ceux d'`API.md` (table de correspondance au §1).
 
@@ -200,7 +200,7 @@ Django dans le `.env` de l'app, et `scripts/app-restart.sh` les met en service s
 | `azp` **exact par entrée** : `lab-mcp` pour `/mcp`, `lab-admin` pour `/mcp/api` ; `admin-cli` refusé partout | `labmcp/auth.py` |
 | Entrée MCP : compte dans `.devs`, relu à chaque requête. Superutilisateur = `LAB_SUPERUSER`, jamais un groupe | `labmcp/auth.py`, `registry.py` |
 | Propriété du projet pour toute opération qui en prend un ; « inconnu » et « à un autre » indistincts | `Engine._app` |
-| Jeton d'espace : 256 bits, haché, limité à un projet et à onze opérations (annoncées seules), jamais superutilisateur | `workspaces.py`, `Engine.call` |
+| Jeton d'espace : 256 bits, haché, limité à un projet et à douze opérations (annoncées seules), jamais superutilisateur | `workspaces.py`, `Engine.call` |
 | Seuls les scripts d'I4 sont exécutés, en liste d'arguments ; enchaînements lancés **par** `lab-lock.sh` | `procs.py`, `chain.py` |
 | `docker` lancé directement **uniquement** pour les espaces, les pgAdmin et le pare-feu, avec des noms dérivés d'un uid validé | `workspaces.py`, `pgadmin.py`, `firewall.py` |
 | Jeton GitHub = celui de l'appelant, redemandé à oauth-hub à chaque fois, jamais écrit ni journalisé ; pas de `gh` dans l'image | `oauthhub.py`, `github.py` |
@@ -220,6 +220,13 @@ injoignable…), lu par `scripts/app-remote.sh` — sans jeton, sans verrou, san
 mémoire, vérifié en arrière-plan (jamais pendant une requête) : au plus toutes les 5 minutes par
 projet, après chaque déploiement, sur webhook `push` signé, ou sur `?refresh=1` ; deux vérifications
 à la fois au plus.
+
+**Variables d'environnement** (v11) : la liste ne rend que les noms (`managed`, `has_value`) ; une
+valeur ne se lit qu'une à la fois, par le propriétaire du projet (`GET …/env/<CLÉ>`, `no-store`).
+
+**Tests de cloisonnement** (v11) : le moteur est le seul lanceur (bouton, MCP, « tout lancer » du
+superutilisateur). Il attend le runner s'il est pris, et garde le dernier résultat de chaque projet
+dans `<LAB_STATE_DIR>/tests/<app>.json` (verdict, date, cas) — rendu dans `tests.cloisonnement`.
 
 Décisions de ce secteur :
 - Python, SDK MCP officiel 1.x, Streamable HTTP sans état ; client OAuth pré-enregistré.

@@ -32,13 +32,13 @@ MAX_HISTORY = 50
 MAX_LOG_LINES = 3000
 MAX_LINE_LEN = 2000
 TERMINAL = ("succeeded", "failed")
-_STEP = re.compile(r"\[lab-mcp\] étape « ([a-z_]+) »")
+_STEP = re.compile(r"\[lab-mcp\] étape « ([a-z0-9_]+) »")
 
 
 @dataclass
 class Job:
     id: str
-    kind: str                 # deploy | create | tests
+    kind: str                 # deploy | create | tests | tests_all
     app: str
     owner: str                # qui l'a lancé : un uid, ou « auto-deploy »
     state: str = "queued"     # queued | running | succeeded | failed  (les deux derniers sont terminaux)

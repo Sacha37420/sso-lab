@@ -128,6 +128,14 @@ if os.environ.get("TEST_SMTP_SCRIPT_DOUBLE") == "1":
     engine_module.Engine._smtp_marker = _marker
     print("[harness] app-smtp.sh / app-restart.sh remplacés par des doubles locaux", flush=True)
 
+if os.environ.get("TEST_SPEC_ONLY"):
+    # « Tout lancer » borné à quelques apps pour l'essai (le vrai lance toutes celles qui ont un spec).
+    from labmcp import registry as registry_module  # noqa: E402
+    _only = set(os.environ["TEST_SPEC_ONLY"].split(","))
+    _real_has_spec = registry_module.Registry.has_spec
+    registry_module.Registry.has_spec = lambda self, a: a in _only and _real_has_spec(self, a)
+    print(f"[harness] run-all borné à : {sorted(_only)}", flush=True)
+
 app = build(cfg)
 if os.environ.get("TEST_WS_TOKEN_FOR"):
     # Jeton d'espace injecté pour (uid, app) SANS conteneur : sert à éprouver ce qu'un jeton

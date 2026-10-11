@@ -1,4 +1,4 @@
-# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v10, I9 v7, I10 v9)
+# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v11, I9 v7, I10 v9)
 
 Écrite à partir de ce que le code rend réellement (`labmcp/engine.py`). Là où la table d'I5 et ce
 document divergent sur une **forme**, ce document l'emporte.
@@ -17,10 +17,16 @@ Ce qui reste `🟡`, et pourquoi (rien de tout cela ne change une forme) :
   inscriptible n'était disponible pour l'essai ;
 - le dernier saut « Caddy du lab → passerelle des espaces » : le moteur n'est pas déployé.
 
+> ⚠ **Changement incompatible en v11** — `GET /projects/<app>/env` ne rend plus aucune valeur
+> (`value` disparaît, `has_value` arrive). Une version de `lab-admin` antérieure à v11 afficherait des
+> valeurs vides : moteur et `lab-admin` v11 se déploient **ensemble**. Même changement pour l'outil
+> MCP `env_list`.
+
 **Écarts avec la table d'I5** :
 - routes **en plus** : `GET /mcp/api/groups` (v6) ; `GET /mcp/api/me/database-password`,
   `POST` et `DELETE /mcp/api/me/pgadmin` (I9, v7 — §3.7, formes reprises telles quelles du contrat) ;
   les six routes SMTP d'I10 (v9 — §3.8, formes reprises telles quelles du contrat) ;
+  `GET /mcp/api/projects/<app>/env/<CLÉ>` et `POST /mcp/api/tests/run-all` (v11 — §3.4, §3.5) ;
 - aucune route de la table n'est absente ;
 - `GET /mcp/api/jobs/<id>` ne rend pas `{state, step, log}` seul : voir « Jobs » ;
 - `POST …/tests` rend un job (`{job_id}`), comme la table le dit — l'outil MCP `run_tests`, qui était
@@ -51,7 +57,8 @@ contrôles, même objet rendu, même erreur. Correspondance :
 | `deploy` | `POST /projects/<app>/deploy` | `deploy` |
 | `commits` | `GET /projects/<app>/commits` | — |
 | `logs` | `GET /projects/<app>/logs` | `logs` |
-| `env_list` / `env_set` / `env_unset` | `GET …/env` · `PUT …/env/<CLÉ>` · `DELETE …/env/<CLÉ>` | `env_list` / `env_set` / `env_unset` |
+| `env_list` / `env_get` / `env_set` / `env_unset` | `GET …/env` · `GET` / `PUT` / `DELETE …/env/<CLÉ>` | `env_list` / `env_get` / `env_set` / `env_unset` |
+| `run_all_tests` | `POST /tests/run-all` | — |
 | `sql` | `POST /projects/<app>/sql` | `sql` |
 | `run_tests` | `POST /projects/<app>/tests` | `run_tests` |
 | `open_ticket` | `POST /projects/<app>/tickets` | `open_ticket` |
@@ -94,6 +101,7 @@ reformulé. Entrée MCP : le même objet, en JSON, dans le texte de l'erreur d'o
 | `workspace_limit` | 429 | `LAB_WS_MAX` espaces déjà ouverts | `open`, `max` |
 | `pg_trust_enabled` | 409 | pgAdmin par dev refusé : PostgreSQL accepte encore le rôle d'administration sans mot de passe depuis les réseaux du lab | — |
 | `pgadmin_limit` | 429 | `LAB_PG_MAX` pgAdmin déjà ouverts | `open`, `max` |
+| `managed_key` | 403 | lecture de la valeur d'une variable gérée par le lab | — |
 | `smtp_in_use` | 409 | suppression d'un profil SMTP rattaché à des projets | `projects: [str]` |
 | `smtp_error` | 502 | l'email d'essai n'est pas parti ; `detail` = ce que le serveur SMTP a répondu, sans secret | — |
 | `rate_limited` | 429 | plus d'un email d'essai en 30 s | `retry_after` (secondes) |
@@ -203,6 +211,10 @@ d'un dev avec.
   "name": "mon-app",
   "owner": "hassan",
   "kind": "application",       // (v10) "application" | "outil"
+  "showcased": true,           // (v11) figure dans la vitrine publique (.app-descriptions, ligne non commentée)
+  "description": "Suivi de capteurs LoRa : relevés, mesures…",   // (v11) sa description de vitrine, ou null
+  "tests": {"cloisonnement": {"verdict": "ok", "at": "2026-10-11T10:20:00Z",          // (v11)
+            "cases": [{"title": "non-membre : refusé au premier login", "status": "PASSED"}]}},
   "repo_url": "https://github.com/hassan-gh/mon-app.git",      // null si le projet n'a pas de dépôt enregistré
   "urls": {"app": "https://<DOMAIN>/mon-app/", "api": "https://<DOMAIN>/mon-app-api/"},
           // convention du lab : app = interface (ou l'API seule pour un projet « django ») ;
@@ -220,6 +232,19 @@ d'un dev avec.
   alors qu'il y a eu un déploiement ; `never_deployed` ; `unknown` = l'état n'a pas pu être lu.
 - `deployed.tests.*` : `"ok" | "ko" | "absent" | "non-lancé"` (verdicts d'I4) ; `tests` peut être
   `null` pour un déploiement antérieur à l'enregistrement.
+
+**`tests.cloisonnement` (v11) — dernier test de cloisonnement connu du moteur**, quelle qu'en soit
+l'origine : bouton ou outil `run_tests`, « tout lancer », ou déploiement (le plus récent l'emporte).
+- `verdict` : `"ok"` (tous les cas passés) | `"ko"` (au moins un cas en échec) | `"absent"` (aucun test
+  trouvé — **jamais un succès**) | `"non-lancé"` (aucun lancement connu) ;
+- `at` : date UTC du lancement, `null` si `non-lancé` ;
+- `cases` : `[{"title", "status"}]`, `status` = `"PASSED" | "FAILED" | "ERROR"` ; `[]` quand le verdict
+  vient d'un déploiement (qui n'enregistre que le verdict), ou qu'il n'y a pas de cas.
+`deployed.tests` reste ce que le dernier déploiement a enregistré ; ce champ-ci est celui à afficher.
+
+**`showcased`, `description` (v11) — vitrine publique.** Lus dans `.app-descriptions` à la racine :
+une ligne non commentée `dossier | nom | description` = en vitrine. `description` est `null` hors
+vitrine.
 
 **`kind` (v10) — nature du projet.** `"application"` si son dossier est dans `deploiement/`, `"outil"`
 s'il est à la racine du dépôt (services du cadriciel : `lab-admin`, `storage`, `oauth-hub`,
@@ -311,12 +336,21 @@ l'origine n'est pas un dépôt GitHub lisible.
 `truncated` : plus de 4000 lignes au total, seules les dernières sont rendues. Projet non déployé :
 `500 failed` avec le message du lab (« aucun conteneur… »).
 
-#### `GET /projects/<app>/env` ✅
+#### `GET /projects/<app>/env` ✅ — (v11) **plus aucune valeur, pour personne**
 ```json
-{"app": "mon-app", "variables": [{"key": "DB_PASSWORD", "managed": true,  "value": null},
-                                 {"key": "MA_CLE_API",  "managed": false, "value": "abc"}]}
+{"app": "mon-app", "variables": [{"key": "DB_PASSWORD", "managed": true,  "has_value": true},
+                                 {"key": "MA_CLE_API",  "managed": false, "has_value": true},
+                                 {"key": "EMAIL_HOST",  "managed": false, "has_value": false}]}
 ```
-`managed: true` = clé gérée par le lab : sa valeur n'est **jamais** rendue et elle ne se modifie pas.
+`managed: true` = clé gérée par le lab : elle ne se lit ni ne se modifie. `has_value` : la variable
+n'est pas vide. Visible par le propriétaire et par le superutilisateur.
+
+#### `GET /projects/<app>/env/<CLÉ>` ✅ — (v11) → `{"app", "key", "value": "…"}`
+- **Propriétaire du projet seulement** : `403 forbidden` pour le superutilisateur sur le projet d'un
+  autre. Clé gérée → `403 managed_key`. Clé absente → `404 not_found`. Clé mal formée → `400 invalid`.
+- En-tête `Cache-Control: no-store`, succès comme erreur. L'appel est journalisé sans la valeur.
+- `value` est rendue telle qu'elle est écrite dans le `.env` (guillemets éventuels compris).
+- Outil MCP `env_get(app, key)` : même réponse ; autorisé au jeton d'espace sur le projet ouvert.
 
 #### `PUT /projects/<app>/env/<CLÉ>` ✅ — `{"value": "…"}` → `{"app", "key", "set": true, "effective": "next_deploy"}`
 #### `DELETE /projects/<app>/env/<CLÉ>` ✅ → `{"app", "key", "unset": true, "effective": "next_deploy"}`
@@ -344,6 +378,24 @@ développeur — cas des apps historiques avant leur bascule), `502 upstream` (`
 
 #### `POST /projects/<app>/tests` ✅ — sans corps → `{"job_id", "kind": "tests", …}`
 Lance le test de cloisonnement (navigateur réel). Résultat dans le job, §4.
+Le moteur est le seul lanceur : si le runner est déjà occupé (un seul test à la fois sur le lab), le
+job attend jusqu'à 10 minutes au lieu d'échouer. Le résultat est gardé et rendu dans
+`tests.cloisonnement` du projet (§3.2).
+
+#### `POST /tests/run-all` ✅ — (v11) superutilisateur (`403` sinon), sans corps
+```json
+{"job_id": "ce6a363cc3eb2740", "kind": "tests_all", "apps": ["oauth-hub", "storage"]}
+```
+`apps` : les projets qui ont un spec (`frontend/e2e/cloisonnement.spec.ts`), dans l'ordre où ils
+seront joués, **l'un après l'autre**. Un seul lancement à la fois : `409 job_exists` sinon.
+Résultat du job (§4) :
+```json
+{"ok": true, "step": "done",
+ "results": [{"app": "oauth-hub", "verdict": "ok", "cases": [{"title": "…", "status": "PASSED"}]}]}
+```
+`verdict` par app : `ok` | `ko` | `absent` | `non-lancé` (le runner n'a pas pu jouer ce test — la
+raison est dans `log`). `ok: true` seulement si **tous** sont `ok`. Dans `GET /jobs/<id>`, `app` vaut
+`""` et `step` nomme le projet en cours.
 
 #### `POST /projects/<app>/tickets` ✅ (contre un double de GitHub) — `{"title", "body", "scope"}`
 `scope` : `"app"` (défaut — dépôt du projet) | `"lab"` (dépôt du lab ; `<app>` sert de contexte).
@@ -514,7 +566,7 @@ par MCP (un mot de passe SMTP ne se confie pas à une IA). Autorisé au jeton d'
 ```json
 {
   "job_id": "d359abbb4186de01",
-  "kind": "deploy",                 // "create" | "deploy" | "tests"
+  "kind": "deploy",                 // "create" | "deploy" | "tests" | "tests_all"
   "app": "mon-app",
   "state": "running",               // "queued" | "running" | "succeeded" | "failed"
   "terminal": false,                // true pour "succeeded" et "failed" : arrêter d'interroger
@@ -561,9 +613,11 @@ Un déploiement réussi avec `tests.cloisonnement = "ko"` reste un succès (I4) 
 `rollback_complete: false` = il reste quelque chose à faire à la main, dit dans `rollback` (cas
 attendu : le dépôt GitHub vide n'a pas pu être supprimé — le lab n'a pas la portée `delete_repo`).
 
+**`tests_all`** (v11) — voir `POST /tests/run-all`, §3.5.
+
 **`tests`** — étape : `cloisonnement`
 ```json
-{"ok": true, "step": "cloisonnement", "found": true, "all_passed": true, "summary": "3/3 test(s) réussi(s)",
+{"ok": true, "step": "cloisonnement", "found": true, "all_passed": true, "verdict": "ok", "summary": "3/3 test(s) réussi(s)",
  "tests": [{"title": "un membre du groupe accède à l'app", "status": "PASSED", "message": "", "duration_ms": 4100}]}
 ```
 `tests[].status` : `"PASSED" | "FAILED" | "ERROR"`. **`found: false` = aucun test trouvé** : le job
@@ -578,8 +632,8 @@ Autre échec (runner injoignable…) : `{"ok": false, "step": "cloisonnement", "
   connexion). L'initialisation ne se fait que par lab-admin.
 - **Jeton d'espace de travail** (`labws_…`, variable `LAB_MCP_TOKEN` dans l'espace) : vaut son dev,
   **limité au projet ouvert**, et aux outils `whoami`, `status`, `logs`, `env_list`, `env_set`,
-  `env_unset`, `deploy`, `run_tests`, `job_status`, (v8) **`sql`** et (v9) `smtp_status` — même exécution que pour le dev :
-  rôle `dev_<uid>` du propriétaire, schéma du projet. `tools/list` n'annonce à ce jeton **que ces onze
+  `env_unset`, `deploy`, `run_tests`, `job_status`, (v8) **`sql`**, (v9) `smtp_status` et (v11) `env_get` — même exécution que pour le dev :
+  rôle `dev_<uid>` du propriétaire, schéma du projet. `tools/list` n'annonce à ce jeton **que ces douze
   outils** ; un autre outil appelé quand même : `forbidden` ; tout autre projet : `not_found`. Il
   meurt à la fermeture de l'espace et au redémarrage du moteur.
 - Les outils rendent exactement les objets des routes correspondantes (§1).

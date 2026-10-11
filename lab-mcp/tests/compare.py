@@ -42,6 +42,8 @@ PAIRS = [
     ("env_set", ("PUT", f"/projects/{app}/env/CMP_CLE", {"value": "a b"}), ("env_set", {"app": app, "key": "CMP_CLE", "value": "a b"})),
     ("env_set (clé gérée)", ("PUT", f"/projects/{app}/env/DB_NAME", {"value": "x"}), ("env_set", {"app": app, "key": "DB_NAME", "value": "x"})),
     ("env_list", ("GET", f"/projects/{app}/env", None), ("env_list", {"app": app})),
+    ("env_get", ("GET", f"/projects/{app}/env/CMP_CLE", None), ("env_get", {"app": app, "key": "CMP_CLE"})),
+    ("env_get (clé gérée)", ("GET", f"/projects/{app}/env/DB_PASSWORD", None), ("env_get", {"app": app, "key": "DB_PASSWORD"})),
     ("env_unset", ("DELETE", f"/projects/{app}/env/CMP_AUTRE", None), ("env_unset", {"app": app, "key": "CMP_AUTRE"})),
     ("sql", ("POST", f"/projects/{app}/sql", {"query": "select 1 as un, current_user"}), ("sql", {"app": app, "query": "select 1 as un, current_user"})),
     ("sql (erreur)", ("POST", f"/projects/{app}/sql", {"query": "select * from pg_authid"}), ("sql", {"app": app, "query": "select * from pg_authid"})),
