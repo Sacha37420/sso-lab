@@ -39,14 +39,35 @@ disponibilité d'une app** : un `setup2.sh peripheriques` ou une panne du backen
 refusée → trou dans les enregistrements.
 
 À vérifier en réel sur la version épinglée (actuellement `1.21.1`) **avant** d'écrire le contrat :
-- [ ] peut-on authentifier `publish` / `api` / `playback` en interne (`authInternalUsers`) tout en
+- [x] (non, voir ci-dessous) peut-on authentifier `publish` / `api` / `playback` en interne (`authInternalUsers`) tout en
       déléguant `read` au hook HTTP ? (`authHTTPExclude` : les actions exclues sont-elles
       *refusées*, *autorisées sans contrôle*, ou *renvoyées à l'auth interne* ?) ;
-- [ ] si le mélange est impossible : alternative = un mini-service d'auth `lab-media-auth` dans
+- [x] (retenu, éprouvé) si le mélange est impossible : alternative = un mini-service d'auth `lab-media-auth` dans
       `infra/` (règles publish/internal locales, `read` relayé à `peripheriques`) — ou accepter le
       trou, mais alors le documenter dans `CLAUDE.md` ;
 - [ ] **ne jamais** se rabattre sur « `publish` sans authentification » : RTSP est joignable par
       toute app sur `dev-net`.
+
+### Tranché par essai réel le 2026-10-11 (MediaMTX 1.21.1, conteneurs jetables, mire synthétique)
+
+- **Le mélange n'existe pas nativement.** `authMethod` est une valeur unique (`internal` | `http` |
+  `jwt`), sans repli de l'une vers l'autre (`internal/auth/manager.go`, `Manager.Authenticate`).
+- **Une action listée dans `authHTTPExclude` est autorisée sans aucun contrôle** — ni refusée, ni
+  renvoyée à `authInternalUsers` (`authenticateHTTP` rend un succès immédiat). Constaté :
+  publication RTSP sans identifiants acceptée, API et relecture en 200 sans identifiants, et WHIP
+  (routé par Caddy) ouvert à tous. **Ne jamais utiliser `authHTTPExclude`.**
+- **Retenu : un mini-service d'authentification `lab-media-auth`, dans le cadriciel.** MediaMTX
+  garde `authMethod: http` sans exclusion et pointe sur lui ; il tranche lui-même `publish`,
+  `api`, `playback`, `metrics` avec les secrets `MEDIA_*`, et **relaie `read`** à l'app qui porte
+  la règle d'accès, en échec fermé. Constaté : publication acceptée et enregistrement qui
+  continue quand l'app est arrêtée ; `read` refusé tant qu'elle est arrêtée ; mauvais mot de
+  passe refusé partout ; environ +1,4 ms par appel.
+- Conséquences : la dépendance se déplace vers ce mini-service — il partage le cycle de vie de
+  `lab-media` (une publication en cours lui survit, mais ffmpeg ne peut pas se reconnecter pendant
+  son arrêt, et les expulsions sont impossibles pendant ce temps). Le hook reçoit deux appels par
+  connexion RTSP (le premier sans identifiants, avant le défi), et un champ `userAgent` en plus.
+- Non vérifié : app qui pend au lieu de refuser, lecture WHEP par un vrai navigateur à travers le
+  relais, relecture `/get`.
 
 ## Étapes
 

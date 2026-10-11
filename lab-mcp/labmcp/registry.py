@@ -82,6 +82,9 @@ class Registry:
         deployed = os.path.join(self.root, "deploiement", app)
         return deployed if os.path.isdir(deployed) else os.path.join(self.root, app)
 
+    def in_deploiement(self, app: str) -> bool:
+        return os.path.isdir(os.path.join(self.root, "deploiement", app))
+
     def state_dir(self) -> str:
         # Même priorité que registry_state_dir : environnement > .env racine > <racine>/.lab-state
         return (os.environ.get("LAB_STATE_DIR", "").strip() or self._root_env("LAB_STATE_DIR")

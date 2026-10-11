@@ -1,4 +1,4 @@
-# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v8, I9 v7)
+# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v10, I9 v7, I10 v9)
 
 Écrite à partir de ce que le code rend réellement (`labmcp/engine.py`). Là où la table d'I5 et ce
 document divergent sur une **forme**, ce document l'emporte.
@@ -20,6 +20,7 @@ Ce qui reste `🟡`, et pourquoi (rien de tout cela ne change une forme) :
 **Écarts avec la table d'I5** :
 - routes **en plus** : `GET /mcp/api/groups` (v6) ; `GET /mcp/api/me/database-password`,
   `POST` et `DELETE /mcp/api/me/pgadmin` (I9, v7 — §3.7, formes reprises telles quelles du contrat) ;
+  les six routes SMTP d'I10 (v9 — §3.8, formes reprises telles quelles du contrat) ;
 - aucune route de la table n'est absente ;
 - `GET /mcp/api/jobs/<id>` ne rend pas `{state, step, log}` seul : voir « Jobs » ;
 - `POST …/tests` rend un job (`{job_id}`), comme la table le dit — l'outil MCP `run_tests`, qui était
@@ -93,6 +94,9 @@ reformulé. Entrée MCP : le même objet, en JSON, dans le texte de l'erreur d'o
 | `workspace_limit` | 429 | `LAB_WS_MAX` espaces déjà ouverts | `open`, `max` |
 | `pg_trust_enabled` | 409 | pgAdmin par dev refusé : PostgreSQL accepte encore le rôle d'administration sans mot de passe depuis les réseaux du lab | — |
 | `pgadmin_limit` | 429 | `LAB_PG_MAX` pgAdmin déjà ouverts | `open`, `max` |
+| `smtp_in_use` | 409 | suppression d'un profil SMTP rattaché à des projets | `projects: [str]` |
+| `smtp_error` | 502 | l'email d'essai n'est pas parti ; `detail` = ce que le serveur SMTP a répondu, sans secret | — |
+| `rate_limited` | 429 | plus d'un email d'essai en 30 s | `retry_after` (secondes) |
 | `sql_error` | 400 | erreur rendue par PostgreSQL | `sqlstate` |
 | `sql_timeout` | 400 | délai de la console SQL dépassé | — |
 | `upstream` | 502 | oauth-hub, GitHub, PostgreSQL ou lab-runner injoignable ou en refus | `service` |
@@ -198,6 +202,7 @@ d'un dev avec.
 {"count": 1, "projects": [{
   "name": "mon-app",
   "owner": "hassan",
+  "kind": "application",       // (v10) "application" | "outil"
   "repo_url": "https://github.com/hassan-gh/mon-app.git",      // null si le projet n'a pas de dépôt enregistré
   "urls": {"app": "https://<DOMAIN>/mon-app/", "api": "https://<DOMAIN>/mon-app-api/"},
           // convention du lab : app = interface (ou l'API seule pour un projet « django ») ;
@@ -215,6 +220,11 @@ d'un dev avec.
   alors qu'il y a eu un déploiement ; `never_deployed` ; `unknown` = l'état n'a pas pu être lu.
 - `deployed.tests.*` : `"ok" | "ko" | "absent" | "non-lancé"` (verdicts d'I4) ; `tests` peut être
   `null` pour un déploiement antérieur à l'enregistrement.
+
+**`kind` (v10) — nature du projet.** `"application"` si son dossier est dans `deploiement/`, `"outil"`
+s'il est à la racine du dépôt (services du cadriciel : `lab-admin`, `storage`, `oauth-hub`,
+`app-builder`, `lab-mcp`). C'est l'emplacement réel qui décide, pas une liste de noms. Présent dans
+`GET /projects`, `GET /projects/<app>` et les outils `list_apps` / `status`.
 
 **`github` (v8) — écart entre GitHub et ce qui tourne.** Paramètre `?refresh=1` sur `GET /projects`
 et `GET /projects/<app>`. Même champ dans l'outil MCP `status` (et `list_apps`).
@@ -246,6 +256,9 @@ et `GET /projects/<app>`. Même champ dans l'outil MCP `status` (et `list_apps`)
 "database": {"host": "postgres", "name": "dev_hassan", "user": "dev_hassan", "schema": "mon_app"},
             // null pour une app historique encore dans la base partagée : pas de console SQL (503 unavailable)
 "auto_deploy": {"enabled": false, "available": true},   // available : le webhook existe côté GitHub
+"smtp": {"profile": "8cafc7c2", "label": "Gmail perso", "stale": false},
+            // (v9) profil SMTP rattaché ; {"profile": null, "label": null, "stale": false} s'il n'y en a pas.
+            // stale : quelque chose tourne, et avec une ancienne version du profil (§3.8)
 "mcp_url": "https://<DOMAIN>/mcp"
 ```
 La branche par défaut n'est pas ici (elle demande GitHub) : elle est rendue par `…/commits`.
@@ -429,6 +442,70 @@ Erreurs : `409 pg_trust_enabled`, `429 pgadmin_limit` `{"open": 3, "max": 3}`, `
 minutes sans requête (un onglet pgAdmin ouvert interroge son serveur en continu : il compte comme
 actif). Rien n'est conservé d'une ouverture à l'autre (préférences comprises).
 
+### 3.8 Profils SMTP (I10, v9)
+
+Un dev définit ses comptes SMTP, en rattache un à un projet ; le lab pose alors dans l'app les
+variables standard de Django (`EMAIL_HOST`…), et le backend envoie par `send_mail(...)` sans rien
+régler. Le moteur n'envoie rien pour le compte d'une app.
+
+**Profil** — la forme rendue par toutes les routes ci-dessous :
+```json
+{"id": "8cafc7c2", "label": "Gmail perso", "host": "smtp.gmail.com", "port": 587,
+ "security": "starttls", "username": "moi@exemple.fr", "from_email": "moi@exemple.fr",
+ "has_password": true, "projects": ["mon-app"]}
+```
+`id` : 8 caractères hexadécimaux, généré. `security` : `"starttls"` | `"ssl"` | `"none"`. `projects` :
+projets du dev auxquels ce profil est rattaché. **Le mot de passe n'est rendu par aucune route**
+(`has_password` dit seulement s'il y en a un).
+
+Règles de validation (`400 invalid`, le message nomme le champ, jamais sa valeur) : `label` 1 à 60
+caractères ; `host` nom d'hôte ou IPv4 ; `port` entier 1 à 65535 ; `from_email` une adresse ;
+`username` (≤ 254) et `password` (≤ 1024) en **ASCII imprimable** ; `security: "none"` seulement sans
+identifiant ni mot de passe ; un mot de passe exige un `username` ; champ inconnu refusé ; 10 profils
+au plus par dev.
+
+Appelant non initialisé : `409 not_initialized` (statut habituel — I10 n'en fixe pas d'autre).
+
+#### `GET /me/smtp` ✅ — `?as=<uid>` (superutilisateur, lecture) → `{"profiles": [<profil>…]}`
+#### `POST /me/smtp` ✅ — `{label, host, port, security, username, password, from_email}` → **`201`** `<profil>`
+`username` et `password` facultatifs (vides par défaut). Seule route du moteur à rendre `201`.
+#### `PUT /me/smtp/<id>` ✅ — mêmes champs, tous facultatifs → `200` `<profil>` + `"stale_projects": ["mon-app"]`
+`password` absent = inchangé ; `"password": ""` l'efface. `stale_projects` : projets rattachés qui
+tournent encore avec l'ancienne version (même calcul que `smtp.stale` ci-dessous) ; `[]` sinon.
+#### `DELETE /me/smtp/<id>` ✅ → `{"deleted": true}` · `409 smtp_in_use` `{"projects": ["mon-app"]}` s'il est rattaché
+#### `POST /me/smtp/<id>/test` ✅ (serveur SMTP jetable) — sans corps → `{"sent": true, "to": "moi@exemple.fr"}`
+- Le message part **uniquement** vers l'adresse du compte de l'appelant (claim `email` de son jeton),
+  jamais ailleurs ; `400 invalid` si le compte n'en a pas.
+- `502 smtp_error` : `detail` dit l'étape et ce que le serveur a répondu (« authentification refusée
+  par le serveur : 535 … », « délai dépassé (connexion) », « certificat du serveur refusé : … »).
+- `429 rate_limited` `{"retry_after": 29}` : un essai toutes les 30 s par dev, réussi ou non.
+- `400 invalid` si l'hôte désigne une adresse interne (réseau privé, boucle locale) : l'essai ne part
+  que vers un serveur joignable par Internet.
+- Durée : 1 à 3 s en général, **20 s au plus**.
+`404 not_found` sur ces quatre routes pour un profil inconnu — ou celui d'un autre.
+
+#### `PUT /projects/<app>/smtp` ✅ — `{"profile": "<id>" | null, "apply": "now" | "next_deploy"}` → `{"app", "profile", "applied": bool}`
+- **Propriétaire du projet seulement** (`403 forbidden` pour le superutilisateur sur le projet d'un
+  autre), avec un profil **à lui** (`404 not_found` sinon). `profile: null` détache. `apply` : défaut
+  `"next_deploy"`.
+- Les variables sont écrites dans le projet dans tous les cas. `"apply": "now"` redémarre ensuite ses
+  conteneurs **sans reconstruire** (≈ 20 s) : `applied: true`. `applied: false` = elles entreront en
+  service au prochain déploiement — c'est aussi la réponse à `"now"` quand rien n'est en service.
+- `500 failed` quand `"now"` est demandé mais que le redémarrage est refusé : `detail` dit pourquoi et
+  ce qu'il faut faire. Cas attendu : un déploiement vient d'être refusé par ses tests — redéployer
+  d'abord. Les variables sont posées quand même.
+- `423 busy` si un déploiement est en cours.
+- Tant qu'un profil est rattaché, les sept variables SMTP du projet sont `managed` dans `GET …/env`.
+
+**`smtp.stale`** (dans `GET /projects/<app>`) : `true` quand quelque chose est en service **et** que
+le profil rattaché a été modifié depuis qu'il a été écrit dans le projet, ou qu'il y a été écrit sans
+être encore entré en service. Il repasse à `false` après `"apply": "now"`, ou après le premier
+déploiement réussi postérieur à l'écriture. Toujours `false` si rien ne tourne ou si aucun profil
+n'est rattaché. Modifier un profil ne met **pas** à jour les projets : refaire `PUT …/smtp`.
+
+Outil MCP : **`smtp_status(app)`** → `{"profile": "<id>" | null, "label": "…" | null}` — rien d'autre
+par MCP (un mot de passe SMTP ne se confie pas à une IA). Autorisé au jeton d'espace sur le projet ouvert.
+
 ---
 
 ## 4. Jobs (G1, G10)
@@ -501,8 +578,8 @@ Autre échec (runner injoignable…) : `{"ok": false, "step": "cloisonnement", "
   connexion). L'initialisation ne se fait que par lab-admin.
 - **Jeton d'espace de travail** (`labws_…`, variable `LAB_MCP_TOKEN` dans l'espace) : vaut son dev,
   **limité au projet ouvert**, et aux outils `whoami`, `status`, `logs`, `env_list`, `env_set`,
-  `env_unset`, `deploy`, `run_tests`, `job_status` et (v8) **`sql`** — même exécution que pour le dev :
-  rôle `dev_<uid>` du propriétaire, schéma du projet. `tools/list` n'annonce à ce jeton **que ces dix
+  `env_unset`, `deploy`, `run_tests`, `job_status`, (v8) **`sql`** et (v9) `smtp_status` — même exécution que pour le dev :
+  rôle `dev_<uid>` du propriétaire, schéma du projet. `tools/list` n'annonce à ce jeton **que ces onze
   outils** ; un autre outil appelé quand même : `forbidden` ; tout autre projet : `not_found`. Il
   meurt à la fermeture de l'espace et au redémarrage du moteur.
 - Les outils rendent exactement les objets des routes correspondantes (§1).

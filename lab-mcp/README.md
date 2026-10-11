@@ -169,6 +169,27 @@ inversement.
 - Le mot de passe se lit par `GET /mcp/api/me/database-password` (soi-même uniquement, `no-store`,
   journalisé sans la valeur).
 
+## Profils SMTP par développeur (I10)
+
+Un dev définit ses comptes SMTP (`/mcp/api/me/smtp`), en rattache un à un projet
+(`PUT /mcp/api/projects/<app>/smtp`) ; `scripts/app-smtp.sh` pose alors les variables standard de
+Django dans le `.env` de l'app, et `scripts/app-restart.sh` les met en service sans reconstruire.
+**Aucun service d'envoi**, aucun profil par défaut : le backend fait `send_mail(...)`.
+
+- **Stockage** : `<LAB_STATE_DIR>/smtp/<uid>.json`, mode 600, écriture atomique. Il porte les profils
+  (mot de passe compris, comme le `.env` où il finit) et, par projet, quelle version du profil y a été
+  écrite et quand — c'est un compteur, rien de dérivé du secret, qui dit si un projet est « en retard ».
+- **Le mot de passe est en écriture seule** : aucune route ne le rend, aucun journal ne le porte, il
+  n'est jamais sur une ligne de commande (stdin d'`app-smtp.sh`). Les erreurs de `smtplib` ne sont
+  jamais relayées telles quelles : on n'en garde que le code et le texte rendus par le serveur, d'où
+  toute forme du secret (en clair, en base64, dans la commande `AUTH`) est effacée.
+- **Email d'essai** : envoyé par le moteur, uniquement vers l'adresse du compte de l'appelant, un
+  toutes les 30 s par dev, 20 s au plus. **Vers Internet seulement** : l'hôte est résolu une fois,
+  refusé s'il désigne une adresse privée, et la connexion va à cette adresse — sans cela, « tester un
+  profil » dont l'hôte serait `keycloak` ferait du moteur une sonde du réseau interne.
+- Le conteneur du moteur sort bien en 587 et 465 (vérifié : `smtp.gmail.com`, `smtp-mail.outlook.com`).
+- Par MCP : `smtp_status(app)` seulement (identifiant et libellé).
+
 ---
 
 ## Sécurité — ce qui tient, et où
@@ -179,7 +200,7 @@ inversement.
 | `azp` **exact par entrée** : `lab-mcp` pour `/mcp`, `lab-admin` pour `/mcp/api` ; `admin-cli` refusé partout | `labmcp/auth.py` |
 | Entrée MCP : compte dans `.devs`, relu à chaque requête. Superutilisateur = `LAB_SUPERUSER`, jamais un groupe | `labmcp/auth.py`, `registry.py` |
 | Propriété du projet pour toute opération qui en prend un ; « inconnu » et « à un autre » indistincts | `Engine._app` |
-| Jeton d'espace : 256 bits, haché, limité à un projet et à dix opérations (annoncées seules), jamais superutilisateur | `workspaces.py`, `Engine.call` |
+| Jeton d'espace : 256 bits, haché, limité à un projet et à onze opérations (annoncées seules), jamais superutilisateur | `workspaces.py`, `Engine.call` |
 | Seuls les scripts d'I4 sont exécutés, en liste d'arguments ; enchaînements lancés **par** `lab-lock.sh` | `procs.py`, `chain.py` |
 | `docker` lancé directement **uniquement** pour les espaces, les pgAdmin et le pare-feu, avec des noms dérivés d'un uid validé | `workspaces.py`, `pgadmin.py`, `firewall.py` |
 | Jeton GitHub = celui de l'appelant, redemandé à oauth-hub à chaque fois, jamais écrit ni journalisé ; pas de `gh` dans l'image | `oauthhub.py`, `github.py` |

@@ -67,6 +67,26 @@ def routes(engine: Engine) -> list[Route]:
 
     async def me(r, c): return await call("me", c, as_uid=q(r, "as"))
     async def me_init(r, c): return await call("me_init", c)
+    async def smtp_list(r, c): return await call("smtp_list", c, as_uid=q(r, "as"))
+    async def smtp_update(r, c): return await call("smtp_update", c, profile_id=r.path_params["pid"], data=await body(r))
+    async def smtp_delete(r, c): return await call("smtp_delete", c, profile_id=r.path_params["pid"])
+    async def smtp_test(r, c): return await call("smtp_test", c, profile_id=r.path_params["pid"])
+
+    async def project_smtp(r, c):
+        d = await body(r)
+        (profile,) = need(d, "profile")
+        return await call("project_smtp", c, app=app(r), profile=profile, apply=d.get("apply", "next_deploy"))
+
+    async def smtp_create(request: Request) -> Response:
+        """Seule route qui rend 201 (I10)."""
+        caller = request.scope.get("lab.caller")
+        try:
+            if not isinstance(caller, Caller):
+                raise LabError("unauthorized", "Jeton requis.")
+            return JSONResponse(await call("smtp_create", caller, data=await body(request)), status_code=201)
+        except LabError as exc:
+            return error_response(exc)
+
     async def pg_open(r, c): return await call("pgadmin_open", c)
     async def pg_close(r, c): return await call("pgadmin_close", c)
     async def groups(r, c): return await call("groups", c)
@@ -164,6 +184,10 @@ def routes(engine: Engine) -> list[Route]:
         R("/me", me, "GET"), R("/me/init", me_init, "POST"),
         Route(P + "/me/database-password", db_password, methods=["GET"]),
         R("/me/pgadmin", pg_open, "POST"), R("/me/pgadmin", pg_close, "DELETE"),
+        R("/me/smtp", smtp_list, "GET"), Route(P + "/me/smtp", smtp_create, methods=["POST"]),
+        R("/me/smtp/{pid}", smtp_update, "PUT"), R("/me/smtp/{pid}", smtp_delete, "DELETE"),
+        R("/me/smtp/{pid}/test", smtp_test, "POST"),
+        R("/projects/{app}/smtp", project_smtp, "PUT"),
         R("/groups", groups, "GET"), R("/devs", devs, "GET"),
         R("/projects", projects, "GET"), R("/projects", create, "POST"),
         R("/projects/check-name", check_name, "POST"),

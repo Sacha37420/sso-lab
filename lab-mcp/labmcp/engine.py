@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import datetime
 import hashlib
 import hmac
 import json
@@ -34,7 +35,7 @@ from typing import Any
 import anyio
 import httpx
 
-from . import procs, sqlconsole
+from . import procs, smtp, sqlconsole
 from .auth import Authenticator, Caller
 from .config import Config
 from .errors import LabError
@@ -62,7 +63,9 @@ MAX_LOG_LINES = 4000
 # Ce qu'un jeton d'espace de travail peut appeler (I5) — sur SON projet seulement.
 # (v8) `sql` en fait partie : c'est le projet du dev, l'IA qui y travaille doit pouvoir lire sa base —
 # même exécution que pour lui (rôle dev_<uid> du propriétaire, schéma du projet).
-WS_OPS = frozenset({"me", "project", "logs", "env_list", "env_set", "env_unset", "deploy", "run_tests", "job", "sql"})
+# (v9) `smtp_status` : quel profil SMTP est rattaché au projet (identifiant et libellé, aucun secret).
+WS_OPS = frozenset({"me", "project", "logs", "env_list", "env_set", "env_unset", "deploy", "run_tests", "job", "sql",
+                    "smtp_status"})
 
 # Écart avec GitHub (I5 v8) : cache en mémoire, rafraîchi en arrière-plan.
 REMOTE_MAX_AGE = 300      # au plus un rafraîchissement automatique toutes les 5 minutes par projet
@@ -90,6 +93,8 @@ class Engine:
         self.ws = WorkspaceManager(cfg, self.access, self.firewall)
         self.pg = PgAdminManager(cfg, self.access, self.firewall)
         self.authn = Authenticator(cfg, self.registry, self.ws.lookup_token)
+        self.smtp = smtp.Store(self.registry.state_dir)
+        self._smtp_tested: dict[str, float] = {}    # uid → dernier email d'essai
         self._remote: dict[str, dict] = {}          # app → {reachable, head, deployed, behind, checked_at}
         self._remote_asked: dict[str, float] = {}   # app → dernier rafraîchissement lancé
         self._remote_tasks: set[asyncio.Task] = set()
@@ -143,7 +148,11 @@ class Engine:
         except Exception as exc:
             # Message générique : un détail d'exception interne n'a rien à faire chez l'appelant.
             audit(c.label, op, app, "error", f"interne:{type(exc).__name__}", c.entrance)
-            log.exception("erreur interne dans %s", op)
+            if "smtp" in op or op == "database_password":
+                # Opérations qui manipulent un secret : ni message ni trace d'exception au journal.
+                log.error("erreur interne dans %s : %s", op, type(exc).__name__)
+            else:
+                log.exception("erreur interne dans %s", op)
             raise LabError("failed", f"Erreur interne du moteur ({type(exc).__name__}).") from None
         audit(c.label, op, app, "ok", via=c.entrance)
         return result
@@ -424,6 +433,197 @@ class Engine:
         me["steps"] = steps
         return me
 
+    # ── profils SMTP (I10) ───────────────────────────────────────────────────
+    def _smtp_marker(self, app: str) -> str | None:
+        """Profil rattaché à un projet : le marqueur LAB_SMTP_PROFILE de son .env (posé par app-smtp.sh)."""
+        marker = self.registry.app_env(app, "LAB_SMTP_PROFILE")
+        return marker if smtp.ID_RE.fullmatch(marker or "") else None
+
+    def _smtp_projects(self, uid: str) -> dict[str, list[str]]:
+        attached: dict[str, list[str]] = {}
+        for app in self.registry.apps_of(uid):
+            marker = self._smtp_marker(app)
+            if marker:
+                attached.setdefault(marker, []).append(app)
+        return attached
+
+    def _smtp_stale(self, app: str, marker: str | None, doc: dict, status: dict) -> bool:
+        """Le projet tourne-t-il avec une ancienne version du profil rattaché ?
+
+        Vrai si quelque chose est en service ET que : le profil a été modifié depuis qu'il a été
+        écrit dans le projet (compteur `rev`), ou qu'il y a été écrit sans être encore entré en
+        service. « Entré en service » se sait de deux façons : un redémarrage demandé ici a réussi
+        (`applied_at`), ou un déploiement RÉUSSI est postérieur à l'écriture (`at` rendu par
+        app-status.sh — vrai aussi pour un déploiement lancé hors du moteur).
+        Sans trace d'écriture par le moteur (marqueur posé à la main) : on ne sait pas, donc faux.
+        """
+        record = (doc.get("applied") or {}).get(app)
+        profile = (doc.get("profiles") or {}).get(marker or "")
+        if not marker or not profile or not record or record.get("profile") != marker:
+            return False
+        if not status.get("services"):
+            return False                              # rien ne tourne : rien n'est « ancien »
+        if record.get("rev") != profile.get("rev", 1):
+            return True
+        if record.get("applied_at"):
+            return False
+        try:
+            deployed_at = datetime.datetime.fromisoformat(str(status.get("at"))).timestamp()
+        except (TypeError, ValueError):
+            return True
+        return deployed_at <= float(record.get("written_at") or 0)
+
+    def _smtp_of(self, app: str, status: dict | None = None) -> dict:
+        marker = self._smtp_marker(app)
+        label, stale = None, False
+        if marker:
+            try:
+                doc = self.smtp.read(self.registry.app_owner(app))
+                label = (doc["profiles"].get(marker) or {}).get("label")
+                stale = self._smtp_stale(app, marker, doc, status or {})
+            except LabError:
+                pass
+        out = {"profile": marker, "label": label}
+        if status is not None:                        # `stale` : détail d'un projet seulement (I10)
+            out["stale"] = stale
+        return out
+
+    def _smtp_get(self, uid: str, pid: Any) -> tuple[dict, dict]:
+        doc = self.smtp.read(uid)
+        if not isinstance(pid, str) or pid not in doc["profiles"]:
+            raise LabError("not_found", "Profil SMTP inconnu.")
+        return doc, doc["profiles"][pid]
+
+    async def op_smtp_list(self, c: Caller, as_uid: str | None = None) -> dict:
+        uid = self._as(c, as_uid)
+        attached = self._smtp_projects(uid)
+        return {"profiles": [smtp.public(pid, p, attached.get(pid, [])) for pid, p in self.smtp.load(uid).items()]}
+
+    async def op_smtp_create(self, c: Caller, data: dict) -> dict:
+        uid = self._dev(c)
+        self._need_token(c)
+        doc = self.smtp.read(uid)
+        if len(doc["profiles"]) >= smtp.MAX_PROFILES:
+            raise LabError("invalid", f"Au plus {smtp.MAX_PROFILES} profils SMTP par développeur.")
+        profile = smtp.validate(data if isinstance(data, dict) else {})
+        profile["rev"] = 1
+        pid = smtp.Store.new_id(doc["profiles"])
+        doc["profiles"][pid] = profile
+        self.smtp.write(uid, doc)
+        return smtp.public(pid, profile, [])
+
+    async def op_smtp_update(self, c: Caller, profile_id: str, data: dict) -> dict:
+        uid = self._dev(c)
+        self._need_token(c)
+        doc, current = self._smtp_get(uid, profile_id)
+        rev = int(current.get("rev", 1))
+        updated = smtp.validate(data if isinstance(data, dict) else {}, base=current)
+        changed = updated != {k: v for k, v in current.items() if k != "rev"}
+        updated["rev"] = rev + 1 if changed else rev
+        doc["profiles"][profile_id] = updated
+        self.smtp.write(uid, doc)
+        attached = self._smtp_projects(uid).get(profile_id, [])
+        out = smtp.public(profile_id, updated, attached)
+        # Projets qui tournent encore avec l'ancienne version : même calcul que `smtp.stale` du détail.
+        stale = []
+        for app in attached:
+            try:
+                status = await self._status(app)
+            except LabError:
+                status = {}
+            if self._smtp_stale(app, profile_id, doc, status):
+                stale.append(app)
+        out["stale_projects"] = stale
+        return out
+
+    async def op_smtp_delete(self, c: Caller, profile_id: str) -> dict:
+        uid = self._dev(c)
+        self._need_token(c)
+        doc, _ = self._smtp_get(uid, profile_id)
+        attached = self._smtp_projects(uid).get(profile_id, [])
+        if attached:
+            raise LabError("smtp_in_use", "Ce profil est rattaché à des projets : détachez-le d'abord.",
+                           projects=attached)
+        del doc["profiles"][profile_id]
+        self.smtp.write(uid, doc)
+        return {"deleted": True}
+
+    async def op_smtp_test(self, c: Caller, profile_id: str) -> dict:
+        """Email d'essai — UNIQUEMENT vers l'adresse du compte de l'appelant : le lab ne sert pas à
+        écrire à une adresse arbitraire."""
+        uid = self._dev(c)
+        self._need_token(c)
+        _, profile = self._smtp_get(uid, profile_id)
+        if not smtp.EMAIL_RE.fullmatch(c.email or ""):
+            raise LabError("invalid", "Votre compte du lab n'a pas d'adresse email : aucun destinataire pour l'essai.")
+        wait = smtp.TEST_INTERVAL_S - (time.time() - self._smtp_tested.get(uid, 0.0))
+        if wait > 0:
+            raise LabError("rate_limited", f"Un email d'essai toutes les {smtp.TEST_INTERVAL_S} s : réessayez dans "
+                                           f"{int(wait) + 1} s.", retry_after=int(wait) + 1)
+        self._smtp_tested[uid] = time.time()
+        try:
+            await asyncio.wait_for(
+                anyio.to_thread.run_sync(smtp.send_test, profile, c.email, profile["label"], self.cfg.domain),
+                timeout=smtp.TEST_DEADLINE_S + 3)
+        except asyncio.TimeoutError:
+            raise LabError("smtp_error", f"délai de {smtp.TEST_DEADLINE_S} s dépassé : le serveur ne répond pas") from None
+        return {"sent": True, "to": c.email}
+
+    async def op_smtp_status(self, c: Caller, app: str) -> dict:
+        self._app(c, app)
+        return self._smtp_of(app)
+
+    async def op_project_smtp(self, c: Caller, app: str, profile: Any, apply: str = "next_deploy") -> dict:
+        """Rattache (ou détache) un profil : propriétaire du projet seulement, avec un profil À LUI."""
+        uid = self._dev(c)
+        self._app(c, app)
+        self._need_token(c)
+        if self.registry.app_owner(app) != uid:
+            raise LabError("forbidden", "Seul le propriétaire du projet choisit son profil SMTP.")
+        if apply not in ("now", "next_deploy"):
+            raise LabError("invalid", "apply : « now » ou « next_deploy ».")
+        doc = self.smtp.read(uid)
+        if profile is None:
+            code, out, err = await self._script("app-smtp.sh", [app, "clear"])
+        else:
+            doc, chosen = self._smtp_get(uid, profile)
+            # Le profil entier, mot de passe compris, sur STDIN : rien sur la ligne de commande.
+            line = json.dumps({"id": profile, "host": chosen["host"], "port": chosen["port"],
+                               "security": chosen["security"], "username": chosen["username"],
+                               "password": chosen.get("password") or "", "from_email": chosen["from_email"]},
+                              ensure_ascii=False)
+            code, out, err = await self._script("app-smtp.sh", [app, "set"], stdin=(line + "\n").encode("utf-8"))
+        if code != 0:
+            # La sortie du script n'est pas relayée : seul son code l'est.
+            raise LabError("failed", f"app-smtp.sh a échoué (code {code}) : la configuration du projet n'a pas changé.")
+        # Trace de ce qui vient d'être écrit dans le projet : quelle version du profil, et quand.
+        if profile is None:
+            doc["applied"].pop(app, None)
+        else:
+            doc["applied"][app] = {"profile": profile, "rev": int(doc["profiles"][profile].get("rev", 1)),
+                                   "written_at": time.time(), "applied_at": None}
+        self.smtp.write(uid, doc)
+        applied = False
+        if apply == "now":
+            status = await self._status(app)
+            if status.get("services"):          # rien en service : il n'y a rien à redémarrer
+                code, out, err = await self._script("app-restart.sh", [app], timeout=300)
+                if code != 0:
+                    # app-restart.sh ne manipule aucun secret : sa raison peut être dite. Cas attendu :
+                    # l'image étiquetée n'est plus celle qui tourne (déploiement refusé par un test
+                    # rouge) — il refuse alors de démarrer du code qui n'a pas passé les tests.
+                    reason = self._last(err or out, 2) or f"code {code}"
+                    raise LabError("failed", "Les variables sont posées, mais le projet n'a pas été redémarré : "
+                                             f"{reason} — redéployez d'abord le projet (Déployer) : le déploiement "
+                                             "appliquera aussi ces variables.")
+                applied = True
+                if profile is not None:
+                    doc = self.smtp.read(uid)
+                    if app in doc["applied"]:
+                        doc["applied"][app]["applied_at"] = time.time()
+                        self.smtp.write(uid, doc)
+        return {"app": app, "profile": profile, "applied": applied}
+
     # ── ma base : mot de passe, pgAdmin (I9) ─────────────────────────────────
     def _self_initialized(self, c: Caller) -> str:
         """Routes « soi-même » d'I9 : dev initialisé, avec sa connexion personnelle. 403 sinon (I9)."""
@@ -516,7 +716,11 @@ class Engine:
         ws = self.ws.get(owner)
         origin = self.cfg.public_origin
         item = {
-            "name": app, "owner": owner, "repo_url": self.registry.repo_url(app) or None,
+            "name": app, "owner": owner,
+            # (v10) Nature du projet : c'est son EMPLACEMENT réel qui décide, pas une liste de noms —
+            # une application vit dans deploiement/, un outil du lab à la racine du dépôt.
+            "kind": "application" if self.registry.in_deploiement(app) else "outil",
+            "repo_url": self.registry.repo_url(app) or None,
             # Chemins de la convention du lab (/<app>/ et /<app>-api/) : exacts pour tout projet créé
             # par le moteur ; une app historique peut servir un autre chemin.
             "urls": {"app": f"{origin}/{app}/" if (front or back) else None,
@@ -566,6 +770,7 @@ class Engine:
             "database": ({"host": where["host"], "name": where["name"], "user": where["user"],
                           "schema": where["schema"]} if where["per_dev"] else None),
             "auto_deploy": {"enabled": bool(auto.get("enabled")), "available": bool(auto.get("secret"))},
+            "smtp": self._smtp_of(app, status),
             "mcp_url": self.cfg.public_url,
         })
         return item

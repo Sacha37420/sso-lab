@@ -32,6 +32,8 @@ ALLOWED_SCRIPTS = frozenset({
     "dev-db.sh",
     # v8 : où en est GitHub par rapport à ce qui tourne (lecture seule, sans verrou)
     "app-remote.sh",
+    # v9 : variables SMTP d'une app (profil sur stdin), application sans reconstruire
+    "app-smtp.sh", "app-restart.sh",
 })
 
 LOCK_BUSY = 75  # code rendu par les scripts quand le verrou de déploiement est occupé

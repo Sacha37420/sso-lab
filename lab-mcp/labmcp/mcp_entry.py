@@ -24,7 +24,7 @@ TOOL_OPS = {
     "whoami": "me", "list_apps": "projects", "check_name": "check_name", "create_app": "create_project",
     "deploy": "deploy", "job_status": "job", "status": "project", "logs": "logs",
     "env_list": "env_list", "env_set": "env_set", "env_unset": "env_unset", "sql": "sql",
-    "run_tests": "run_tests", "open_ticket": "open_ticket",
+    "run_tests": "run_tests", "open_ticket": "open_ticket", "smtp_status": "smtp_status",
 }
 
 
@@ -165,5 +165,14 @@ def build(cfg: Config, engine: Engine) -> FastMCP:
                           scope: Literal["app", "lab"] = "app", app: str = "") -> dict:
         """Ouvre un ticket GitHub en votre nom : dépôt du projet (`scope: "app"`) ou du lab (`scope: "lab"`)."""
         return await call(ctx, "open_ticket", title=title, body=body, scope=scope, app=app)
+
+    @mcp.tool()
+    async def smtp_status(app: str, ctx: Context) -> dict:
+        """Quel profil SMTP est rattaché au projet ? Rend son identifiant et son libellé — aucun secret.
+
+        Les profils SMTP se créent et se rattachent dans lab-admin, jamais ici. Pour envoyer un email
+        depuis le backend : `send_mail(...)` de Django, sans rien régler dans le dépôt.
+        """
+        return await call(ctx, "smtp_status", app=app)
 
     return mcp

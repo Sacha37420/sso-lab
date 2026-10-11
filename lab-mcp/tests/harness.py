@@ -92,6 +92,42 @@ if os.environ.get("TEST_REMOTE_DOUBLE"):
     engine_module.Engine._remote_raw = _remote_raw
     print("[harness] app-remote.sh remplacé par un double local", flush=True)
 
+if os.environ.get("TEST_SMTP_ALLOW_PRIVATE") == "1":
+    # Serveur SMTP JETABLE sur un réseau de test (adresse privée) : le contrôle « Internet
+    # seulement » de l'email d'essai est levé ICI, pas dans le code livré.
+    from labmcp import smtp as smtp_module  # noqa: E402
+    smtp_module._address_allowed = lambda ip: True
+    print("[harness] email d'essai : adresses privées admises (serveur SMTP de test)", flush=True)
+
+if os.environ.get("TEST_SMTP_SCRIPT_DOUBLE") == "1":
+    # Doubles LOCAUX de scripts/app-smtp.sh et app-restart.sh (I10), tant que la fondation ne les a
+    # pas livrés : notent leurs arguments et leur stdin, et tiennent le marqueur dans un fichier.
+    import json as _json  # noqa: E402
+    _real_script = engine_module.Engine._script
+    _real_marker = engine_module.Engine._smtp_marker
+
+    async def _script(self, name, args, *, stdin=None, timeout=120):
+        if name in ("app-smtp.sh", "app-restart.sh"):
+            with open("/tmp/smtp-script-calls.log", "a") as fh:
+                fh.write(_json.dumps({"script": name, "argv": args, "stdin": (stdin or b"").decode()}) + "\n")
+            markers = _json.load(open("/tmp/smtp-markers.json")) if os.path.exists("/tmp/smtp-markers.json") else {}
+            if name == "app-smtp.sh":
+                if args[1] == "set":
+                    markers[args[0]] = _json.loads(stdin.decode())["id"]
+                else:
+                    markers.pop(args[0], None)
+                _json.dump(markers, open("/tmp/smtp-markers.json", "w"))
+            return (int(os.environ.get("TEST_RESTART_CODE", "0")) if name == "app-restart.sh" else 0), "", ""
+        return await _real_script(self, name, args, stdin=stdin, timeout=timeout)
+
+    def _marker(self, app):
+        markers = _json.load(open("/tmp/smtp-markers.json")) if os.path.exists("/tmp/smtp-markers.json") else {}
+        return markers.get(app) or _real_marker(self, app)
+
+    engine_module.Engine._script = _script
+    engine_module.Engine._smtp_marker = _marker
+    print("[harness] app-smtp.sh / app-restart.sh remplacés par des doubles locaux", flush=True)
+
 app = build(cfg)
 if os.environ.get("TEST_WS_TOKEN_FOR"):
     # Jeton d'espace injecté pour (uid, app) SANS conteneur : sert à éprouver ce qu'un jeton

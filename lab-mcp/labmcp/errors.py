@@ -24,6 +24,9 @@ STATUS = {
     "workspace_limit": 429,    # LAB_WS_MAX espaces ouverts ; `open`, `max`
     "pg_trust_enabled": 409,   # PostgreSQL accepte encore devuser sans mot de passe : pas de pgAdmin par dev
     "pgadmin_limit": 429,      # LAB_PG_MAX pgAdmin ouverts ; `open`, `max`
+    "smtp_in_use": 409,        # profil SMTP rattaché à des projets ; `projects`
+    "smtp_error": 502,         # l'email d'essai n'est pas parti ; `detail` = réponse du serveur SMTP, sans secret
+    "rate_limited": 429,       # un essai d'envoi toutes les 30 s par dev ; `retry_after`
     "sql_error": 400,          # message de PostgreSQL ; `sqlstate`
     "sql_timeout": 400,
     "upstream": 502,           # oauth-hub, GitHub, lab-runner injoignable ou en refus ; `service`
@@ -51,4 +54,4 @@ class LabError(Exception):
     # Résultat d'audit : un refus n'est pas une panne.
     @property
     def refused(self) -> bool:
-        return self.code not in ("upstream", "unavailable", "failed")
+        return self.code not in ("upstream", "unavailable", "failed", "smtp_error")

@@ -51,6 +51,7 @@ class Caller:
     in_developers: bool = False   # d'après le claim `groups` du jeton
     initialized: bool = False     # ∈ .devs
     scope_app: str | None = None  # jeton d'espace : seul projet sur lequel il agit
+    email: str = ""               # claim `email` : seule adresse vers laquelle part un email d'essai SMTP
     # Jeton Keycloak de l'appelant : ne sert qu'à demander SON jeton GitHub à
     # oauth-hub. Vide pour un jeton d'espace. Jamais dans repr() ni dans un journal.
     token: str = field(default="", repr=False, compare=False)
@@ -118,6 +119,7 @@ class Authenticator:
             is_superuser=bool(uid) and self.registry.is_superuser(uid),
             in_developers=isinstance(groups, list) and DEV_GROUP in groups,
             initialized=bool(uid) and self.registry.is_dev(uid),
+            email=str(claims.get("email") or ""),
             token=token,
         )
         if entrance == "mcp" and not caller.initialized:
