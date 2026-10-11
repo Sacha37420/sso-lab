@@ -142,7 +142,10 @@ trap cleanup EXIT
 grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$APP_DIR/.env" 2>/dev/null \
   | grep -vE '^(EMAIL_[A-Z_]+|DEFAULT_FROM_EMAIL|LAB_SMTP_PROFILE)=' > "$TMP/env" || true
 
-if [[ "$DB_USER" =~ ^dev_[a-z][a-z0-9]{1,30}$ && -n "$DB_NAME" ]]; then
+# Le rôle `lab` des services du cadriciel (lab-admin, storage, oauth-hub,
+# app-builder) est NOCREATEDB lui aussi : même rôle transitoire que pour un
+# dev_<uid>. Sans cela, leurs tests ne pouvaient pas créer leur base.
+if [[ ( "$DB_USER" =~ ^dev_[a-z][a-z0-9]{1,30}$ || "$DB_USER" == "lab" ) && -n "$DB_NAME" ]]; then
   TEST_ROLE="lab_test_$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 12 || true)"
   TEST_PW="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40 || true)"
   [[ ${#TEST_ROLE} -eq 21 && ${#TEST_PW} -eq 40 ]] || die "génération du rôle de test impossible"
