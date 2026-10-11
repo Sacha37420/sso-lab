@@ -46,7 +46,3 @@
 [submodule "peripheriques"]
 	path = deploiement/peripheriques
 	url = https://github.com/Sacha37420/peripheriques.git
-[submodule "deploiement/test"]
-	path = deploiement/test
-	url = https://github.com/Sacha37420/test.git
-	update = none
