@@ -9,7 +9,9 @@ Sans lui, le lab n'a pas de HTTPS : le Caddy de `sso-lab` ne publie plus lui-mê
 
 ## Où il vit
 
-- **Ce dossier (`dev/edge-router.example/`) est un gabarit.** Il ne tourne pas.
+- **Ce dossier (`dev/edge-router.example/`) est un gabarit.** Il ne tourne pas ; ses fichiers
+  s'appellent `docker-compose.example.yml` et `nginx.example.conf` pour que les scripts du lab ne
+  le prennent pas pour une unité à déployer.
 - **La copie active est dans `~/edge-router/`**, hors de tout dépôt, parce qu'elle est commune à
   tous les cadriciels de la machine : aucun d'eux ne doit pouvoir l'arrêter en se redéployant.
 - `bash scripts/edge-router-install.sh` copie le gabarit dans `~/edge-router/` **s'il n'existe

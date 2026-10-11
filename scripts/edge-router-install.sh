@@ -35,8 +35,10 @@ if $CHECK; then
 fi
 docker network inspect edge-net > /dev/null 2>&1 || docker network create edge-net > /dev/null
 tmp="$(mktemp -d "${DEST}.XXXXXX")"
-cp "$ROOT/edge-router.example/docker-compose.yml" "$tmp/docker-compose.yml"
-sed "s/__DOMAIN__/$DOMAIN/g" "$ROOT/edge-router.example/nginx.conf" > "$tmp/nginx.conf"
+# Le gabarit ne s'appelle pas docker-compose.yml à dessein : les scripts du lab prennent tout
+# dossier racine portant ce nom pour une unité à déployer.
+cp "$ROOT/edge-router.example/docker-compose.example.yml" "$tmp/docker-compose.yml"
+sed "s/__DOMAIN__/$DOMAIN/g" "$ROOT/edge-router.example/nginx.example.conf" > "$tmp/nginx.conf"
 chmod 700 "$tmp"
 mv "$tmp" "$DEST"
 docker compose -f "$DEST/docker-compose.yml" up -d
