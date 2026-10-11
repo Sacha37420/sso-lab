@@ -71,7 +71,8 @@ def routes(engine: Engine) -> list[Route]:
     async def pg_close(r, c): return await call("pgadmin_close", c)
     async def groups(r, c): return await call("groups", c)
     async def devs(r, c): return await call("devs", c)
-    async def projects(r, c): return await call("projects", c, as_uid=q(r, "as"))
+    flag = lambda r, k: q(r, k, "") in ("1", "true")   # noqa: E731
+    async def projects(r, c): return await call("projects", c, as_uid=q(r, "as"), refresh=flag(r, "refresh"))
 
     async def create(r, c):
         d = await body(r)
@@ -83,7 +84,7 @@ def routes(engine: Engine) -> list[Route]:
         (name,) = need(await body(r), "name")
         return await call("check_name", c, name=name)
 
-    async def project(r, c): return await call("project", c, app=app(r))
+    async def project(r, c): return await call("project", c, app=app(r), refresh=flag(r, "refresh"))
     async def deploy(r, c): return await call("deploy", c, app=app(r), sha=(await body(r)).get("sha") or "")
     async def commits(r, c): return await call("commits", c, app=app(r))
     async def logs(r, c): return await call("logs", c, app=app(r), service=q(r, "service", ""), tail=q(r, "tail", 200))

@@ -16,8 +16,32 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from .auth import Caller
 from .config import Config
-from .engine import Engine
+from .engine import WS_OPS, Engine
 from .errors import LabError
+
+# Outil MCP → opération du moteur. Sert à n'ANNONCER à un jeton d'espace que ce qu'il peut appeler.
+TOOL_OPS = {
+    "whoami": "me", "list_apps": "projects", "check_name": "check_name", "create_app": "create_project",
+    "deploy": "deploy", "job_status": "job", "status": "project", "logs": "logs",
+    "env_list": "env_list", "env_set": "env_set", "env_unset": "env_unset", "sql": "sql",
+    "run_tests": "run_tests", "open_ticket": "open_ticket",
+}
+
+
+class LabMCP(FastMCP):
+    """FastMCP dont `tools/list` dépend de l'appelant : un jeton d'espace de travail ne se voit
+    annoncer que les outils qu'il peut appeler (les autres lui seraient refusés de toute façon)."""
+
+    async def list_tools(self):  # type: ignore[override]
+        tools = await super().list_tools()
+        try:
+            request = self.get_context().request_context.request
+            caller = getattr(request, "scope", {}).get("lab.caller")
+        except Exception:
+            caller = None
+        if isinstance(caller, Caller) and caller.scope_app is not None:
+            tools = [t for t in tools if TOOL_OPS.get(t.name) in WS_OPS]
+        return tools
 
 
 class ToolError(Exception):
@@ -34,7 +58,7 @@ def _caller(ctx: Context) -> Caller:
 
 
 def build(cfg: Config, engine: Engine) -> FastMCP:
-    mcp = FastMCP(
+    mcp = LabMCP(
         "lab-mcp",
         instructions=(
             "Exploitation des projets d'un développeur sur le lab : créer un projet (dépôt GitHub + sous-module), "
@@ -100,7 +124,7 @@ def build(cfg: Config, engine: Engine) -> FastMCP:
 
     @mcp.tool()
     async def status(app: str, ctx: Context) -> dict:
-        """Détail d'un projet : état des conteneurs, version déployée, tests, base, déploiement automatique."""
+        """Détail d'un projet : état des conteneurs, version déployée, tests, écart avec GitHub, base, déploiement automatique."""
         return await call(ctx, "project", app=app)
 
     @mcp.tool()

@@ -60,7 +60,14 @@ APP_TYPES = {"django": "3", "django-angular": "4", "angular": "5"}
 MAX_LOG_LINES = 4000
 
 # Ce qu'un jeton d'espace de travail peut appeler (I5) — sur SON projet seulement.
-WS_OPS = frozenset({"me", "project", "logs", "env_list", "env_set", "env_unset", "deploy", "run_tests", "job"})
+# (v8) `sql` en fait partie : c'est le projet du dev, l'IA qui y travaille doit pouvoir lire sa base —
+# même exécution que pour lui (rôle dev_<uid> du propriétaire, schéma du projet).
+WS_OPS = frozenset({"me", "project", "logs", "env_list", "env_set", "env_unset", "deploy", "run_tests", "job", "sql"})
+
+# Écart avec GitHub (I5 v8) : cache en mémoire, rafraîchi en arrière-plan.
+REMOTE_MAX_AGE = 300      # au plus un rafraîchissement automatique toutes les 5 minutes par projet
+REMOTE_MIN_FORCED = 20    # plancher entre deux rafraîchissements DEMANDÉS (?refresh=1, déploiement, webhook)
+REMOTE_CONCURRENCY = 2    # jamais plus de deux `app-remote.sh` à la fois : la liste ne doit rien ralentir
 
 
 def audit(who: str, op: str, app: str, result: str, detail: str = "", via: str = "") -> None:
@@ -83,9 +90,19 @@ class Engine:
         self.ws = WorkspaceManager(cfg, self.access, self.firewall)
         self.pg = PgAdminManager(cfg, self.access, self.firewall)
         self.authn = Authenticator(cfg, self.registry, self.ws.lookup_token)
-        self.jobs.on_done = lambda job: audit(
-            job.owner, f"job:{job.kind}", job.app, "ok" if job.state == "succeeded" else "error",
-            f"job {job.id} {job.state} étape={job.result.get('step', '')} sha={job.result.get('sha', '')}")
+        self._remote: dict[str, dict] = {}          # app → {reachable, head, deployed, behind, checked_at}
+        self._remote_asked: dict[str, float] = {}   # app → dernier rafraîchissement lancé
+        self._remote_tasks: set[asyncio.Task] = set()
+        self._remote_gate: asyncio.Semaphore | None = None
+
+        def job_done(job: Job) -> None:
+            audit(job.owner, f"job:{job.kind}", job.app, "ok" if job.state == "succeeded" else "error",
+                  f"job {job.id} {job.state} étape={job.result.get('step', '')} sha={job.result.get('sha', '')}")
+            if job.kind == "deploy":
+                # Ce qui tourne vient peut-être de changer : l'écart avec GitHub est à relire.
+                self._remote_refresh(job.app, force=True)
+
+        self.jobs.on_done = job_done
         self.ws.on_idle_close = lambda uid: audit("(moteur)", "workspace_idle_close", "", "ok", f"espace de {uid}")
         self.pg.on_idle_close = lambda uid: audit("(moteur)", "pgadmin_idle_close", "", "ok", f"pgAdmin de {uid}")
 
@@ -111,7 +128,7 @@ class Engine:
             if c.scope_app is not None and op not in WS_OPS:
                 raise LabError("forbidden",
                                "Un jeton d'espace de travail ne permet que d'agir sur le projet ouvert "
-                               "(état, journaux, variables, déploiement, tests).")
+                               "(état, journaux, variables, base, déploiement, tests).")
             result = await getattr(self, "op_" + op)(c, **kw)
         except LabError as exc:
             audit(c.label, op, app, "refused" if exc.refused else "error", f"{exc.code} : {exc.detail}", c.entrance)
@@ -200,6 +217,81 @@ class Engine:
         except ValueError:
             raise LabError("failed", "app-status.sh a rendu une sortie illisible.") from None
         return data if isinstance(data, dict) else {}
+
+    # ── écart avec GitHub (I5 v8) ───────────────────────────────────────────
+    async def _remote_raw(self, app: str) -> dict | None:
+        """`scripts/app-remote.sh <app>` (I4 v8) : une ligne JSON, délai borné, ne prend pas le verrou."""
+        if not os.path.isfile(os.path.join(self.cfg.scripts, "app-remote.sh")):
+            return None
+        code, out, _ = await procs.run(
+            procs.script(self.cfg, "app-remote.sh") + [app],
+            procs.base_env(self.cfg, self.cfg.quick_lock_timeout), cwd=self.cfg.root, timeout=25)
+        if code != 0:
+            return None
+        try:
+            data = json.loads(out.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _remote_refresh(self, app: str, force: bool = False) -> None:
+        """Planifie un rafraîchissement EN ARRIÈRE-PLAN — jamais attendu par une requête."""
+        now = time.time()
+        asked = self._remote_asked.get(app, 0.0)
+        if now - asked < (REMOTE_MIN_FORCED if force else REMOTE_MAX_AGE):
+            return
+        try:
+            parse_repo_url(self.registry.repo_url(app))
+        except GithubError:
+            return                      # pas d'origine GitHub : rien à demander (« no_repo »)
+        self._remote_asked[app] = now
+        if self._remote_gate is None:
+            self._remote_gate = asyncio.Semaphore(REMOTE_CONCURRENCY)
+
+        async def work() -> None:
+            assert self._remote_gate is not None
+            async with self._remote_gate:
+                try:
+                    data = await self._remote_raw(app)
+                except Exception:
+                    data = None
+            if data is None:
+                return                  # script absent ou en échec : on garde ce qui était connu
+            behind = data.get("behind")
+            self._remote[app] = {
+                "reachable": bool(data.get("reachable")),
+                "head": data.get("head") if isinstance(data.get("head"), str) else None,
+                "behind": behind if isinstance(behind, int) and not isinstance(behind, bool) else None,
+                "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+
+        task = asyncio.get_running_loop().create_task(work(), name=f"lab-remote-{app}")
+        self._remote_tasks.add(task)
+        task.add_done_callback(self._remote_tasks.discard)
+
+    def _github_field(self, app: str, item: dict) -> dict:
+        """Le champ `github` d'un projet (forme exacte d'I5 v8), depuis le cache — aucun appel ici."""
+        out = {"status": "unknown", "head": None, "behind": None, "checked_at": None}
+        try:
+            parse_repo_url(item.get("repo_url") or "")
+        except GithubError:
+            out["status"] = "no_repo"
+            return out
+        cached = self._remote.get(app)
+        if cached is None:
+            return out                  # pas encore vérifié : « unknown », checked_at null
+        out["checked_at"] = cached["checked_at"]
+        if not cached["reachable"]:
+            out["status"] = "unreachable"
+            return out
+        out["head"] = cached["head"]
+        if cached["behind"] is not None:
+            out["behind"] = cached["behind"]
+            out["status"] = "up_to_date" if cached["behind"] == 0 else "behind"
+        elif item.get("deployed") is None and item.get("state") in ("never_deployed", "stopped"):
+            out["status"] = "not_deployed"   # rien en service
+        # sinon : en service, mais la version déployée est inconnue (ou plus dans l'historique)
+        return out
 
     # ── jobs ────────────────────────────────────────────────────────────────
     def _submit(self, kind: str, app: str, launched_by: str, work) -> dict:
@@ -423,7 +515,7 @@ class Engine:
             state = "stopped" if (services or deployed) else "never_deployed"
         ws = self.ws.get(owner)
         origin = self.cfg.public_origin
-        return {
+        item = {
             "name": app, "owner": owner, "repo_url": self.registry.repo_url(app) or None,
             # Chemins de la convention du lab (/<app>/ et /<app>-api/) : exacts pour tout projet créé
             # par le moteur ; une app historique peut servir un autre chemin.
@@ -434,8 +526,10 @@ class Engine:
             "state": state, "deployed": deployed,
             "workspace": {"open": bool(ws and ws.app == app)},
         }
+        item["github"] = self._github_field(app, item)
+        return item
 
-    async def op_projects(self, c: Caller, as_uid: str | None = None) -> dict:
+    async def op_projects(self, c: Caller, as_uid: str | None = None, refresh: bool = False) -> dict:
         uid = self._as(c, as_uid)
         if c.is_superuser and not as_uid:
             names = self.registry.all_apps()
@@ -453,12 +547,17 @@ class Engine:
                     return item
 
         projects = await asyncio.gather(*(one(a) for a in names))
+        # Écart avec GitHub : on rend ce qui est connu, et on planifie (sans attendre) la mise à jour
+        # de ce qui a plus de 5 minutes — ou de tout, sur demande (?refresh=1).
+        for name in names:
+            self._remote_refresh(name, force=bool(refresh))
         return {"projects": list(projects), "count": len(projects)}
 
-    async def op_project(self, c: Caller, app: str) -> dict:
+    async def op_project(self, c: Caller, app: str, refresh: bool = False) -> dict:
         self._app(c, app)
         status = await self._status(app)
         item = self._item(app, status)
+        self._remote_refresh(app, force=bool(refresh))
         where = sqlconsole.target(self.cfg, self.registry, app)
         auto = self._auto_read(app)
         item.update({
@@ -765,6 +864,9 @@ class Engine:
             # repris : app-sync.sh redemande la tête à origin.
             if payload.get("deleted") or not branch or payload.get("ref") != f"refs/heads/{branch}":
                 ignored = "branch"
+        if event == "push":
+            # GitHub vient de bouger : l'écart est à relire, que le déploiement automatique soit actif ou non.
+            self._remote_refresh(app, force=True)
         if ignored:
             audit("github-webhook", "hook", app, "ok", f"ignoré : {ignored}", "web")
             return {"ok": True, "deployed": False, "ignored": ignored}

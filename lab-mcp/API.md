@@ -1,4 +1,4 @@
-# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v6, I9 v7)
+# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v8, I9 v7)
 
 Écrite à partir de ce que le code rend réellement (`labmcp/engine.py`). Là où la table d'I5 et ce
 document divergent sur une **forme**, ce document l'emporte.
@@ -206,7 +206,8 @@ d'un dev avec.
   "state": "running",          // "running" | "partial" | "stopped" | "never_deployed" | "unknown"
   "deployed": {"sha": "6d7b9d5d…", "at": "2026-10-10T16:40:12+02:00",
                "tests": {"backend": "ok", "cloisonnement": "non-lancé"}},   // null si jamais déployé avec succès
-  "workspace": {"open": false} // true si l'espace du propriétaire est ouvert SUR CE projet
+  "workspace": {"open": false},// true si l'espace du propriétaire est ouvert SUR CE projet
+  "github": {"status": "behind", "head": "4d63a070…", "behind": 2, "checked_at": "2026-10-11T08:12:47Z"}   // (v8)
 }]}
 ```
 
@@ -214,6 +215,29 @@ d'un dev avec.
   alors qu'il y a eu un déploiement ; `never_deployed` ; `unknown` = l'état n'a pas pu être lu.
 - `deployed.tests.*` : `"ok" | "ko" | "absent" | "non-lancé"` (verdicts d'I4) ; `tests` peut être
   `null` pour un déploiement antérieur à l'enregistrement.
+
+**`github` (v8) — écart entre GitHub et ce qui tourne.** Paramètre `?refresh=1` sur `GET /projects`
+et `GET /projects/<app>`. Même champ dans l'outil MCP `status` (et `list_apps`).
+
+| `status` | Sens | `head` | `behind` |
+|---|---|---|---|
+| `up_to_date` | la version en service est la tête de la branche par défaut | sha | `0` |
+| `behind` | des commits poussés ne sont pas encore déployés | sha | entier ≥ 1 |
+| `not_deployed` | rien n'est en service | sha | `null` |
+| `unknown` | en service, mais la version déployée est inconnue (app historique jamais redéployée par le moteur) ou n'est plus dans l'historique — **ou pas encore vérifié** (`checked_at: null`) | sha ou `null` | `null` |
+| `unreachable` | GitHub n'a pas répondu, ou le lab n'a pas le droit de lire le dépôt | `null` | `null` |
+| `no_repo` | le projet n'a pas d'origine GitHub | `null` | `null` |
+
+- `head` : SHA complet de la tête de la branche par défaut de GitHub ; `checked_at` : date (UTC) de la
+  dernière vérification, `null` tant qu'il n'y en a pas eu (et toujours `null` pour `no_repo`).
+- **La valeur vient d'un cache** : la requête n'appelle jamais GitHub et n'attend rien. Une
+  vérification part en arrière-plan quand la valeur a plus de 5 minutes, après chaque déploiement, et
+  à la réception d'un webhook `push` signé. Deux vérifications au plus tournent à la fois sur le lab.
+- `?refresh=1` demande une vérification (au plus une toutes les 20 s par projet) et **rend aussitôt
+  ce qui est connu** : relire la route quelques secondes plus tard (une vérification prend 1 à 15 s ;
+  compter une minute ou deux pour une liste de vingt projets, cache vide).
+- Le cache est en mémoire : après un redémarrage du moteur, tout est `unknown` / `checked_at: null`
+  jusqu'à la première lecture.
 
 #### `GET /projects/<app>` ✅ — l'élément ci-dessus, plus :
 ```json
@@ -477,6 +501,8 @@ Autre échec (runner injoignable…) : `{"ok": false, "step": "cloisonnement", "
   connexion). L'initialisation ne se fait que par lab-admin.
 - **Jeton d'espace de travail** (`labws_…`, variable `LAB_MCP_TOKEN` dans l'espace) : vaut son dev,
   **limité au projet ouvert**, et aux outils `whoami`, `status`, `logs`, `env_list`, `env_set`,
-  `env_unset`, `deploy`, `run_tests`, `job_status`. Tout autre outil : `forbidden` ; tout autre
-  projet : `not_found`. Il meurt à la fermeture de l'espace et au redémarrage du moteur.
+  `env_unset`, `deploy`, `run_tests`, `job_status` et (v8) **`sql`** — même exécution que pour le dev :
+  rôle `dev_<uid>` du propriétaire, schéma du projet. `tools/list` n'annonce à ce jeton **que ces dix
+  outils** ; un autre outil appelé quand même : `forbidden` ; tout autre projet : `not_found`. Il
+  meurt à la fermeture de l'espace et au redémarrage du moteur.
 - Les outils rendent exactement les objets des routes correspondantes (§1).

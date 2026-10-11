@@ -166,6 +166,19 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
 
 ### Pièges constatés
 
+- **Redéployer par `setup2.sh` reconstruit l'image depuis le dossier** : cela met en service tout
+  ce qui a été commité depuis le dernier déploiement, pas seulement ce qu'on voulait changer.
+  Pendant la bascule, `analyse-lora` a ainsi reçu un commit de fonctionnalité non encore déployé,
+  et `bilan-thermique` aurait reçu un commit « wip ». Pour un changement de configuration seule
+  (base, variable) : `docker compose -f <dir>/docker-compose.yml up -d --no-build`, et vérifier
+  que l'identifiant d'image de chaque conteneur est le même avant et après.
+- **Un comparateur se teste sur un écart provoqué**, pas seulement sur un cas identique : celui de
+  la bascule ne comptait qu'une table par schéma (une boucle `while read` autour de
+  `docker exec -i` se fait manger son entrée) et annonçait « identique » à tort.
+- **Un contrôle qui arrête une procédure au milieu laisse l'app arrêtée** : une comparaison de
+  mot de passe faussée par un retour à la ligne a coupé `conciergerie` une minute. Tout contrôle
+  placé après l'arrêt d'une app doit avoir été éprouvé avant, ou être suivi d'une remise en route.
+
 - **Deux secteurs lancés en parallèle sur une API dont seules les routes étaient écrites** : le
   consommateur s'est arrêté (à raison), la forme des réponses n'existait pas. Une interface n'est
   « écrite » que si les réponses le sont ; sinon le producteur publie d'abord sa description.
@@ -201,8 +214,9 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
 
 ### État de la bascule
 
-Le moteur, la passerelle, `lab-admin` et le runner sont en service et vérifiés avec les comptes de
-test. Ce qui reste à faire avant d'ouvrir le lab à un autre développeur (autorisations `oauth-hub`,
+Bascule des 16 apps historiques faite le 2026-10-11 (bases `dev_sacha`, `gis_sacha`, `lab` ;
+applications dans `deploiement/`). Le moteur, la passerelle, `lab-admin` et le runner sont en
+service et vérifiés avec les comptes de test. Ce qui reste à faire avant d'ouvrir le lab à un autre développeur (autorisations `oauth-hub`,
 durcissement de l'hôte, bascule des 17 apps vers `dev_sacha` et `deploiement/`, parcours réel d'un
 dev) est suivi dans `chantiers/multi-dev/BASCULE.md` — non versionné, à lire avant toute action
 sur ce sujet. Depuis le 2026-10-11 la séparation des bases est effective pour les rôles de dev (voir « Base de
@@ -373,8 +387,22 @@ bash scripts/setup2.sh mon-app --yes
 
 | Instance | Container | Image | Base | Rôle | Pour qui |
 |---|---|---|---|---|---|
-| `postgres` | `dev-postgres` | `postgres:16-alpine` | `devdb` | `devuser` | La grande majorité des apps — un schéma par app |
-| `postgis` | `dev-postgis` | `postgis/postgis:16-3.5` | `gisdb` | `gisuser` | Apps SIG uniquement (ex. `carto-lab`) |
+| `postgres` | `dev-postgres` | `postgres:16-alpine` | `dev_<uid>`, `lab` | `dev_<uid>`, `lab` | La grande majorité des apps — une base par propriétaire, un schéma par app |
+| `postgis` | `dev-postgis` | `postgis/postgis:16-3.5` | `gis_<uid>` | `dev_<uid>` | Apps SIG uniquement (ex. `carto-lab`) |
+
+**Répartition depuis la bascule du 2026-10-11** (les 16 apps historiques ont quitté `devdb`/`gisdb`) :
+- **`dev_sacha`** (et `gis_sacha` pour `carto-lab`) : les 12 applications de `sacha`, toutes dans
+  `deploiement/` ;
+- **`lab`** (rôle `lab`, non superutilisateur, mot de passe `LAB_PG_PASSWORD` dans
+  `infra/dev-roles.env`) : les services du **cadriciel**, qui restent à la racine — `lab-admin`,
+  `storage`, `oauth-hub`, `app-builder` (dont `lab-admin` lit le catalogue par un second alias de
+  la même base). Personne n'utilise ce rôle à la main ; `reset_url.sh` ne propage son mot de passe
+  qu'à ces quatre dossiers ;
+- `devdb` / `gisdb` et les rôles `devuser` / `gisuser` ne servent plus qu'à l'administration
+  (`docker exec … psql`, pgAdmin partagé). **Les anciens schémas y sont encore, intacts, comme
+  retour arrière** : ne pas les supprimer sans demande explicite ; ne jamais y remettre une app.
+- Une nouvelle app naît dans la base de son propriétaire (`new-app.sh --owner`). Les valeurs
+  `DB_NAME=devdb` / `DB_USER=devuser` du gabarit ne sont plus que des défauts historiques.
 
 **Pourquoi deux instances et pas juste l'extension PostGIS en plus sur `postgres`** :
 - L'image de `postgres` est **alpine (musl)** ; le paquet PostGIS d'Alpine dépend de `postgresql18`,
@@ -955,6 +983,10 @@ chaud. `rotate-secrets-full.sh` termine lui-même par `recompose_docker.sh --for
 ---
 
 ## Sous-modules existants
+
+Les **applications** sont dans `deploiement/<app>` ; les **services du cadriciel** (`lab-admin`,
+`storage`, `oauth-hub`, `app-builder`) restent à la racine. Le tableau donne le nom du dossier ;
+pour le chemin réel, toujours passer par `registry_app_dir`.
 
 | Dossier | Dépôt | Type | Ports |
 |---|---|---|---|

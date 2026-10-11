@@ -30,6 +30,8 @@ ALLOWED_SCRIPTS = frozenset({
     "dev-enroll.sh", "work-clone.sh",
     # v7 : état de pg_hba (lecture seule : sous-commande hba-status uniquement)
     "dev-db.sh",
+    # v8 : où en est GitHub par rapport à ce qui tourne (lecture seule, sans verrou)
+    "app-remote.sh",
 })
 
 LOCK_BUSY = 75  # code rendu par les scripts quand le verrou de déploiement est occupé

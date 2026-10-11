@@ -1,50 +1,50 @@
 [submodule "analyse-lora"]
-	path = analyse-lora
+	path = deploiement/analyse-lora
 	url = https://github.com/Sacha37420/analyse-lora.git
 [submodule "app-builder"]
 	path = app-builder
 	url = https://github.com/Sacha37420/app-builder.git
 [submodule "restauration"]
-	path = restauration
+	path = deploiement/restauration
 	url = https://github.com/Sacha37420/restauration.git
 [submodule "traitement-de-fichiers-compils"]
-	path = traitement-de-fichiers-compils
+	path = deploiement/traitement-de-fichiers-compils
 	url = https://github.com/Sacha37420/traitement-de-fichiers-compils.git
 [submodule "arbre-genealogique"]
-	path = arbre-genealogique
+	path = deploiement/arbre-genealogique
 	url = https://github.com/Sacha37420/arbre-genealogique.git
 [submodule "carto-lab"]
-	path = carto-lab
+	path = deploiement/carto-lab
 	url = https://github.com/Sacha37420/carto-lab.git
 [submodule "lab-admin"]
 	path = lab-admin
 	url = https://github.com/Sacha37420/lab-admin.git
 [submodule "conciergerie"]
-	path = conciergerie
+	path = deploiement/conciergerie
 	url = https://github.com/Sacha37420/conciergerie.git
 [submodule "atelier-3d"]
-	path = atelier-3d
+	path = deploiement/atelier-3d
 	url = https://github.com/Sacha37420/atelier-3d.git
 [submodule "storage"]
 	path = storage
 	url = https://github.com/Sacha37420/storage.git
 [submodule "robot-lab"]
-	path = robot-lab
+	path = deploiement/robot-lab
 	url = https://github.com/Sacha37420/robot-lab.git
 [submodule "code-route"]
-	path = code-route
+	path = deploiement/code-route
 	url = https://github.com/Sacha37420/code-route.git
 [submodule "craft-lab"]
-	path = craft-lab
+	path = deploiement/craft-lab
 	url = https://github.com/Sacha37420/craft-lab.git
 [submodule "bilan-thermique"]
-	path = bilan-thermique
+	path = deploiement/bilan-thermique
 	url = https://github.com/Sacha37420/bilan-thermique.git
 [submodule "oauth-hub"]
 	path = oauth-hub
 	url = https://github.com/Sacha37420/oauth-hub.git
 [submodule "peripheriques"]
-	path = peripheriques
+	path = deploiement/peripheriques
 	url = https://github.com/Sacha37420/peripheriques.git
 [submodule "deploiement/test"]
 	path = deploiement/test

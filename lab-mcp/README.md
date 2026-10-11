@@ -34,7 +34,7 @@ rendu par les deux entrées, succès comme erreurs).
 ### Depuis l'éditeur du lab
 Rien à régler : l'espace de travail reçoit `LAB_MCP_URL` et `LAB_MCP_TOKEN`, et l'image déclare le
 serveur à Claude Code et à Mistral Vibe. Ce jeton est **limité au projet ouvert** (état, journaux,
-variables, déploiement, tests).
+variables, base, déploiement, tests) et ne se voit annoncer que les outils qu'il peut appeler.
 
 ### Depuis son propre poste (Claude Code ≥ 2.1.231)
 ```bash
@@ -179,7 +179,7 @@ inversement.
 | `azp` **exact par entrée** : `lab-mcp` pour `/mcp`, `lab-admin` pour `/mcp/api` ; `admin-cli` refusé partout | `labmcp/auth.py` |
 | Entrée MCP : compte dans `.devs`, relu à chaque requête. Superutilisateur = `LAB_SUPERUSER`, jamais un groupe | `labmcp/auth.py`, `registry.py` |
 | Propriété du projet pour toute opération qui en prend un ; « inconnu » et « à un autre » indistincts | `Engine._app` |
-| Jeton d'espace : 256 bits, haché, limité à un projet et à neuf opérations, jamais superutilisateur | `workspaces.py`, `Engine.call` |
+| Jeton d'espace : 256 bits, haché, limité à un projet et à dix opérations (annoncées seules), jamais superutilisateur | `workspaces.py`, `Engine.call` |
 | Seuls les scripts d'I4 sont exécutés, en liste d'arguments ; enchaînements lancés **par** `lab-lock.sh` | `procs.py`, `chain.py` |
 | `docker` lancé directement **uniquement** pour les espaces, les pgAdmin et le pare-feu, avec des noms dérivés d'un uid validé | `workspaces.py`, `pgadmin.py`, `firewall.py` |
 | Jeton GitHub = celui de l'appelant, redemandé à oauth-hub à chaque fois, jamais écrit ni journalisé ; pas de `gh` dans l'image | `oauthhub.py`, `github.py` |
@@ -193,6 +193,12 @@ inversement.
 **Aucun mode « identité forcée »** : émetteur, adresse des clés et les deux `azp` ne sont pas
 configurables. Les tests remplacent la clé de vérification par programme, depuis `tests/harness.py`,
 absent de l'image.
+
+**Écart avec GitHub** (I5 v8) : chaque projet porte un champ `github` (à jour, en retard de N commits,
+injoignable…), lu par `scripts/app-remote.sh` — sans jeton, sans verrou, sans rien écrire. Cache en
+mémoire, vérifié en arrière-plan (jamais pendant une requête) : au plus toutes les 5 minutes par
+projet, après chaque déploiement, sur webhook `push` signé, ou sur `?refresh=1` ; deux vérifications
+à la fois au plus.
 
 Décisions de ce secteur :
 - Python, SDK MCP officiel 1.x, Streamable HTTP sans état ; client OAuth pré-enregistré.

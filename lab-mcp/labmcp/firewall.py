@@ -56,8 +56,15 @@ class Firewall:
         prefix = self.cfg.ws_bridge_prefix
         if not PREFIX_RE.fullmatch(prefix):
             raise LabError("unavailable", "Préfixe de pont d'espace invalide : pare-feu non posé.")
+        # Nom fixe, retiré d'abord : si Docker laisse un jour ce conteneur jetable derrière lui (vu
+        # en service : un conteneur « Dead »), il est nettoyé au passage suivant au lieu de s'empiler.
+        # Étiquettes Compose vidées : l'image, construite par Compose, les porte, et le conteneur
+        # jetable compterait sinon comme un service (arrêté) du projet lab-mcp.
+        helper = f"lab-ws-firewall-{prefix}"
+        await self._docker("rm", "-f", helper)
         code, out, err = await self._docker(
-            "run", "--rm", "--network", "host", "--user", "0", "--read-only",
+            "run", "--rm", "--name", helper, "--network", "host", "--user", "0", "--read-only",
+            "--label", "com.docker.compose.project=", "--label", "com.docker.compose.service=",
             "--cap-drop", "ALL", "--cap-add", "NET_ADMIN", "--security-opt", "no-new-privileges",
             await self._self_image(), "lab-ws-firewall", "apply", prefix)
         if code != 0:

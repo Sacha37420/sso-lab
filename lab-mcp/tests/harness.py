@@ -76,6 +76,34 @@ if os.environ.get("TEST_PG_LOCKED") == "1":
     engine_module.Engine._pg_locked = _locked
     print("[harness] garde-fou pg_trust remplacé : instance PostgreSQL de test", flush=True)
 
+if os.environ.get("TEST_REMOTE_DOUBLE"):
+    # Double LOCAL de scripts/app-remote.sh (I4 v8), tant que la fondation ne l'a pas livré : rend,
+    # par projet, la ligne JSON contractuelle lue dans un fichier que le test réécrit.
+    import json  # noqa: E402
+
+    async def _remote_raw(self, app):
+        with open("/tmp/remote-calls.log", "a") as fh:
+            fh.write(app + "\n")
+        await asyncio.sleep(float(os.environ.get("TEST_REMOTE_DELAY", "0")))
+        try:
+            return json.load(open(os.environ["TEST_REMOTE_DOUBLE"])).get(app)
+        except (OSError, ValueError):
+            return None
+    engine_module.Engine._remote_raw = _remote_raw
+    print("[harness] app-remote.sh remplacé par un double local", flush=True)
+
 app = build(cfg)
+if os.environ.get("TEST_WS_TOKEN_FOR"):
+    # Jeton d'espace injecté pour (uid, app) SANS conteneur : sert à éprouver ce qu'un jeton
+    # d'espace voit et peut appeler quand aucune app jetable ne peut être créée.
+    import secrets as _secrets  # noqa: E402
+    from labmcp.access import digest as _digest  # noqa: E402
+    from labmcp.workspaces import Workspace as _Workspace  # noqa: E402
+    _uid, _app = os.environ["TEST_WS_TOKEN_FOR"].split(":")
+    _tok = "labws_" + _secrets.token_urlsafe(32)
+    app.engine.ws._ws[_uid] = _Workspace(uid=_uid, app=_app, token_hash=_digest(_tok), opened_by=_uid, with_github=False)
+    _fd = os.open("/tmp/tok_ws", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.write(_fd, _tok.encode()); os.close(_fd)
+    print(f"[harness] jeton d'espace de test injecté pour {_uid}:{_app}", flush=True)
 asyncio.run(app.engine.startup())
 uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning", access_log=False)

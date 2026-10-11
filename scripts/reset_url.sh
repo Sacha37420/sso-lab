@@ -312,6 +312,17 @@ while IFS= read -r envfile; do
     else
       echo "    ⚠ $rel déclare DB_USER=${_db_user} mais l'app n'appartient pas à « ${_db_uid} » — aucun mot de passe propagé." >&2
     fi
+  elif [[ "$_db_user" == "lab" ]]; then
+    #  • DB_USER=lab (base du CADRICIEL, contrat multi-dev v8) : rôle non
+    #    superutilisateur des services du cadriciel, base `lab`. Son mot de passe
+    #    (LAB_PG_PASSWORD, infra/dev-roles.env) n'est propagé qu'aux services
+    #    nommés ici — une app qui écrirait DB_USER=lab dans son .env ne l'obtient pas.
+    case "$(basename "$dir")" in
+      lab-admin|storage|oauth-hub|app-builder)
+        _lab_pg_pw="$(_env_val "$SCRIPT_DIR/infra/dev-roles.env" "LAB_PG_PASSWORD")"
+        [[ -n "$_lab_pg_pw" ]] && upsert_env "$envfile" DB_PASSWORD "$_lab_pg_pw" ;;
+      *) echo "    ⚠ $rel déclare DB_USER=lab mais n'est pas un service du cadriciel — aucun mot de passe propagé." >&2 ;;
+    esac
   else
     [[ -n "$DB_PASSWORD" ]] && upsert_env "$envfile" DB_PASSWORD "$DB_PASSWORD"
     # Mot de passe de l'instance PostGIS (apps SIG uniquement) : clé distincte de
