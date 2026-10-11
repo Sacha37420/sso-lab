@@ -109,9 +109,10 @@ SPECTACULAR_SETTINGS = {
             }
         }
     },
-    # Use CDN-hosted Swagger UI to avoid missing local sidecar assets in this env
-    'SWAGGER_UI_DIST': 'https://cdn.jsdelivr.net/npm/swagger-ui-dist@latest',
-    'SWAGGER_UI_FAVICON_HREF': 'https://cdn.jsdelivr.net/npm/swagger-ui-dist@latest/favicon-32x32.png',
+    # Swagger UI servi localement (paquet drf-spectacular-sidecar, route
+    # api/docs/sidecar/ de config/urls.py) — jamais un CDN en `@latest`.
+    'SWAGGER_UI_DIST': '/api/docs/sidecar',
+    'SWAGGER_UI_FAVICON_HREF': '/api/docs/sidecar/favicon-32x32.png',
     # Configure Swagger UI OAuth2 (initOAuth) to work with Keycloak
     'SWAGGER_UI_OAUTH2_CONFIG': {
         'clientId': KEYCLOAK_CLIENT_ID,

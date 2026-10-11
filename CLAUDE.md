@@ -208,6 +208,24 @@ backend verts avant mise en service, verdicts enregistrés avec chaque déploiem
 Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to_do_<sujet>.md`
 (lots, tests par lot, date de vérification), et le régime chantier garde son contrat.
 
+### Trois règles de gabarit, valables pour toute app (2026-10-11)
+
+- **Un frontend ne reçoit jamais `env_file: .env`** : son conteneur nginx ne lit que quelques
+  variables, passées une à une par `environment:`. Le `.env` complet y mettait mots de passe de
+  base et clés.
+- **`/api/schema/` et `/api/docs/` n'existent qu'en `DEBUG`** (404 sinon). Ils étaient lisibles
+  sans connexion, et Swagger chargeait du code d'un CDN.
+- **Le serveur est `gunicorn`** (`backend/gunicorn.conf.py`, 1 processus, 8 fils), plus
+  `runserver`. **Sa configuration retire `SCRIPT_NAME` de l'environnement du worker** et doit
+  continuer à le faire : les `.env` portent `SCRIPT_NAME=/<app>-api`, gunicorn exige alors que
+  chaque chemin commence par ce préfixe — que Caddy retire — et répond 500 à tout. Pas de journal
+  d'accès : il écrirait en clair les `?key=` et `?ticket=` passés en paramètre.
+- Ces corrections sont commitées dans les 17 apps ; la première est en service partout, les deux
+  autres **seulement là où l'image a été reconstruite depuis** (suivi :
+  `chantiers/multi-dev/BASCULE.md`). Un dossier d'app peut donc être en avance sur son image :
+  avant tout `setup2.sh <app>`, regarder ce que la reconstruction embarque (`git log` depuis la
+  date de création du conteneur).
+
 ### Pièges constatés
 
 - **Redéployer par `setup2.sh` reconstruit l'image depuis le dossier** : cela met en service tout
@@ -1040,24 +1058,20 @@ ci-dessous) suppose un seul fichier, ce nom précis.
     `dev_e2edev`) et le seul qui prouve qu'un membre de `developers` **sans** `admins` est refusé
     sur les pages et l'API d'administration de `lab-admin`. Il n'est pas utilisé par
     `cloisonnement.spec.ts`. Tout nouveau groupe LDAP ne doit **pas** l'inclure.
-- **Catalogue vs exécution**, deux choses bien distinctes :
-  - *Catalogue* (`GET /list` sur le runner, **pas de navigateur**) : à chaque déploiement d'une app
-    (`scripts/setup_unit.sh`, étape best-effort en toute fin), liste les tests du fichier
-    `cloisonnement.spec.ts` de l'app et les enregistre dans `lab-admin` (table `DebugTest`). Ne
-    lance jamais de navigateur — reste rapide, compatible avec le dispatch parallèle tout-le-lab
-    de `setup2.sh`.
-  - *Exécution* (`POST /run` sur le runner, navigateur réel) : jamais automatique. Déclenchée à la
-    main depuis la page **Debug** de `lab-admin` (une app, ou toutes), via
-    `POST /api/debug/run/` → tâche Celery (`lab-admin` a son propre `redis`+`worker`, comme
-    carto-lab) → runner → résultats stockés dans `DebugTest`, visibles dans le tableau.
-- Un seul run à la fois, lab-wide : mutex en mémoire côté runner (409 si déjà occupé) **et**
-  `--concurrency=1` sur le worker Celery de `lab-admin` — même principe que le verrou global
-  d'atelier-3d, pour la même raison (2 vCPU/16 Go partagés).
-- `CatalogSyncView` (`POST /api/debug/catalog-sync/`) est le seul endpoint de `lab-admin` en
-  dehors de l'auth Keycloak par défaut : appelé par un script (`setup_unit.sh`), pas un navigateur,
-  authentifié par secret partagé (header `X-Setup-Key` / `SETUP_CATALOG_KEY` dans
-  `lab-admin/.env`, auto-généré si absent) — même famille de pattern que `X-Meteo-Key` de
-  carto-lab.
+- **Qui lance les tests** (depuis le 2026-10-11) : **le moteur `lab-mcp`, et lui seul.** Il joue
+  le test de cloisonnement d'une app après chaque déploiement fait par le chemin à portes, à la
+  demande depuis la page d'un projet de `lab-admin` (ou l'outil MCP `run_tests`), et pour tous
+  les projets à la fois par « Tout tester » (superutilisateur). Il garde le dernier résultat de
+  chaque app dans `<LAB_STATE_DIR>/tests/<app>.json` et le rend avec la liste des projets.
+  L'ancien dispositif (catalogue synchronisé par `setup_unit.sh`, page « Debug », table
+  `DebugTest`, worker Celery et Redis de `lab-admin`, `CatalogSyncView`, `SETUP_CATALOG_KEY`)
+  est supprimé : ne pas le réintroduire.
+- Un seul run à la fois, lab-wide : mutex en mémoire côté runner (409 si déjà occupé) ; le moteur
+  attend son tour au lieu d'échouer. Tout script ou agent qui lance un navigateur dans
+  `lab-runner` doit d'abord vérifier qu'aucun autre n'y tourne.
+- Une réponse `[]` du runner signifie « aucun test trouvé », jamais « tout va bien » : le moteur la
+  rend comme un verdict `absent`, et un projet neuf sans spec est refusé au déploiement.
+
 
 ### `HOST_DEV_ROOT` — piège à connaître avant de toucher au montage `/mnt/dev`
 
@@ -1149,7 +1163,7 @@ commentées gardent les bacs à sable et l'infra hors de cette page. Après tout
 bash scripts/complete_404.sh     # régénère sso-lab/fallback/html/404.html
 ```
 
-Les **outils d'administration** (page « Apps du lab » de lab-admin, catalogue des tests E2E,
+Les **outils d'administration** (page « Projets » de lab-admin pour le superutilisateur, tests E2E,
 `add-user.sh`) affichent en revanche **toutes** les apps réellement déployées — une entrée de
 `.ports` dont le dossier contient un `docker-compose.yml`. Ils étaient auparavant limités à
 `.app-descriptions`, ce qui rendait invisible en silence toute app absente de ce fichier : trois

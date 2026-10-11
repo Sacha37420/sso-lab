@@ -552,7 +552,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 EXPOSE 8000
-CMD ["sh", "-c", "python manage.py migrate --no-input && python manage.py runserver 0.0.0.0:8000"]
+# gunicorn et non runserver (serveur de développement). Réglages et raisons :
+# gunicorn.conf.py (fourni par le gabarit).
+CMD ["sh", "-c", "python manage.py migrate --no-input && exec gunicorn -c gunicorn.conf.py config.wsgi:application"]
 EOF
   ok "Dockerfile Django"
 }
@@ -588,6 +590,7 @@ djangorestframework>=3.15
 django-cors-headers>=4.3
 PyJWT>=2.8
 cryptography>=42.0
+gunicorn>=23.0,<24.0
 EOF
   ok "requirements.txt Django"
 }
@@ -758,7 +761,16 @@ services:
     # « <app>- » (règle contrôlée par validate-app.sh, contrat multi-dev I4).
     container_name: ${name}-app
     restart: unless-stopped
-    env_file: .env
+    # Uniquement les variables que lit nginx-entrypoint.sh pour écrire env.js —
+    # aucune n'est secrète (env.js est servi au navigateur). Jamais « env_file: .env »
+    # ici : il donnerait à ce conteneur nginx tous les secrets de l'app.
+    environment:
+      DOMAIN: \${DOMAIN:-}
+      KEYCLOAK_CLIENT_ID: \${KEYCLOAK_CLIENT_ID:-}
+      KEYCLOAK_PUBLIC_URL: \${KEYCLOAK_PUBLIC_URL:-}
+      KEYCLOAK_REALM: \${KEYCLOAK_REALM:-}
+      PORT_BACKEND: \${PORT_BACKEND:-}
+      PORT_FRONTEND: \${PORT_FRONTEND:-}
     ports:
       - "${port}:80"
     networks:
@@ -805,7 +817,16 @@ services:
     build: ./frontend
     container_name: ${name}-frontend
     restart: unless-stopped
-    env_file: .env
+    # Uniquement les variables que lit nginx-entrypoint.sh pour écrire env.js —
+    # aucune n'est secrète (env.js est servi au navigateur). Jamais « env_file: .env »
+    # ici : il donnerait à ce conteneur nginx tous les secrets de l'app.
+    environment:
+      DOMAIN: \${DOMAIN:-}
+      KEYCLOAK_CLIENT_ID: \${KEYCLOAK_CLIENT_ID:-}
+      KEYCLOAK_PUBLIC_URL: \${KEYCLOAK_PUBLIC_URL:-}
+      KEYCLOAK_REALM: \${KEYCLOAK_REALM:-}
+      PORT_BACKEND: \${PORT_BACKEND:-}
+      PORT_FRONTEND: \${PORT_FRONTEND:-}
     ports:
       - "${fport}:80"
     networks:
@@ -852,7 +873,16 @@ services:
     build: ./frontend
     container_name: ${name}-frontend
     restart: unless-stopped
-    env_file: .env
+    # Uniquement les variables que lit nginx-entrypoint.sh pour écrire env.js —
+    # aucune n'est secrète (env.js est servi au navigateur). Jamais « env_file: .env »
+    # ici : il donnerait à ce conteneur nginx tous les secrets de l'app.
+    environment:
+      DOMAIN: \${DOMAIN:-}
+      KEYCLOAK_CLIENT_ID: \${KEYCLOAK_CLIENT_ID:-}
+      KEYCLOAK_PUBLIC_URL: \${KEYCLOAK_PUBLIC_URL:-}
+      KEYCLOAK_REALM: \${KEYCLOAK_REALM:-}
+      PORT_BACKEND: \${PORT_BACKEND:-}
+      PORT_FRONTEND: \${PORT_FRONTEND:-}
     ports:
       - "${fport}:80"
     networks:

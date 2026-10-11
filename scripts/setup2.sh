@@ -268,7 +268,7 @@ elif [[ -z "$APP_NAME" ]]; then
 fi
 
 # ── 3bis. Runner E2E partagé (runner/) ────────────────────────────────
-# Best-effort, jamais bloquant : le catalogue des tests (étape de
+# Best-effort, jamais bloquant : le test de cloisonnement (étape de
 # setup_unit.sh) a besoin de lab-runner, mais son absence ne doit jamais
 # empêcher un déploiement. Le runner vit sur le réseau de sso-lab
 # (sso-lab_sso-net, externe pour lui) : il ne peut démarrer qu'APRÈS sso-lab.
@@ -280,7 +280,7 @@ start_runner() {
     echo -e "\033[0;36m══ Runner E2E (runner/)\033[0m"
     run_shared "runner E2E" bash "$SCRIPT_DIR/recompose_docker.sh" --app runner 2>&1 | sed 's/^/  /' \
       && echo -e "\033[0;32m✓ Runner E2E démarré.\033[0m" \
-      || echo -e "\033[1;33m⚠ Runner E2E non démarré — le catalogue des tests sera ignoré (best-effort).\033[0m"
+      || echo -e "\033[1;33m⚠ Runner E2E non démarré — le test de cloisonnement ne sera pas lancé (best-effort).\033[0m"
   fi
 }
 $USE_UNIT_DELEGATION && start_runner
