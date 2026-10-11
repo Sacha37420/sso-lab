@@ -3188,7 +3188,11 @@ d'ensemble des photos donne des poses relatives exactes.
 erreur de reprojection 0,70 px, résidu GPS médian 1,66 m ; un second petit modèle rejeté
 (« photos trop groupées »). Écart entre le cap reconstruit et le cap annoncé par Panoramax :
 médiane −4,3°, de −40° à +17° — ce qui confirme que le cap annoncé n'est pas fiable.
-**Durée : 554 s**, dont 226 s de points caractéristiques et 276 s d'appariement.
+**Durée : 554 s**, dont 226 s de points caractéristiques et 276 s d'appariement. Rejoué à
+l'identique après le redéploiement du 2026-10-12 (pycolmap 4.2.1 au lieu de 4.2.0) : mêmes 27
+photos, mêmes résidus, 505 s. Avec seulement les 14 photos les plus proches du même point
+(6 séquences de 1 à 4 photos) : **aucune photo placée** en 140 s — la méthode a besoin de
+séquences qui se recouvrent ; l'analyse retombe alors sur l'ancien recalage.
 
 ### Reste ouvert — à trancher par le propriétaire
 - **Le coût** : environ 9 minutes de plus par analyse de façades (le Lot AL avait ramené l'analyse
