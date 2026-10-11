@@ -64,6 +64,142 @@ maillage dans atelier-3d, une icône dans craft-lab.
 
 ---
 
+## Lots 1 et 2 — faits le 2026-10-11 (branche `ergonomie`, **non fusionnée, non déployée**)
+
+Frontend seul. Aucune route de l'API n'a changé, rien dans le backend. Code dans l'arbre de travail
+`/home/sacha/lab-work/sacha/storage-ergonomie` (branche `ergonomie` du sous-module `storage`) :
+`eaaa2c7` (lot 1), `daa0853` (lot 2).
+
+**Lot 1 — livré**
+- Découpage du composant unique : `logic/` (fonctions pures : `entries`, `selection`, `actions`,
+  `upload-queue`), `browser.store.ts` (état), `parts/` (liste, barre, volet, partage, envois).
+- Sélection : clic, Ctrl+clic, Maj+clic, **rectangle glissé**, cases à cocher, Ctrl+A, Échap.
+- Clavier : Tab jusqu'à la liste, flèches, Maj+flèche, Ctrl+flèche, Début/Fin, Espace, Entrée,
+  Suppr, Retour arrière, « / ».
+- Menu contextuel au clic droit et à l'appui long ; barre d'actions sur la sélection. Barre, menu
+  et clavier lisent **une seule table** (`logic/actions.ts`).
+- Tri par colonne (mémorisé), filtre par nom, taille et date des dossiers.
+- Téléchargement et suppression groupés, dossiers compris.
+- **Suppression définitive avec « Annuler » pendant 7 s** (décision Q1). L'appel `DELETE` ne part
+  qu'à l'expiration du bandeau. **Onglet quitté ou fermé pendant le bandeau : la suppression est
+  validée**, pas annulée — fermer la page n'est pas un moyen d'annuler (requêtes `keepalive` à
+  l'événement `pagehide`). Si ces requêtes n'aboutissent pas (jeton expiré, navigateur tué), les
+  fichiers restent : l'échec penche du côté sûr.
+- Corrections : droit d'écriture lu dans `can_write` ; erreurs en bandeau, la liste reste visible ;
+  l'espace n'est plus rechargé à chaque dossier ; tout est atteignable au clavier ; rôles ARIA et
+  annonces ; cibles de 44 px ; rupture à 900 px ; plus de débordement à 390 px ; polices Foyer
+  servies derrière `/storage/` (elles étaient en 404).
+- **Partage géré par une app** (décision Q2 : signalé, rien d'interdit) : bandeau « géré par
+  l'application … » et étiquette `app` dans le volet. Reconnu au **seul** indice que donne l'API :
+  un propriétaire `service:<client>`. Les partages d'app créés à la main au nom d'un compte humain
+  (`carto-lab`, `code-route`, `craft-lab` : `create_group_share`) **ne sont pas reconnaissables**
+  sans changer le backend ; ils restent étiquetés « groupe ».
+
+**Lot 2 — livré**
+- Dépôt sur toute la liste, sur une ligne de dossier, sur un cran du fil d'Ariane ; un fichier
+  lâché ailleurs ne fait plus quitter la page.
+- Dossiers entiers : sélecteur de dossier, et parcours des dossiers déposés.
+- **Conflit de nom : plus d'écrasement silencieux.** Rien ne part avant le choix : garder les deux
+  (`nom (2).ext`), remplacer, ignorer, tout annuler. Un seul choix pour tout le lot déposé.
+- File d'envoi : deux en parallèle, progression par fichier et globale, annulation, relance ; un
+  échec n'arrête plus les suivants ; refus immédiat au-delà de la taille maximale.
+- **« Nouveau dossier » : partiel, et c'est la limite de l'API.** Elle n'a pas d'objet dossier ; le
+  dossier créé est local à la page (« vide · non enregistré »), devient réel au premier fichier, et
+  disparaît au rechargement s'il est resté vide. Un dossier vide durable demande le backend (lot 3).
+- Coller des fichiers (Ctrl+V) les téléverse.
+
+**Tests — vérifié le 2026-10-11**
+- [x] Compilation stricte et build : `npm run build` sans erreur (avertissement : bundle initial
+  546 ko pour un budget d'alerte de 500 ko ; il était de 374 ko).
+- [x] Image Docker du frontend construite depuis la branche (`docker build`, sous verrou), puis supprimée.
+- [x] Tests unitaires : `npm test` — **81 verts** (sélection 25, entrées 20, file d'envoi et conflits
+  20, actions 16). Outillage ajouté : `vitest` 4.1.11 et `vitest.config.ts`.
+- [x] Lot 1 seul (commit `eaaa2c7`) : 16 tests navigateur, tous verts.
+- [x] Lots 1 + 2 (commit `daa0853`) : `e2e/gestes.spec.ts`, **25 verts**, dans le Chromium de
+  `lab-runner`, compte `e2edev`, **backend en service**, build de la branche servi à la place des
+  fichiers statiques déployés.
+  - [x] Maj+clic et rectangle ne surlignent plus de texte ; rectangle sur 4 lignes → 4 `aria-selected`
+  - [x] Ctrl+A, Échap, cases, clic dans le vide
+  - [x] Tab atteint espaces, fil d'Ariane, barre, en-têtes, liste ; flèches, Entrée, Retour arrière sans souris
+  - [x] tri par taille dans les deux sens, dossiers en tête ; filtre insensible à la casse
+  - [x] clic droit (élément, sélection multiple, vide) et appui long simulé
+  - [x] suppression : rien côté serveur pendant le bandeau ; « Annuler » restaure ; expiration → supprimé, dossier compris
+  - [x] page quittée pendant le bandeau → suppression envoyée
+  - [x] dépôt sur la liste, sur un dossier, sur le fil d'Ariane
+  - [x] conflit : dialogue, original intact tant que le choix n'est pas fait, puis les trois choix
+  - [x] envoi forcé en échec : les suivants passent, « Relancer » rattrape
+  - [x] deux envois en parallèle, annulation d'un envoi en cours et d'un envoi en attente
+  - [x] dossier à trois niveaux par le sélecteur de dossier → arborescence reproduite
+  - [x] 1280 px et 390 px : `scrollWidth == innerWidth`, aucune cible sous 44 px (avec et sans sélection, volet ouvert)
+  - [x] rupture à 900 px, thème sombre, police Foyer chargée, aucune couleur en dur (`grep` = 0)
+- [x] Catalogue du runner inchangé : sans `E2E_GESTES`, `--list` ne voit que les 3 tests de `cloisonnement.spec.ts`.
+- [ ] `cloisonnement.spec.ts` **non rejoué sur la branche** (il demande des mots de passe que je
+  n'avais pas à utiliser) : à jouer après déploiement.
+
+Relancer : `cd frontend && npm run build && LAB_ROOT=/home/sacha/dev bash e2e/jouer-gestes.sh`
+(ajouter `--deploye` pour viser le frontend déployé).
+
+**Les 27 gestes, après ces deux lots** (avant : 1 présent, 7 partiels, 19 absents ; après :
+**12 présents, 10 partiels, 5 absents**)
+
+| # | Geste | Avant | Après | |
+|---|---|---|---|---|
+| 1 | Sélection simple | absent | **présent** | constaté |
+| 2 | Ctrl / Maj | absent | **présent** | constaté |
+| 3 | Rectangle glissé | absent | **présent** | constaté ; souris seulement, au doigt le glissé fait défiler |
+| 4 | Tout sélectionner | absent | **présent** | constaté |
+| 5 | Déposer des fichiers | partiel | **présent** | constaté par dépôt simulé |
+| 6 | Déposer des dossiers | absent | **présent** | sélecteur de dossier constaté ; dossier glissé : non pilotable, déduit du code |
+| 7 | Glisser pour déplacer | absent | absent | pas de route — lot 3 |
+| 8 | Copier / couper / coller | absent | absent | pas de route — lot 3 ; coller des fichiers les téléverse (non testé) |
+| 9 | Renommer | absent | absent | pas de route — lot 3 |
+| 10 | Créer un dossier | absent | partiel | local jusqu'au premier fichier ; constaté |
+| 11 | Supprimer | partiel | **présent** | groupée, dossiers, annulable 7 s ; constaté. Pas de corbeille (décision) |
+| 12 | Menu contextuel | absent | **présent** | clic droit constaté ; appui long simulé |
+| 13 | Raccourcis | absent | partiel | Suppr, Entrée, Échap, Ctrl+A, Retour arrière, « / » ; F2 et Ctrl+C/X/V attendent le lot 3 |
+| 14 | Navigation au clavier | absent | **présent** | constaté |
+| 15 | Fil d'Ariane | présent | **présent** | atteignable au clavier, cible de dépôt |
+| 16 | Arborescence latérale | partiel | partiel | inchangée : partages seulement, pas les dossiers |
+| 17 | Liste / grille, vignettes | partiel | partiel | liste avec icônes ; pas de grille — lot 5 |
+| 18 | Tri | absent | **présent** | constaté |
+| 19 | Recherche, filtres | absent | partiel | filtre par nom dans le dossier courant ; pas de recherche dans les sous-dossiers |
+| 20 | Aperçu | absent | absent | lot 5 |
+| 21 | Télécharger une sélection | absent | partiel | fichiers un par un, constaté ; pas d'archive, dossiers ignorés — lot 4 |
+| 22 | Envoi : progression, file, relance, conflits | partiel | **présent** | constaté ; la relance renvoie le fichier entier (pas de reprise partielle) |
+| 23 | Partage | partiel | partiel | inchangé, plus le signalement « géré par une app » |
+| 24 | Propriétés | absent | absent | lot 4 (taille et date des dossiers sont affichées) |
+| 25 | Espace occupé | absent | partiel | affiché par espace ; pas de quota (décision) |
+| 26 | Tactile et mobile | partiel | partiel | 390 px sans débordement, cibles ≥ 44 px, barre en bas : constaté **en émulation**, pas sur un appareil |
+| 27 | Accessibilité | absent | partiel | rôles, états, annonces, focus : constaté ; aucun essai avec un lecteur d'écran |
+
+**Sorti des lots**
+- **Un seul volet latéral** avec les dossiers dans l'arbre (cible 4.1) : non fait. Le bandeau Foyer
+  et le volet des espaces restent deux colonnes au-delà de 900 px ; fusionner touche la navigation
+  Foyer, hors de ces lots.
+- **Dossier vide durable**, déplacer, renommer, copier : pas de route.
+- **Reconnaître tous les partages d'app** : demande un champ côté backend.
+
+**Non vérifié**
+- Glisser réel depuis le bureau (fichiers et dossiers), coller : les essais passent par des
+  événements simulés.
+- Fermeture réelle de l'onglet pendant le bandeau : sur trois passes, la suppression est partie deux
+  fois et pas la troisième — l'outil de test ne ferme pas l'onglet comme un utilisateur. La
+  navigation hors de la page, elle, l'envoie à chaque fois.
+- Comportement dans un partage (membre en lecture, en écriture, par groupe, partage d'app) : aucun
+  partage n'a été touché ; la correction `can_write` et le bandeau « géré par » sont déduits du code.
+- Appareil tactile réel, iOS, Firefox, Safari, lecteur d'écran, gros fichiers.
+
+**Pour déployer** (à séquencer, rien n'a été fait) :
+```bash
+git -C /home/sacha/dev/storage merge --ff-only ergonomie
+bash scripts/setup2.sh storage --yes          # reconstruit l'image du frontend (≈ 2 min 15 mesurées)
+LAB_ROOT=/home/sacha/dev bash storage/frontend/e2e/jouer-gestes.sh --deploye
+# puis le test de cloisonnement de storage depuis lab-admin
+git -C /home/sacha/dev/storage worktree remove /home/sacha/lab-work/sacha/storage-ergonomie
+```
+
+---
+
 ## Résumé
 
 **Constat.** L'interface de `storage` est une liste en lecture avec deux boutons par ligne
@@ -478,6 +614,9 @@ suivie, vérification en navigateur réel comprise.
 
 ### Lot 1 — Sélection, clavier, menu contextuel — ~3 j — frontend seul
 
+> **Fait le 2026-10-11** sur la branche `ergonomie`, non déployé — statut, tests cochés et écarts
+> dans la section « Lots 1 et 2 » en tête de ce document, qui fait foi.
+
 - **Objectif** : agir sur plusieurs éléments à la fois, à la souris, au clavier et au doigt.
 - **Ce qui change** :
   - Découpage de `BrowserComponent` selon 4.3 (`browser.store.ts`, `entries.ts`, `selection.ts`,
@@ -515,6 +654,9 @@ suivie, vérification en navigateur réel comprise.
 - **Risque pour les apps** : nul.
 
 ### Lot 2 — Glisser-déposer et téléversement — ~3 j — frontend seul
+
+> **Fait le 2026-10-11** sur la branche `ergonomie`, non déployé — statut, tests cochés et écarts
+> dans la section « Lots 1 et 2 » en tête de ce document, qui fait foi.
 
 - **Objectif** : déposer n'importe quoi n'importe où, et savoir où en est l'envoi.
 - **Ce qui change** :
