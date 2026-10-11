@@ -72,7 +72,7 @@ pour le détail) :
 ~/
 ├── dev/           ← ce dépôt (« lab1 »)
 ├── dev2/          ← second cadriciel indépendant (« lab2 »), copie isolée de dev/
-└── edge-router/    ← répartiteur nginx partagé entre dev/ et dev2/, non versionné
+└── edge-router/    ← répartiteur nginx des ports 80/443, hors dépôt ; posé depuis dev/edge-router.example/
 ```
 
 ---
@@ -165,7 +165,10 @@ démarrage de conteneur). En cas d'échec, corriger et relancer la même command
   besoin, pour GitLab et Google.
 - **SMTP de Keycloak** (`sso-lab/.env` : `SMTP_FROM`, `SMTP_USER`, `SMTP_PASSWORD`).
 - **Nom de domaine et DDNS**, redirection des ports 80/443 du routeur (voir 1.3 et 1.4).
-- **`~/edge-router/`** (voir 1.5) : le Caddy de `sso-lab` ne publie plus lui-même 80/443.
+- **`~/edge-router/`** (voir 1.5) : le Caddy de `sso-lab` ne publie plus lui-même 80/443. Sur une
+  machine neuve, `install.sh` le pose depuis le gabarit versionné `edge-router.example/`
+  (`scripts/edge-router-install.sh`) ; il ne touche jamais à un répartiteur existant. Ajouter un
+  second cadriciel sur la même machine : `edge-router.example/README.md`.
 - **Adresses réelles des comptes** : le gabarit de l'annuaire donne à chacun une adresse factice
   `<uid>@ssolab.local` ; mettre les vraies dans `sso-lab/ldap/init.ldif` **avant** l'installation
   (après, par phpLDAPadmin) pour que « mot de passe oublié » fonctionne.

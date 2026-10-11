@@ -1,0 +1,28 @@
+version: "3.9"
+name: edge-router
+
+# ─────────────────────────────────────────────
+# edge-router — répartiteur SNI/Host partagé entre dev/ (lab1) et dev2/ (lab2).
+# Seul composant qui publie les ports 80/443 sur l'hôte : relaie les octets
+# bruts vers caddy:443/caddy2:443 (TLS, via SNI) ou caddy:80/caddy2:80 (HTTP,
+# via l'en-tête Host) sans jamais déchiffrer ni toucher au contenu applicatif.
+# Chaque Caddy continue de gérer 100% de son propre ACME/TLS/auth/routage.
+# Voir dev/dev2-handoff.md, Phase C.
+# ─────────────────────────────────────────────
+networks:
+  edge-net:
+    external: true
+    name: edge-net
+
+services:
+  router:
+    image: nginx:alpine
+    container_name: edge-router
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - edge-net

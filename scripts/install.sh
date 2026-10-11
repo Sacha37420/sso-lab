@@ -392,12 +392,20 @@ fi
 step "6/12  Réseau et propagation des adresses"
 if docker network inspect edge-net > /dev/null 2>&1; then ok "réseau edge-net présent"
 else todo "créer le réseau Docker edge-net (sso-lab le déclare externe : sans lui Compose ne démarre rien)"; run docker network create edge-net > /dev/null; fi
+EDGE_ROUTER_TODO=false
 if [[ -d "$HOME/edge-router" ]]; then ok "répartiteur ~/edge-router/ présent"
-else gap "~/edge-router/ absent : Caddy ne publie plus 80/443 lui-même, le lab ne sera joignable de l'extérieur qu'une fois ce répartiteur en place (README, section 1.5)"; fi
+else todo "poser le répartiteur 80/443 dans ~/edge-router/ depuis le gabarit edge-router.example/ (Caddy ne publie plus ces ports lui-même)"; EDGE_ROUTER_TODO=true; fi
 if ! $CHECK; then
   bash "$SCRIPT_DIR/reset_url.sh" > "$STATE_DIR/install-reset-url.log" 2>&1 \
     || fail "reset_url.sh a échoué — $(tail -3 "$STATE_DIR/install-reset-url.log" | tr '\n' ' ')"
   ok "adresses propagées dans les .env (reset_url.sh)"
+fi
+# Après reset_url.sh : le domaine est alors dans sso-lab/.env. Ne touche jamais à un
+# ~/edge-router/ existant (il est commun à tous les cadriciels de la machine).
+if $EDGE_ROUTER_TODO && ! $CHECK; then
+  bash "$SCRIPT_DIR/edge-router-install.sh" > "$STATE_DIR/install-edge-router.log" 2>&1 \
+    || fail "edge-router-install.sh a échoué — $(tail -3 "$STATE_DIR/install-edge-router.log" | tr '\n' ' ')"
+  ok "répartiteur : $(tail -1 "$STATE_DIR/install-edge-router.log")"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -567,7 +575,6 @@ Gestes qui restent humains, dans tous les cas :
   • SMTP de Keycloak : mot de passe d'application dans sso-lab/.env, puis
     bash scripts/create-app-client.sh <une app>  (réapplique les réglages du realm).
   • Nom de domaine + DDNS chez le fournisseur ; ports 80 et 443 du routeur vers cette machine.
-  • ~/edge-router/ (répartiteur 80/443, hors dépôt) — README, section 1.5.
   • Mots de passe des comptes : sso-lab/.env (clés <UID>_PASSWORD), à transmettre à chacun.
   • Sauvegardes : rien n'est planifié par ce dépôt.
 Vérifier à tout moment : bash scripts/install.sh --check

@@ -290,6 +290,12 @@ complète, schéma et fichiers de config : `README.md` section 1.5.
   avec `sso-lab/caddy/`.
   - Ne pas le recréer « proprement » dans un des deux dépôts de sa propre initiative : le retirer
     de `~/edge-router/` couperait 80/443 pour **les deux** cadriciels simultanément.
+  - Depuis le 2026-10-11, `dev/edge-router.example/` en est le **gabarit versionné** (un seul
+    cadriciel, emplacement commenté pour un second, aucun nom de domaine réel) et
+    `scripts/edge-router-install.sh` le pose sur une machine **où il n'existe pas** — décision de
+    l'utilisateur, pour qu'une installation neuve ait le HTTPS. Le script ne modifie jamais un
+    `~/edge-router/` existant. Mode d'emploi pour un second cadriciel :
+    `edge-router.example/README.md`.
 - Le service `caddy` de `sso-lab/docker-compose.yml` ne publie plus de `ports:` — c'est **normal**
   depuis le passage en Phase C (commit `bd97ff0`), pas une régression à « corriger ». Si Caddy
   doit redevenir directement joignable en 80/443 (rollback), réajouter le bloc `ports:` et
