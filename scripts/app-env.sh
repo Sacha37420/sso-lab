@@ -22,6 +22,9 @@
 #     PORT_BACKEND  PORT_FRONTEND  BACKEND_URL  FRONTEND_URL  SCRIPT_NAME
 #   + ce qui changerait le projet Docker lui-même :
 #     COMPOSE_*  DOCKER_*
+#   + SEULEMENT tant qu'un profil SMTP est rattaché (LAB_SMTP_PROFILE posé) :
+#     EMAIL_HOST  EMAIL_PORT  EMAIL_HOST_USER  EMAIL_HOST_PASSWORD
+#     EMAIL_USE_TLS  EMAIL_USE_SSL  DEFAULT_FROM_EMAIL
 #
 # POURQUOI CE REFUS : le .env est la seule chose du déploiement qui ne vient pas
 # du dépôt du développeur. DB_NAME/DB_USER décident de la base jointe,
@@ -57,6 +60,15 @@ is_managed() {
     SERVER_URL_LAN|SERVER_URL_WAN|PORT_KEYCLOAK|HPORT_POSTGRES|HPORT_DB|ACME_EMAIL) return 0 ;;
     PORT_BACKEND|PORT_FRONTEND|BACKEND_URL|FRONTEND_URL|SCRIPT_NAME) return 0 ;;
   esac
+  # Profil SMTP rattaché (contrat v9, I10) : tant que le marqueur
+  # LAB_SMTP_PROFILE est posé dans le .env de l'app, les sept clés d'email sont
+  # celles du profil — gérées par app-smtp.sh, masquées et non modifiables ici.
+  # Sans marqueur, ce sont des variables libres du dev, comme avant.
+  if [[ "${SMTP_MANAGED:-false}" == "true" ]]; then
+    case "$1" in
+      EMAIL_HOST|EMAIL_PORT|EMAIL_HOST_USER|EMAIL_HOST_PASSWORD|EMAIL_USE_TLS|EMAIL_USE_SSL|DEFAULT_FROM_EMAIL) return 0 ;;
+    esac
+  fi
   return 1
 }
 
@@ -66,11 +78,16 @@ CMD="$1"; APP="$2"; shift 2
 APP_DIR="$(registry_app_dir "$APP")" || die "nom d'app invalide : '$APP'"
 [[ -f "$APP_DIR/docker-compose.yml" ]] || die "app inconnue : '$APP'"
 ENV_FILE="$APP_DIR/.env"
+SMTP_MANAGED=false
+if [[ -f "$ENV_FILE" ]] && grep -qE '^LAB_SMTP_PROFILE=.+' "$ENV_FILE"; then SMTP_MANAGED=true; fi
 [[ ! -L "$ENV_FILE" ]] || die "$APP/.env est un lien symbolique — refus"
 
 check_key() {
   [[ "$1" =~ ^[A-Z][A-Z0-9_]{0,63}$ ]] || die "clé invalide : '$1' (attendu : ^[A-Z][A-Z0-9_]{0,63}\$)"
   if is_managed "$1"; then
+    case "$1" in
+      EMAIL_*|DEFAULT_FROM_EMAIL) die "la clé $1 vient du profil SMTP rattaché au projet — changer de profil (ou le détacher) dans lab-admin" ;;
+    esac
     die "la clé $1 est gérée par le cadriciel — elle ne se modifie pas par ici"
   fi
 }

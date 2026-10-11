@@ -174,12 +174,27 @@ if $GATED; then
   echo -e "\033[0;32m✓ $APP_NAME — tests backend : ${BACKEND_TESTS}.\033[0m"
 fi
 
+# Les deux étapes suivantes n'affichent plus une coche verte sur un échec.
+#   • client Keycloak en échec : l'app est démarrée quand même (pour une app
+#     historique, clean2.sh l'a déjà arrêtée : ne pas la redémarrer la laisserait
+#     hors service pour un incident Keycloak passager), mais le script se
+#     termine en ERREUR — son .env n'a peut-être pas reçu ses clés KEYCLOAK_*.
+#   • schéma impossible : on NE démarre PAS. Sans son schéma, Django écrit dans
+#     `public` et croit ses migrations faites — backend « up », base vide.
+CLIENT_FAILED=false
 echo -e "\033[0;36m══ $APP_NAME — client Keycloak\033[0m"
-bash "$SCRIPT_DIR/create-app-client.sh" "$APP_NAME"
-echo -e "\033[0;32m✓ $APP_NAME — client Keycloak configuré.\033[0m"
+if bash "$SCRIPT_DIR/create-app-client.sh" "$APP_NAME"; then
+  echo -e "\033[0;32m✓ $APP_NAME — client Keycloak configuré.\033[0m"
+else
+  CLIENT_FAILED=true
+  echo -e "\033[0;31m✗ ERROR : $APP_NAME — create-app-client.sh a échoué (voir ci-dessus). Le déploiement continue, mais se terminera en erreur.\033[0m" >&2
+fi
 
 echo -e "\033[0;36m══ $APP_NAME — schéma Postgres\033[0m"
-bash "$SCRIPT_DIR/ensure-schemas.sh" "$APP_NAME"
+if ! bash "$SCRIPT_DIR/ensure-schemas.sh" "$APP_NAME"; then
+  echo -e "\033[0;31m✗ ERROR : $APP_NAME — schéma PostgreSQL impossible (base du propriétaire absente, ou .env désignant une autre base). Les containers ne sont PAS démarrés.\033[0m" >&2
+  exit 1
+fi
 echo -e "\033[0;32m✓ $APP_NAME — schéma vérifié.\033[0m"
 
 echo -e "\033[0;36m══ $APP_NAME — démarrage des containers\033[0m"
@@ -284,4 +299,9 @@ if $GATED; then
     absent) echo -e "\033[1;33m⚠ Cloisonnement : aucun test trouvé pour cette app (ce n'est pas « tout va bien »).\033[0m" ;;
     *)      echo -e "\033[1;33m⚠ Cloisonnement : test non lancé (lab-runner occupé, arrêté, ou app injoignable) : $(jq -r '.error // empty' <<< "$_run" 2>/dev/null | cut -c1-160)\033[0m" ;;
   esac
+fi
+
+if $CLIENT_FAILED; then
+  echo -e "\033[0;31m✗ ERROR : $APP_NAME est démarrée, mais son client Keycloak n'a pas pu être configuré — à relancer.\033[0m" >&2
+  exit 1
 fi

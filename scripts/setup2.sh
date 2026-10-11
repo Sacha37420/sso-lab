@@ -199,7 +199,13 @@ if $ROTATE_SECRETS; then
   echo -e "\033[0;36m══ 1bis  Rotation des secrets applicatifs (--rotate-secrets)\033[0m"
 
   # Mot de passe DB partagé (lab-wide par nature).
-  bash "$SCRIPT_DIR/rotate-db-password.sh" --yes || {
+  # Avec un nom d'app, seuls les rôles d'ADMINISTRATION sont rotés (aucune app
+  # ne s'en sert : les scripts passent par le socket local). Les rôles
+  # applicatifs (lab, dev_<uid>) ne le sont que si tout le lab est redéployé :
+  # une app non redémarrée garderait l'ancien mot de passe et perdrait sa base.
+  _ROTATE_ARGS=( --yes )
+  [[ -n "$APP_NAME" ]] && _ROTATE_ARGS+=( --only admin --only gis )
+  bash "$SCRIPT_DIR/rotate-db-password.sh" "${_ROTATE_ARGS[@]}" || {
     echo -e "\033[0;31m✗ Rotation DB échouée — arrêt avant tout redéploiement.\033[0m" >&2; exit 1; }
 
   # SECRET_KEY Django : l'app ciblée, ou toutes les apps si aucun nom fourni.
@@ -218,7 +224,13 @@ fi
 
 # ── 2. Propagation des adresses réseau ────────────────────────────────
 echo -e "\033[0;36m══ 2/7  Propagation des adresses réseau (reset_url.sh)\033[0m"
-run_shared "reset_url.sh" bash "$SCRIPT_DIR/reset_url.sh"
+# Un échec ici (bbox.env absent, SERVER_URL_WAN non renseigné…) laisse les .env
+# sans adresses ni mots de passe à jour : tout ce qui suit démarrerait de
+# travers. On s'arrête, avec la vraie cause sous les yeux.
+if ! run_shared "reset_url.sh" bash "$SCRIPT_DIR/reset_url.sh"; then
+  echo -e "\033[0;31m✗ ERROR : reset_url.sh a échoué — arrêt avant tout démarrage (voir son message ci-dessus ; bbox.env et .env racine renseignés ?).\033[0m" >&2
+  exit 1
+fi
 echo -e "\033[0;32m✓ Adresses réseau propagées.\033[0m"
 
 # ── 3. Génération des mots de passe forts ─────────────────────────────
@@ -241,7 +253,13 @@ if $RESTART_SSO_LAB || { [[ -z "$APP_NAME" ]] && $_IS_FIRST_SETUP; }; then
   echo -e "\033[0;36m══ 3/7  Génération des secrets\033[0m"
   SECRET_ARGS=()
   $FORCE           && SECRET_ARGS+=( --yes )
-  $RESTART_SSO_LAB && SECRET_ARGS+=( --init-ldif-password )
+  # --init-ldif-password aussi au TOUT PREMIER passage (annuaire jamais
+  # initialisé : volume sso-lab_ldap-data absent) : sinon les comptes du gabarit
+  # init.ldif naissent avec leur mot de passe « CHANGE_ME », sur un lab exposé.
+  # Une fois le volume créé, osixia ne relit plus init.ldif : on n'y touche plus.
+  if $RESTART_SSO_LAB || ! docker volume inspect sso-lab_ldap-data > /dev/null 2>&1; then
+    SECRET_ARGS+=( --init-ldif-password )
+  fi
   [[ -n "$KEEP_PASSWORD" ]] && SECRET_ARGS+=( --keep-password "$KEEP_PASSWORD" )
   bash "$SCRIPT_DIR/init-secrets.sh" "${SECRET_ARGS[@]+"${SECRET_ARGS[@]}"}"
   echo -e "\033[0;32m✓ Secrets générés.\033[0m"
@@ -250,18 +268,22 @@ elif [[ -z "$APP_NAME" ]]; then
 fi
 
 # ── 3bis. Runner E2E partagé (runner/) ────────────────────────────────
-# Best-effort, jamais bloquant : catalogue les tests (étape de setup_unit.sh,
-# voir CLAUDE.md section "Tests end-to-end") a besoin de lab-runner up, mais
-# son absence ne doit jamais empêcher le déploiement d'une app. Placé ici
-# (avant le chemin rapide une-app ET le dispatch parallèle, qui délèguent
-# tous les deux à setup_unit.sh) pour être démarré une seule fois, dans les
-# deux cas.
-if ! docker inspect -f '{{.State.Running}}' lab-runner 2>/dev/null | grep -q true; then
-  echo -e "\033[0;36m══ Runner E2E (runner/)\033[0m"
-  run_shared "runner E2E" bash "$SCRIPT_DIR/recompose_docker.sh" --app runner 2>&1 | sed 's/^/  /' \
-    && echo -e "\033[0;32m✓ Runner E2E démarré.\033[0m" \
-    || echo -e "\033[1;33m⚠ Runner E2E non démarré — le catalogue des tests sera ignoré (best-effort).\033[0m"
-fi
+# Best-effort, jamais bloquant : le catalogue des tests (étape de
+# setup_unit.sh) a besoin de lab-runner, mais son absence ne doit jamais
+# empêcher un déploiement. Le runner vit sur le réseau de sso-lab
+# (sso-lab_sso-net, externe pour lui) : il ne peut démarrer qu'APRÈS sso-lab.
+# Sur le chemin « une app », sso-lab tourne déjà : on le lance ici. Sur le
+# chemin « tout le lab », il est lancé plus bas, après l'étape 4 — placé ici,
+# il échouait à la première installation et n'était jamais retenté.
+start_runner() {
+  if ! docker inspect -f '{{.State.Running}}' lab-runner 2>/dev/null | grep -q true; then
+    echo -e "\033[0;36m══ Runner E2E (runner/)\033[0m"
+    run_shared "runner E2E" bash "$SCRIPT_DIR/recompose_docker.sh" --app runner 2>&1 | sed 's/^/  /' \
+      && echo -e "\033[0;32m✓ Runner E2E démarré.\033[0m" \
+      || echo -e "\033[1;33m⚠ Runner E2E non démarré — le catalogue des tests sera ignoré (best-effort).\033[0m"
+  fi
+}
+$USE_UNIT_DELEGATION && start_runner
 
 # ── Chemin rapide : une app, aucune opération sur l'infra partagée ───────────
 # `setup_unit.sh` fait déjà tout ce que les étapes 4 à 7 font pour une app
@@ -296,9 +318,18 @@ else
   if [[ -n "$APP_NAME" ]] && curl -sf "http://localhost:${_KC_PORT_PROBE}/realms/master" > /dev/null 2>&1; then
     echo -e "\033[0;33m⚠ sso-lab déjà actif — redémarrage ignoré.\033[0m"
   else
-    bash "$SCRIPT_DIR/recompose_docker.sh" --app sso-lab
+    # sso-lab déclare le réseau `edge-net` EXTERNE (c'est par lui que le
+    # répartiteur ~/edge-router/ joint Caddy) : Compose refuse de démarrer quoi
+    # que ce soit s'il n'existe pas, et rien d'autre ne le crée. Sans effet s'il
+    # existe déjà.
+    docker network inspect edge-net > /dev/null 2>&1 || docker network create edge-net > /dev/null
+    if ! bash "$SCRIPT_DIR/recompose_docker.sh" --app sso-lab; then
+      echo -e "\033[0;31m✗ ERROR : sso-lab n'a pas démarré — arrêt (rien ne peut fonctionner sans Keycloak ; voir le message de Compose ci-dessus).\033[0m" >&2
+      exit 1
+    fi
     echo -e "\033[0;32m✓ sso-lab démarré.\033[0m"
   fi
+  start_runner
 
   # ── 4bis. Démarrage de l'infra (PostgreSQL / PostGIS) ────────────────
   # Sur tout le lab, clean2.sh (étape 1) arrête l'infra, et le dispatch
@@ -308,17 +339,29 @@ else
   # le 2026-09-27). Après sso-lab, dont infra réutilise le réseau sso-net.
   # No-op si l'infra tourne déjà (recompose_docker.sh sans --force).
   echo -e "\033[0;36m══ 4bis/7  Démarrage de l'infra (PostgreSQL)\033[0m"
-  bash "$SCRIPT_DIR/recompose_docker.sh" --app infra
+  if ! bash "$SCRIPT_DIR/recompose_docker.sh" --app infra; then
+    echo -e "\033[0;31m✗ ERROR : l'infra (PostgreSQL) n'a pas démarré — arrêt (infra/.env complet ? POSTGIS_* renseignés ?).\033[0m" >&2
+    exit 1
+  fi
   echo -e "\033[0;32m✓ Infra démarrée.\033[0m"
 
-  # Bases par développeur (contrat multi-dev, I2) : infra/init*/ ne connaît que
-  # devdb/gisdb. Sur un volume recréé, les rôles et bases dev_<uid>/gis_<uid>
-  # n'existent plus — on les rejoue depuis infra/.env avant ensure-schemas.sh.
-  # Sans effet (et sans rien afficher d'autre) tant qu'aucun dev n'est déclaré.
-  if grep -qE '^DEV_PG_PASSWORD__' "$ROOT_DIR/infra/.env" 2>/dev/null; then
-    echo -e "\033[0;36m══ Bases par développeur (dev-db.sh ensure-all)\033[0m"
-    bash "$SCRIPT_DIR/dev-db.sh" ensure-all \
-      || echo -e "\033[1;33m⚠ dev-db.sh ensure-all a échoué — les apps de développeurs ne démarreront pas.\033[0m"
+  # Bases du cadriciel et des développeurs (contrat multi-dev, I2) : infra/init*/
+  # ne crée ni rôle ni base applicatifs. Sur un volume recréé, `lab`,
+  # dev_<uid> et gis_<uid> n'existent plus — on les rejoue depuis
+  # infra/dev-roles.env avant ensure-schemas.sh. (La garde cherchait ces clés
+  # dans infra/.env, où elles n'ont jamais été : l'étape ne tournait jamais.)
+  # Sur une instance en place, dev-db.sh ne modifie rien : il constate.
+  if [[ -s "$ROOT_DIR/infra/dev-roles.env" ]]; then
+    echo -e "\033[0;36m══ Bases du cadriciel et des développeurs (dev-db.sh ensure-all)\033[0m"
+    # PostgreSQL vient peut-être de démarrer : on attend qu'il réponde.
+    for _i in $(seq 1 30); do
+      docker exec dev-postgres pg_isready -q 2>/dev/null && docker exec dev-postgis pg_isready -q 2>/dev/null && break
+      sleep 2
+    done
+    if ! bash "$SCRIPT_DIR/dev-db.sh" ensure-all; then
+      echo -e "\033[0;31m✗ ERROR : dev-db.sh ensure-all a échoué — arrêt : sans leurs bases, les apps démarreraient vides.\033[0m" >&2
+      exit 1
+    fi
   fi
 
   # ── 5. Attente Keycloak ───────────────────────────────────────────────
@@ -479,6 +522,14 @@ else
     bash "$SCRIPT_DIR/recompose_docker.sh" --force
   fi
   echo -e "\033[0;32m✓ Stacks démarrées.\033[0m"
+
+  # Image des espaces de travail (lab-workspace:latest) : aucune pile Compose ne
+  # la construit, et le moteur ne sait que la lancer. Reconstruite ici seulement
+  # si elle manque (clean2.sh la protège désormais de son `image prune -a`).
+  if $USE_PARALLEL_DISPATCH; then
+    bash "$SCRIPT_DIR/workspace-image.sh" ensure \
+      || echo -e "\033[1;33m⚠ image lab-workspace absente et non reconstruite — les espaces de travail ne s'ouvriront pas (bash scripts/workspace-image.sh build).\033[0m"
+  fi
 fi
 
 # ── 8. Génération de ports.env ───────────────────────────────────────

@@ -126,6 +126,20 @@ if ! git -C "$ROOT" "${_sub_protocol[@]+"${_sub_protocol[@]}"}" submodule --quie
   die "étape 4 (git submodule add) a échoué — le dépôt de l'app est créé et poussé ; pour tout défaire : bash scripts/app-remove.sh $APP --yes"
 fi
 
+# « update = none » pour ce sous-module, dans le .gitmodules versionné : le dépôt
+# d'un projet peut être PRIVÉ, et un sous-module inaccessible fait avorter
+# `git clone --recurse-submodules` du dépôt parent pour TOUT le monde — aucun
+# sous-module n'est alors extrait, pas même les publics (éprouvé, git 2.47).
+# Avec « update = none », le clone récursif saute celui-ci et extrait les
+# autres. Rien dans le lab ne dépend de `git submodule update` pour un projet :
+# le moteur synchronise par app-sync.sh, dans le dépôt de l'app. Sur une
+# machine neuve, c'est install.sh qui l'extrait (git -c
+# submodule.<nom>.update=checkout submodule update --init <chemin>) et qui
+# signale, sans s'arrêter, ceux auxquels il n'a pas accès.
+git -C "$ROOT" config -f .gitmodules "submodule.${REL}.update" none \
+  && git -C "$ROOT" add -- .gitmodules \
+  || log "⚠ « update = none » n'a pas pu être posé dans .gitmodules pour $REL"
+
 # Contrôle final : le jeton n'a fuité nulle part où il resterait.
 if [[ -n "${LAB_GIT_TOKEN:-}" ]] && grep -rqF -- "$LAB_GIT_TOKEN" "$APP_DIR/.git/config" "$ROOT/.gitmodules" "$ROOT/.git/config" 2>/dev/null; then
   die "le jeton apparaît dans une configuration git — ANOMALIE, à corriger avant tout autre usage"

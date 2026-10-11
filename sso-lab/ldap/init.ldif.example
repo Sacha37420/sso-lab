@@ -1,51 +1,57 @@
 # ─────────────────────────────────────────────────────────────────
-# init.ldif.example — Template d'initialisation OpenLDAP
-#
-# Copier en init.ldif, remplacer les mots de passe CHANGE_ME et
-# adapter les emails avant le premier démarrage d'openldap.
+# init.ldif — Initialisation de l'annuaire OpenLDAP
 #
 # Structure :
 #   dc=ssolab,dc=local          ← racine (créée automatiquement)
-#   └── ou=people               ← utilisateurs
+#   └── ou=people               ← unité organisationnelle : users
 #       ├── uid=sacha
-#       ├── uid=Carpeta
 #       ├── uid=hassan
 #       ├── uid=lea
 #       ├── uid=elodie
-#       ├── uid=naty
-#       ├── uid=maria
 #       ├── uid=sabrina
 #       ├── uid=bruno
+#       ├── uid=marie
 #       ├── uid=e2e_member      ← compte de test E2E, membre de TOUS les groupes
-#       └── uid=e2e_outsider    ← compte de test E2E, membre d'AUCUN groupe
-#   └── ou=groups               ← groupes
+#       ├── uid=e2e_outsider    ← compte de test E2E, membre d'AUCUN groupe
+#       └── uid=e2edev          ← compte de test E2E du parcours développeur, membre de developers seul
+#   └── ou=groups               ← unité organisationnelle : groupes
 #       ├── cn=developers       ← sacha, hassan        (app : analyse-lora)
 #       ├── cn=admins           ← sacha
-#       ├── cn=famille          ← sacha, lea, elodie
+#       ├── cn=famille          ← sacha, lea, elodie, marie
 #       ├── cn=amis             ← sacha, hassan, lea
-#       ├── cn=dom              ← naty, maria          (apps : app-builder, storage)
-#       ├── cn=harem            ← sacha, Carpeta       (apps : app-builder, storage)
+#       ├── cn=dom              ← (naty déplacée vers dev2/ le 2026-07-29 — groupe vide de membre réel, encore requis par app-builder/storage)
+#       ├── cn=harem            ← sacha (Carpeta déplacée vers dev2/ le 2026-07-29 — groupe encore requis par app-builder/storage)
 #       ├── cn=manager          ← sacha, elodie, sabrina (app : restauration)
 #       ├── cn=cuisinier        ← sacha                (app : restauration)
-#       └── cn=serveur          ← sacha                (app : restauration)
+#       ├── cn=serveur          ← sacha                (app : restauration)
+#       └── cn=proprietaires    ← sacha, elodie, bruno (app : conciergerie, portail propriétaires)
 #
-# Groupes requis par les applications (autorisation via le claim JWT "groups").
-# Source de vérité : `<app>/.keycloak-client-opts` (--require-group) de chaque
-# app — la liste ci-dessous n'est qu'un repère et peut dater.
-#   - analyse-lora / carto-lab / robot-lab / traitement-de-fichiers-compils : developers
-#   - restauration  : manager, cuisinier, serveur
-#   - lab-admin     : admins
-#   - conciergerie  : proprietaires, admins
-#   - atelier-3d    : developers, famille, amis
-#   - app-builder / storage : la plupart des groupes du realm (dom et harem inclus)
+# Groupes requis par les applications. Double verrou :
+#   - barrière navigateur : flow Keycloak require-<client> (rôle <client>-access)
+#   - serrure API         : le backend vérifie 'azp' + le claim JWT "groups"
+#
+#   - app-builder                    : admins
+#   - analyse-lora                   : developers
+#   - front-cadriciel                : developers
+#   - test-angular                   : developers
+#   - test-django                    : developers
+#   - test-django-angular            : developers
+#   - traitement-de-fichiers-compils : developers
+#   - arbre-genealogique             : famille
+#   - restauration                   : manager, cuisinier, serveur
+#   - conciergerie                   : proprietaires, admins
+#
+# ⚠ Un compte sans groupe n'a accès à AUCUNE application. C'est voulu.
 #
 # e2e_member / e2e_outsider (voir CLAUDE.md, section "Tests end-to-end") :
 # comptes synthétiques utilisés par runner/ pour automatiser la vérification
 # de cloisonnement de chaque app. e2e_member doit être membre de TOUS les
-# groupes ci-dessus (toujours le cas "membre" positif, quelle que soit l'app
-# testée) ; e2e_outsider d'aucun (toujours le cas "non-membre" négatif, sans
-# maintenance). Tout nouveau groupe créé ici DOIT ajouter e2e_member comme
-# membre, sinon les tests E2E des apps qui l'utilisent cassent en silence.
+# groupes ci-dessus ; e2e_outsider d'aucun. Tout nouveau groupe créé ici DOIT
+# ajouter e2e_member comme membre, sinon les tests E2E des apps qui
+# l'utilisent cassent en silence. Ajoutés en direct sur l'annuaire vivant
+# (ldapadd) le 2026-07-27 — ce fichier n'est rejoué qu'à l'init du volume,
+# donc les entrées ci-dessous ne servent que de référence pour un futur
+# --restart-sso-lab, déjà appliquées à chaud.
 #
 # Le fichier est chargé UNE SEULE FOIS au premier démarrage.
 # Pour le recharger : docker compose down --volumes  puis  up
@@ -73,17 +79,6 @@ sn: Sacha
 givenName: Sacha
 mail: sacha@ssolab.local
 # Mot de passe en clair — OpenLDAP le hashera en SHA au démarrage
-userPassword: CHANGE_ME
-
-# ── Utilisateur : Carpeta ─────────────────────────────────────────
-dn: uid=Carpeta,ou=people,dc=ssolab,dc=local
-objectClass: inetOrgPerson
-objectClass: shadowAccount
-uid: Carpeta
-cn: Carpeta
-sn: Carpeta
-givenName: Carpeta
-mail: carpeta@ssolab.local
 userPassword: CHANGE_ME
 
 # ── Utilisateur : hassan ──────────────────────────────────────────
@@ -119,28 +114,6 @@ givenName: Élodie
 mail: elodie@ssolab.local
 userPassword: CHANGE_ME
 
-# ── Utilisateur : naty ────────────────────────────────────────────
-dn: uid=naty,ou=people,dc=ssolab,dc=local
-objectClass: inetOrgPerson
-objectClass: shadowAccount
-uid: naty
-cn: Goddess Naty
-sn: Naty
-givenName: Naty
-mail: naty@ssolab.local
-userPassword: CHANGE_ME
-
-# ── Utilisateur : maria ───────────────────────────────────────────
-dn: uid=maria,ou=people,dc=ssolab,dc=local
-objectClass: inetOrgPerson
-objectClass: shadowAccount
-uid: maria
-cn: Maria
-sn: Maria
-givenName: Maria
-mail: maria@ssolab.local
-userPassword: CHANGE_ME
-
 # ── Utilisateur : sabrina ─────────────────────────────────────────
 dn: uid=sabrina,ou=people,dc=ssolab,dc=local
 objectClass: inetOrgPerson
@@ -163,10 +136,20 @@ givenName: Bruno
 mail: bruno@ssolab.local
 userPassword: CHANGE_ME
 
+# ── Utilisateur : marie ───────────────────────────────────────────
+# Mot de passe choisi par l'utilisatrice — le préserver lors d'une rotation :
+#   bash init-secrets.sh --init-ldif-password --keep-password marie
+dn: uid=marie,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: marie
+cn: Marie
+sn: Marie
+givenName: Marie
+mail: marie@ssolab.local
+userPassword: CHANGE_ME
+
 # ── Utilisateur (synthétique) : e2e_member ─────────────────────────
-# Pas de mail réel : reste hors du chemin d'envoi d'email de
-# notify-password-email.sh (déjà best-effort — un compte sans adresse valide
-# n'y déclenche jamais d'erreur, cf. rotate-ldap-user-passwords.sh).
 dn: uid=e2e_member,ou=people,dc=ssolab,dc=local
 objectClass: inetOrgPerson
 objectClass: shadowAccount
@@ -176,12 +159,11 @@ sn: Member
 givenName: E2E
 # Adresse FACTICE (@ssolab.local) et non une vraie boîte : le claim `email` est
 # exigé par l'authentification de toutes les APIs du lab (api/authentication.py
-# refuse un token sans lui), donc sans `mail` ce compte passe le flow de page
-# mais prend un 403 sur le moindre appel API — ce qui interdit de vérifier un
-# parcours applicatif de bout en bout. Deux conséquences du domaine .local :
-# notify-password-email.sh n'enverra jamais de mail de rotation à ce compte, et
-# verify-existing-emails.sh le marque emailVerified d'office (sans quoi, si
-# VERIFY_EMAIL est actif, lui donner une adresse le BLOQUERAIT au login).
+# refuse un token sans lui), donc sans `mail` ce compte passait le flow de page
+# mais prenait un 403 sur le moindre appel API — ce qui interdisait de vérifier
+# un parcours applicatif de bout en bout. Le domaine .local est reconnu comme
+# factice par notify-password-email.sh, qui n'enverra donc jamais de mail de
+# rotation à ce compte synthétique.
 mail: e2e_member@ssolab.local
 userPassword: CHANGE_ME
 
@@ -195,6 +177,21 @@ sn: Outsider
 givenName: E2E
 userPassword: CHANGE_ME
 
+# ── Utilisateur (synthétique) : e2edev ─────────────────────────────
+# Compte de test du parcours « développeur » (lab multi-dev, voir CLAUDE.md) :
+# membre de `developers` SEULEMENT — ni `admins`, ni aucun autre groupe. Son uid
+# sans tiret bas est ce qui lui permet d'être inscrit comme dev (e2e_member ne le
+# peut pas). Adresse factice @ssolab.local, même raison que e2e_member.
+dn: uid=e2edev,ou=people,dc=ssolab,dc=local
+objectClass: inetOrgPerson
+objectClass: shadowAccount
+uid: e2edev
+cn: E2E Dev
+sn: Dev
+givenName: E2E
+mail: e2edev@ssolab.local
+userPassword: CHANGE_ME
+
 # ── Groupe : developers ───────────────────────────────────────────
 # groupOfNames = groupe dont les membres sont des DN complets
 dn: cn=developers,ou=groups,dc=ssolab,dc=local
@@ -203,6 +200,7 @@ cn: developers
 member: uid=sacha,ou=people,dc=ssolab,dc=local
 member: uid=hassan,ou=people,dc=ssolab,dc=local
 member: uid=e2e_member,ou=people,dc=ssolab,dc=local
+member: uid=e2edev,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : admins ───────────────────────────────────────────────
 dn: cn=admins,ou=groups,dc=ssolab,dc=local
@@ -218,6 +216,7 @@ cn: famille
 member: uid=sacha,ou=people,dc=ssolab,dc=local
 member: uid=lea,ou=people,dc=ssolab,dc=local
 member: uid=elodie,ou=people,dc=ssolab,dc=local
+member: uid=marie,ou=people,dc=ssolab,dc=local
 member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : amis ─────────────────────────────────────────────────
@@ -230,23 +229,26 @@ member: uid=lea,ou=people,dc=ssolab,dc=local
 member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : dom ──────────────────────────────────────────────────
+# naty a été déplacée vers dev2/ le 2026-07-29 (voir dev2-handoff.md) —
+# groupe conservé ici (vide de membre réel) car app-builder et storage le
+# référencent encore dans --require-group sur le lab 1.
 dn: cn=dom,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: dom
-member: uid=naty,ou=people,dc=ssolab,dc=local
-member: uid=maria,ou=people,dc=ssolab,dc=local
 member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : harem ────────────────────────────────────────────────
+# Carpeta a été déplacée vers dev2/ le 2026-07-29 (voir dev2-handoff.md) —
+# groupe conservé ici (sacha uniquement) car app-builder et storage le
+# référencent encore dans --require-group sur le lab 1.
 dn: cn=harem,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: harem
 member: uid=sacha,ou=people,dc=ssolab,dc=local
-member: uid=Carpeta,ou=people,dc=ssolab,dc=local
 member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : manager ──────────────────────────────────────────────
-# Utilisé par : restauration (rôle manager) + google-agenda
+# Utilisé par : restauration (rôle manager)
 dn: cn=manager,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: manager
@@ -256,7 +258,7 @@ member: uid=sabrina,ou=people,dc=ssolab,dc=local
 member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : cuisinier ────────────────────────────────────────────
-# Requis par : restauration (rôle cuisinier). Adapter les membres.
+# Requis par : restauration (rôle cuisinier). Membre placeholder à réassigner.
 dn: cn=cuisinier,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: cuisinier
@@ -264,9 +266,19 @@ member: uid=sacha,ou=people,dc=ssolab,dc=local
 member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
 # ── Groupe : serveur ──────────────────────────────────────────────
-# Requis par : restauration (rôle serveur). Adapter les membres.
+# Requis par : restauration (rôle serveur). Membre placeholder à réassigner.
 dn: cn=serveur,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: serveur
 member: uid=sacha,ou=people,dc=ssolab,dc=local
+member: uid=e2e_member,ou=people,dc=ssolab,dc=local
+
+# ── Groupe : proprietaires ──────────────────────────────────────────
+# Requis par : conciergerie (portail propriétaires).
+dn: cn=proprietaires,ou=groups,dc=ssolab,dc=local
+objectClass: groupOfNames
+cn: proprietaires
+member: uid=sacha,ou=people,dc=ssolab,dc=local
+member: uid=elodie,ou=people,dc=ssolab,dc=local
+member: uid=bruno,ou=people,dc=ssolab,dc=local
 member: uid=e2e_member,ou=people,dc=ssolab,dc=local

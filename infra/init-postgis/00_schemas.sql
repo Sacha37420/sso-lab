@@ -1,22 +1,16 @@
 -- ─────────────────────────────────────────────────────────────────
--- Schémas applicatifs dans la base gisdb (instance dev-postgis).
--- Pendant de infra/init/00_schemas.sql, pour les apps SIG.
+-- infra/init-postgis/ — exécuté au PREMIER démarrage de dev-postgis (volume
+-- vierge), jamais ensuite. Pendant de infra/init/00_schemas.sql.
 --
--- Ce fichier est exécuté automatiquement par PostgreSQL au premier
--- démarrage du container (initdb) — donc PAS sur un volume existant.
--- new-app.sh crée aussi le schéma à chaud pour les apps ajoutées ensuite.
+-- Ce fichier ne crée volontairement PLUS RIEN : `gisdb` reste vide, `gisuser`
+-- est le rôle d'administration de l'instance. Une app SIG vit dans la base
+-- `gis_<uid>` de son propriétaire, créée (avec l'extension postgis) par
+-- `scripts/dev-db.sh ensure <uid> --gis` ; son schéma applicatif par
+-- `scripts/ensure-schemas.sh`, et `carto_public` par la première migration de
+-- carto-lab.
 --
--- Convention : un schéma par application, comme sur devdb.
---
--- NB : l'extension PostGIS elle-même est créée par le script 10_postgis.sh
--- embarqué dans l'image postgis/postgis. Les fichiers de ce dossier sont
--- montés UN PAR UN dans /docker-entrypoint-initdb.d/ pour ne pas le masquer.
+-- NB : l'extension PostGIS de gisdb vient du script 10_postgis.sh embarqué dans
+-- l'image postgis/postgis. Ce fichier est monté SEUL dans
+-- /docker-entrypoint-initdb.d/ pour ne pas le masquer.
 -- ─────────────────────────────────────────────────────────────────
-
--- carto-lab : plateforme de traitement cartographique.
-CREATE SCHEMA IF NOT EXISTS carto_lab;
-
--- Schéma des couches publiées en OGC API – Features (pg_featureserv).
--- Séparé de carto_lab : le rôle read-only de pg_featureserv n'a de droits
--- que sur celui-ci, jamais sur les tables applicatives.
-CREATE SCHEMA IF NOT EXISTS carto_public;
+SELECT 1;

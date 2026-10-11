@@ -143,3 +143,37 @@ TEMPLATES = [
         },
     },
 ]
+
+
+# ── Email ──────────────────────────────────────────────────────────────────────
+# Pour envoyer un email : `from django.core.mail import send_mail`, rien d'autre.
+# Le compte SMTP se choisit dans lab-admin (carte « Email » du projet) : le lab
+# pose alors EMAIL_* et DEFAULT_FROM_EMAIL dans l'environnement de l'app. Ne
+# jamais écrire d'hôte, d'identifiant ni de mot de passe SMTP dans le dépôt.
+# Tant qu'aucun compte n'est rattaché (EMAIL_HOST vide), les emails sont
+# affichés dans le journal du conteneur au lieu d'être envoyés.
+def _env_flag(name):
+    return str(config(name, default='')).strip().lower() in ('1', 'true', 'yes', 'on', 'oui')
+
+
+def _env_int(name, fallback):
+    try:
+        return int(str(config(name, default='')).strip() or fallback)
+    except ValueError:
+        return fallback
+
+
+EMAIL_HOST = config('EMAIL_HOST', default='')
+EMAIL_PORT = _env_int('EMAIL_PORT', 587)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = _env_flag('EMAIL_USE_TLS')
+EMAIL_USE_SSL = _env_flag('EMAIL_USE_SSL')
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='') or 'webmaster@localhost'
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+# Borné : un serveur SMTP muet ne doit pas bloquer une requête (ni un worker).
+EMAIL_TIMEOUT = 15
+EMAIL_BACKEND = (
+    'django.core.mail.backends.smtp.EmailBackend' if EMAIL_HOST
+    else 'django.core.mail.backends.console.EmailBackend'
+)

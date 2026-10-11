@@ -187,8 +187,19 @@ if [[ -z "$APP_NAME" ]]; then
       docker rm -f "$id" 2>&1 | sed 's/^/  /' || true
     fi
   done
-  # Supprime toutes les images qui ne sont plus utilisées par un conteneur
+  # Supprime toutes les images qui ne sont plus utilisées par un conteneur.
+  #
+  # SAUF l'image des espaces de travail : lab-workspace:latest n'appartient à
+  # aucune pile Compose, n'a un conteneur que lorsqu'un espace est ouvert, et
+  # rien ne la reconstruit ensuite (≈ 8 min de build). `image prune` n'a pas
+  # d'option d'exclusion par nom ; on lui montre donc l'image comme « utilisée »
+  # le temps du nettoyage, par un conteneur créé (jamais démarré) puis retiré.
+  _KEEP=""
+  if docker image inspect lab-workspace:latest > /dev/null 2>&1; then
+    _KEEP="$(docker create --name lab-workspace-ancre-$$ lab-workspace:latest true 2>/dev/null || true)"
+  fi
   docker image prune -a -f 2>&1 | sed 's/^/  /'
+  if [[ -n "$_KEEP" ]]; then docker rm "$_KEEP" > /dev/null 2>&1 || true; fi
   echo ""
 fi
 

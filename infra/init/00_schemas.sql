@@ -1,50 +1,20 @@
 -- ─────────────────────────────────────────────────────────────────
--- Schémas applicatifs dans la base devdb.
--- Ce fichier est exécuté automatiquement par PostgreSQL
--- au premier démarrage du container (initdb).
+-- infra/init/ — exécuté par PostgreSQL au PREMIER démarrage du conteneur
+-- dev-postgres (volume vierge), jamais ensuite.
 --
--- Convention : un schéma par application.
--- Les tables, séquences et index de chaque app vivent dans
--- leur propre espace de noms, sans risque de collision.
+-- Ce fichier ne crée volontairement PLUS RIEN.
 --
--- Pour ajouter une nouvelle app :
---   CREATE SCHEMA IF NOT EXISTS nom_de_lapp;
+-- Avant le chantier multi-dev, il créait un schéma par app dans la base
+-- `devdb`, que toutes les apps partageaient avec le rôle superutilisateur
+-- `devuser`. Aujourd'hui :
+--   • `devdb` reste vide ; `devuser` est le rôle d'administration de
+--     l'instance, utilisé par les scripts seulement ;
+--   • les services du cadriciel vivent dans la base `lab` (rôle `lab`) ;
+--   • chaque app vit dans la base de son propriétaire, `dev_<uid>`.
+-- Rôles et bases sont créés par `scripts/dev-db.sh ensure-lab` /
+-- `ensure <uid>` (rejoués par `ensure-all` après la recréation d'un volume),
+-- et le schéma de chaque app par `scripts/ensure-schemas.sh`, qui lit son .env.
+-- Créer ici des schémas dans `devdb` remettrait en place l'ancienne
+-- disposition : des apps en superutilisateur dans une base commune.
 -- ─────────────────────────────────────────────────────────────────
-
-CREATE SCHEMA IF NOT EXISTS spring_app;
-
--- CREATE SCHEMA IF NOT EXISTS future_app;
-
-CREATE SCHEMA IF NOT EXISTS table_manager;
-
-CREATE SCHEMA IF NOT EXISTS google_agenda;
-
-CREATE SCHEMA IF NOT EXISTS analyse_lora;
-
-CREATE SCHEMA IF NOT EXISTS app_builder;
-
-CREATE SCHEMA IF NOT EXISTS restauration;
-
-CREATE SCHEMA IF NOT EXISTS traitement_de_fichiers_compils;
-
-CREATE SCHEMA IF NOT EXISTS arbre_genealogique;
-
-CREATE SCHEMA IF NOT EXISTS lab_admin;
-
-CREATE SCHEMA IF NOT EXISTS conciergerie;
-
-CREATE SCHEMA IF NOT EXISTS atelier_3d;
-
-CREATE SCHEMA IF NOT EXISTS storage;
-
-CREATE SCHEMA IF NOT EXISTS robot_lab;
-
-CREATE SCHEMA IF NOT EXISTS code_route;
-
-CREATE SCHEMA IF NOT EXISTS craft_lab;
-
-CREATE SCHEMA IF NOT EXISTS bilan_thermique;
-
-CREATE SCHEMA IF NOT EXISTS oauth_hub;
-
-CREATE SCHEMA IF NOT EXISTS peripheriques;
+SELECT 1;

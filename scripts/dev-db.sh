@@ -18,6 +18,9 @@
 #
 # Usage :
 #   bash scripts/dev-db.sh ensure <uid> [--gis]     provisionnement idempotent
+#   bash scripts/dev-db.sh ensure-lab                    rôle et base `lab` du cadriciel (LAB_PG_PASSWORD)
+#   bash scripts/dev-db.sh status lab|<uid> [--gis]      lecture seule : ce qui existe (code 0 = complet)
+#   bash scripts/dev-db.sh rotate lab|<uid>              rotation à chaud du mot de passe du rôle
 #   bash scripts/dev-db.sh ensure-all               rejoue `ensure` pour tout ce que dev-roles.env
 #                                                   déclare (après recréation d'un volume)
 #   bash scripts/dev-db.sh exists <uid> [--gis]     code 0 si la base existe, 1 sinon
@@ -34,10 +37,11 @@
 #     porte, base par base. `ensure` le pose sur les bases qu'il crée ;
 #     `lockdown-connect` le pose sur les bases historiques (devdb, gisdb,
 #     postgres) — séparément, parce que ça touche des bases en service.
-#   • Tant que pg_hba.conf garde ses lignes `trust` réseau pour devuser/gisuser
-#     (infra/init*/01_pg_hba_trust.sh), TOUT conteneur de dev-net est
-#     superutilisateur sans mot de passe : la séparation est fictive. C'est
-#     `lockdown-hba` qui les retire — condition de sortie du chantier.
+#   • pg_hba.conf : une instance initialisée aujourd'hui n'a AUCUNE ligne
+#     `trust` réseau (les anciens infra/init*/01_pg_hba_trust.sh ont été
+#     retirés du dépôt) — un conteneur de dev-net doit présenter un mot de
+#     passe. `lockdown-hba` ne sert plus qu'à une instance née avant ce
+#     retrait ; `hba-status` dit où en est chacune.
 #
 # Les scripts parlent à PostgreSQL par `docker exec` (socket local du
 # conteneur), avec le rôle d'administration de l'instance (POSTGRES_USER /
@@ -140,67 +144,100 @@ _scalar() {  # _scalar <container> <db> <requête sans donnée sensible>
 _gen_password() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40 || true; }
 
 # ── ensure d'UN rôle + UNE base sur UNE instance ──────────────────────────────
-# $1 container · $2 uid · $3 nom de base · $4 clé dev-roles.env du mot de passe · $5 « postgis » ou « »
+# $1 container · $2 rôle · $3 nom de base · $4 clé dev-roles.env du mot de passe · $5 « postgis » ou « »
+#
+# IDEMPOTENT ET SANS ÉCRITURE INUTILE : sur une instance où tout est déjà en
+# place, cette fonction ne lance AUCUNE instruction de modification — elle lit,
+# constate et le dit. Elle n'écrit que ce qui manque :
+#   • rôle absent            → CREATE ROLE avec le mot de passe de dev-roles.env ;
+#   • attributs dangereux    → ALTER ROLE (sans toucher au mot de passe) ;
+#   • base absente           → CREATE DATABASE ;
+#   • propriétaire différent, ou CONNECT encore accordé à PUBLIC → corrigé.
+# Le mot de passe d'un rôle EXISTANT n'est réaligné que si sa clé vient d'être
+# générée (elle manquait dans dev-roles.env) ou sur demande explicite
+# (LAB_DB_REALIGN=1, posé par rotate-db-password.sh).
 _ensure_on() {
-  local container="$1" uid="$2" db="$3" key="$4" ext="${5:-}"
-  local role="dev_${uid}" pw role_exists db_exists
+  local container="$1" role="$2" db="$3" key="$4" ext="${5:-}"
+  local pw role_attrs db_owner public_connect key_new=false
 
   _container_up "$container" || die "Conteneur '$container' non démarré — provisionnement impossible (bash scripts/recompose_docker.sh --app infra)."
+  [[ "$role" =~ ^[a-z_][a-z0-9_]*$ && "$db" =~ ^[a-z_][a-z0-9_]*$ ]] || die "nom de rôle ou de base invalide"
 
   pw="$(_roles_val "$key")"
   if [[ -z "$pw" ]]; then
     pw="$(_gen_password)"
     [[ ${#pw} -eq 40 ]] || die "Génération du mot de passe échouée."
     _roles_set "$key" "$pw"
+    key_new=true
     info "$key généré dans infra/dev-roles.env"
   fi
   # Purement alphanumérique : aucune apostrophe à échapper dans le littéral SQL.
   [[ "$pw" =~ ^[A-Za-z0-9]{16,}$ ]] || die "$key (infra/dev-roles.env) doit être alphanumérique, 16 caractères minimum."
 
-  role_exists="$(_scalar "$container" postgres "SELECT 1 FROM pg_roles WHERE rolname = '${role}'")"
-  if [[ "$role_exists" == "1" ]]; then
-    # ALTER systématique : réaligne le mot de passe sur dev-roles.env (source de
-    # vérité) ET retire tout attribut dangereux qu'on aurait ajouté à la main.
-    _psql "$container" postgres <<SQL
-ALTER ROLE "${role}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${pw}';
-SQL
-    info "rôle ${role} déjà présent sur ${container} (attributs et mot de passe réalignés)"
-  else
+  # « login super createdb createrole replication bypassrls », p. ex. « t f f f f f »
+  role_attrs="$(_scalar "$container" postgres "SELECT concat_ws(' ', rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls) FROM pg_roles WHERE rolname = '${role}'")"
+  if [[ -z "$role_attrs" ]]; then
     _psql "$container" postgres <<SQL
 CREATE ROLE "${role}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${pw}';
 SQL
     ok "rôle ${role} créé sur ${container}"
+  else
+    if [[ "$role_attrs" != "t f f f f f" ]]; then
+      _psql "$container" postgres <<SQL
+ALTER ROLE "${role}" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+SQL
+      ok "rôle ${role} : attributs corrigés sur ${container} (étaient : ${role_attrs})"
+    fi
+    if $key_new || [[ "${LAB_DB_REALIGN:-}" == "1" ]]; then
+      _psql "$container" postgres <<SQL
+ALTER ROLE "${role}" WITH PASSWORD '${pw}';
+SQL
+      ok "rôle ${role} : mot de passe aligné sur dev-roles.env (${container})"
+    else
+      info "rôle ${role} déjà présent sur ${container} — rien à changer"
+    fi
   fi
 
-  db_exists="$(_scalar "$container" postgres "SELECT 1 FROM pg_database WHERE datname = '${db}'")"
-  if [[ "$db_exists" == "1" ]]; then
-    info "base ${db} déjà présente sur ${container}"
-  else
+  db_owner="$(_scalar "$container" postgres "SELECT datdba::regrole::text FROM pg_database WHERE datname = '${db}'")"
+  if [[ -z "$db_owner" ]]; then
     # CREATE DATABASE ne peut pas tourner dans une transaction : commande seule.
     _psql "$container" postgres <<SQL
 CREATE DATABASE "${db}" OWNER "${role}";
 SQL
     ok "base ${db} créée sur ${container} (propriétaire ${role})"
+    db_owner="$role"
+  elif [[ "$db_owner" != "$role" ]]; then
+    _psql "$container" postgres <<SQL
+ALTER DATABASE "${db}" OWNER TO "${role}";
+SQL
+    ok "base ${db} : propriétaire corrigé (${db_owner} → ${role})"
+  else
+    info "base ${db} déjà présente sur ${container}"
   fi
 
-  # Rejoué à chaque fois (idempotent) : c'est CE REVOKE qui fait qu'un autre
-  # rôle ne peut pas se connecter à cette base. Le propriétaire garde ses
-  # droits (ils ne lui viennent pas de PUBLIC).
-  _psql "$container" postgres <<SQL
-ALTER DATABASE "${db}" OWNER TO "${role}";
+  # C'est CE REVOKE qui fait qu'un autre rôle ne peut pas se connecter à la
+  # base. Posé seulement si PUBLIC a encore CONNECT (ACL vide = droits par
+  # défaut = PUBLIC connecté). Le propriétaire garde ses droits.
+  public_connect="$(_scalar "$container" postgres "SELECT (datacl IS NULL OR EXISTS (SELECT 1 FROM aclexplode(datacl) a WHERE a.grantee = 0 AND a.privilege_type = 'CONNECT')) FROM pg_database WHERE datname = '${db}'")"
+  if [[ "$public_connect" == "t" ]]; then
+    _psql "$container" postgres <<SQL
 REVOKE ALL ON DATABASE "${db}" FROM PUBLIC;
 GRANT ALL ON DATABASE "${db}" TO "${role}";
 SQL
+    ok "base ${db} : CONNECT retiré à PUBLIC"
+  fi
 
   if [[ "$ext" == "postgis" ]]; then
     # Posée ICI par le rôle d'administration : CREATE EXTENSION postgis exige un
     # superutilisateur, que dev_<uid> n'est pas. Un `CREATE EXTENSION IF NOT
     # EXISTS postgis` lancé ensuite par une migration Django est alors un no-op
     # qui ne demande aucun privilège.
-    _psql "$container" "$db" <<SQL
+    if [[ "$(_scalar "$container" "$db" "SELECT 1 FROM pg_extension WHERE extname = 'postgis'")" != "1" ]]; then
+      _psql "$container" "$db" <<SQL
 CREATE EXTENSION IF NOT EXISTS postgis;
 SQL
-    ok "extension postgis présente dans ${db}"
+      ok "extension postgis posée dans ${db}"
+    fi
   fi
 }
 
@@ -218,19 +255,109 @@ cmd_ensure() {
   _assert_infra_env_clean
 
   echo "── PostgreSQL de « ${uid} »"
-  _ensure_on "$PG_CONTAINER" "$uid" "dev_${uid}" "DEV_PG_PASSWORD__${uid}"
+  _ensure_on "$PG_CONTAINER" "dev_${uid}" "dev_${uid}" "DEV_PG_PASSWORD__${uid}"
   if $gis; then
-    _ensure_on "$GIS_CONTAINER" "$uid" "gis_${uid}" "DEV_GIS_PASSWORD__${uid}" postgis
+    _ensure_on "$GIS_CONTAINER" "dev_${uid}" "gis_${uid}" "DEV_GIS_PASSWORD__${uid}" postgis
   fi
   ok "dev_${uid} prêt$($gis && echo " (+ gis_${uid})")"
 }
 
-# Rejoue `ensure` pour chaque uid que dev-roles.env déclare. Sert après la
-# recréation d'un volume PostgreSQL (les fichiers infra/init*/ ne connaissent
-# que devdb/gisdb) — appelé par setup2.sh en mode « tout le lab ».
+# Base du CADRICIEL (contrat multi-dev v8) : rôle `lab`, non superutilisateur,
+# base `lab` sur dev-postgres, mot de passe LAB_PG_PASSWORD dans dev-roles.env.
+# C'est là que vivent les services du cadriciel restés à la racine (lab-admin,
+# storage, oauth-hub, app-builder) ; reset_url.sh ne propage ce mot de passe
+# qu'à eux. Même logique que `ensure` : ne change rien à ce qui est en place.
+cmd_ensure_lab() {
+  [[ $# -eq 0 ]] || die "ensure-lab ne prend pas d'argument"
+  [[ -f "$INFRA_ENV" ]] || die "$INFRA_ENV introuvable."
+  _assert_infra_env_clean
+  echo "── PostgreSQL du cadriciel (base lab)"
+  _ensure_on "$PG_CONTAINER" "lab" "lab" "LAB_PG_PASSWORD"
+  ok "lab prêt"
+}
+
+# Rotation À CHAUD du mot de passe d'un rôle applicatif : `lab`, ou dev_<uid>
+# (sur chaque instance où le rôle existe). L'ordre protège de la
+# désynchronisation : ALTER ROLE d'abord, écriture de dev-roles.env seulement si
+# la base l'a accepté. La propagation vers les .env des apps reste à
+# reset_url.sh, et les backends doivent être redémarrés pour la prendre.
+#   bash scripts/dev-db.sh rotate lab
+#   bash scripts/dev-db.sh rotate <uid>
+cmd_rotate() {
+  local who="${1:-}" role container key new did=0
+  [[ $# -eq 1 && -n "$who" ]] || die "rotate : « lab » ou un uid attendu"
+  if [[ "$who" == "lab" ]]; then role="lab"
+  else registry_valid_uid "$who" || die "uid invalide : '${who}'"; role="dev_${who}"; fi
+  _assert_infra_env_clean
+  for container in "$PG_CONTAINER" "$GIS_CONTAINER"; do
+    if [[ "$who" == "lab" ]]; then
+      [[ "$container" == "$PG_CONTAINER" ]] || continue
+      key="LAB_PG_PASSWORD"
+    elif [[ "$container" == "$GIS_CONTAINER" ]]; then key="DEV_GIS_PASSWORD__${who}"
+    else key="DEV_PG_PASSWORD__${who}"; fi
+    _container_up "$container" || { warn "$container non démarré — ${role} non roté sur cette instance"; continue; }
+    [[ "$(_scalar "$container" postgres "SELECT 1 FROM pg_roles WHERE rolname = '${role}'")" == "1" ]] || continue
+    new="$(_gen_password)"; [[ ${#new} -eq 40 ]] || die "Génération du mot de passe échouée."
+    if _psql "$container" postgres <<SQL
+ALTER ROLE "${role}" WITH PASSWORD '${new}';
+SQL
+    then
+      _roles_set "$key" "$new"
+      ok "${role} : mot de passe roté sur ${container} (${key})"
+      did=$((did + 1))
+    else
+      die "${role} : ALTER ROLE refusé sur ${container} — ${key} laissé intact, ancien mot de passe toujours valide"
+    fi
+  done
+  [[ $did -gt 0 ]] || die "rôle ${role} introuvable sur les instances démarrées — rien n'a été roté"
+}
+
+# Lecture seule : dit ce qui existe, n'écrit rien (ni en base, ni dans
+# dev-roles.env). Code 0 = tout ce qui est attendu est en place.
+#   bash scripts/dev-db.sh status lab            rôle + base lab
+#   bash scripts/dev-db.sh status <uid> [--gis]  rôle + base(s) du développeur
+cmd_status() {
+  local who="" gis=false a missing=0
+  for a in "$@"; do case "$a" in --gis) gis=true ;; -*) die "Option inconnue : $a" ;; *) who="$a" ;; esac; done
+  [[ -n "$who" ]] || die "status : « lab » ou un uid attendu"
+  local role db key
+  _one() {  # _one <container> <rôle> <base> <clé>
+    local c="$1" r="$2" d="$3" k="$4" attrs owner pub
+    _container_up "$c" || { echo "  ✘ ${c} : conteneur arrêté"; missing=$((missing + 1)); return; }
+    attrs="$(_scalar "$c" postgres "SELECT concat_ws(' ', rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls) FROM pg_roles WHERE rolname = '${r}'")"
+    owner="$(_scalar "$c" postgres "SELECT datdba::regrole::text FROM pg_database WHERE datname = '${d}'")"
+    pub="$(_scalar "$c" postgres "SELECT (datacl IS NULL OR EXISTS (SELECT 1 FROM aclexplode(datacl) a WHERE a.grantee = 0 AND a.privilege_type = 'CONNECT')) FROM pg_database WHERE datname = '${d}'")"
+    if [[ "$attrs" == "t f f f f f" ]]; then echo "  ✔ rôle ${r} (${c}) : présent, non superutilisateur"
+    elif [[ -z "$attrs" ]]; then echo "  ✘ rôle ${r} absent de ${c}"; missing=$((missing + 1))
+    else echo "  ✘ rôle ${r} (${c}) : attributs inattendus (${attrs})"; missing=$((missing + 1)); fi
+    if [[ "$owner" == "$r" ]]; then echo "  ✔ base ${d} (${c}) : présente, propriétaire ${r}"
+    elif [[ -z "$owner" ]]; then echo "  ✘ base ${d} absente de ${c}"; missing=$((missing + 1))
+    else echo "  ✘ base ${d} (${c}) : propriétaire ${owner}, attendu ${r}"; missing=$((missing + 1)); fi
+    if [[ -n "$owner" && "$pub" == "t" ]]; then echo "  ✘ base ${d} (${c}) : CONNECT encore accordé à PUBLIC"; missing=$((missing + 1)); fi
+    if [[ -n "$(_roles_val "$k")" ]]; then echo "  ✔ ${k} présent dans infra/dev-roles.env"
+    else echo "  ✘ ${k} absent de infra/dev-roles.env"; missing=$((missing + 1)); fi
+  }
+  if [[ "$who" == "lab" ]]; then
+    _one "$PG_CONTAINER" lab lab LAB_PG_PASSWORD
+  else
+    registry_valid_uid "$who" || die "uid invalide : '${who}'"
+    _one "$PG_CONTAINER" "dev_${who}" "dev_${who}" "DEV_PG_PASSWORD__${who}"
+    $gis && _one "$GIS_CONTAINER" "dev_${who}" "gis_${who}" "DEV_GIS_PASSWORD__${who}"
+  fi
+  return $(( missing > 0 ? 1 : 0 ))
+}
+
+# Rejoue le provisionnement de tout ce que dev-roles.env déclare : la base du
+# cadriciel (LAB_PG_PASSWORD) et chaque développeur (DEV_PG_PASSWORD__<uid>).
+# Sert après la recréation d'un volume PostgreSQL (infra/init*/ ne crée plus
+# aucun schéma ni rôle applicatif) — appelé par setup2.sh en mode « tout le
+# lab ». Sur une instance déjà en place, ne change rien.
 cmd_ensure_all() {
-  [[ -f "$ROLES_ENV" ]] || { info "infra/dev-roles.env absent — aucune base de développeur déclarée"; return 0; }
+  [[ -f "$ROLES_ENV" ]] || { info "infra/dev-roles.env absent — aucune base déclarée"; return 0; }
   local uid n=0 line
+  if [[ -n "$(_roles_val LAB_PG_PASSWORD)" ]]; then
+    cmd_ensure_lab; n=$((n + 1))
+  fi
   while IFS= read -r uid; do
     [[ -n "$uid" ]] || continue
     if [[ -n "$(_roles_val "DEV_GIS_PASSWORD__${uid}")" ]]; then
@@ -242,7 +369,7 @@ cmd_ensure_all() {
   done < <(while IFS= read -r line; do
              [[ "$line" =~ ^DEV_PG_PASSWORD__([a-z][a-z0-9]{1,30})= ]] && printf '%s\n' "${BASH_REMATCH[1]}"
            done < "$ROLES_ENV" | sort -u)
-  [[ $n -eq 0 ]] && info "aucune base de développeur déclarée dans infra/dev-roles.env"
+  [[ $n -eq 0 ]] && info "aucune base déclarée dans infra/dev-roles.env"
   return 0
 }
 
@@ -426,6 +553,9 @@ CMD="$1"; shift
 case "$CMD" in
   ensure)            cmd_ensure "$@" ;;
   ensure-all)        cmd_ensure_all "$@" ;;
+  ensure-lab)        cmd_ensure_lab "$@" ;;
+  status)            cmd_status "$@" ;;
+  rotate)            cmd_rotate "$@" ;;
   exists)            cmd_exists "$@" ;;
   drop)              cmd_drop "$@" ;;
   lockdown-connect)  cmd_lockdown_connect "$@" ;;

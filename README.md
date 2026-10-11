@@ -20,7 +20,7 @@ client Keycloak, build Docker, ports réseau, rotation des secrets.
 
 1. [Procédure de construction de l'infrastructure](#1--procédure-de-construction-de-linfrastructure)
    - [1.1 Ce qui est inclus dans `dev/`, ce qui ne l'est pas](#11-ce-qui-est-inclus-dans-dev-ce-qui-ne-lest-pas)
-   - [1.2 Démarrage en local](#12-démarrage-en-local)
+   - [1.2 Installation](#12-installation)
    - [1.3 Exposition sur le WAN](#13-exposition-sur-le-wan)
    - [1.4 HTTPS via Caddy + nom de domaine (DDNS)](#14-https-via-caddy--nom-de-domaine-ddns)
    - [1.5 Plusieurs cadriciels sur une même IP WAN — le répartiteur](#15-plusieurs-cadriciels-sur-une-même-ip-wan--le-répartiteur)
@@ -107,72 +107,106 @@ pour le détail) :
   « mot de passe oublié » et la notification de rotation de mot de passe.
 - **Docker Engine + Docker Compose** eux-mêmes, et l'accès SSH/VS Code desktop à la machine.
 
-### 1.2 Démarrage en local
+### 1.2 Installation
 
-Prérequis sur l'hôte : Docker Engine + plugin Compose, `git`, `gh` (CLI GitHub), `curl`.
+Prérequis sur l'hôte : Docker Engine + plugin Compose (utilisateur dans le groupe `docker`),
+`git`, `jq`, `curl`, `openssl`, `python3`, `flock` (util-linux), `ss` et `ip` (iproute2). `gh`
+ne sert qu'à créer à la main le dépôt d'une app. `install.sh` vérifie tout cela en premier.
 
 ```bash
-# 1. Cloner avec tous les sous-modules
+# 1. Cloner avec les sous-modules
 #    ⚠️ Le dépôt parent s'appelle « sso-lab » sur GitHub pour des raisons
-#    historiques, mais s'installe dans un dossier « dev/ » : tous les scripts
-#    et tous les chemins de cette documentation le supposent.
+#    historiques, mais s'installe dans un dossier « dev/ ».
 git clone --recurse-submodules https://github.com/Sacha37420/sso-lab.git dev
 cd dev
 
-# 2. Copier tous les .env.example → .env
-#    Aucun script ne fait cette copie : un .env manquant fait échouer
-#    `docker compose` de l'unité concernée (env_file introuvable).
-cp .env.example .env
-cp bbox.env.example bbox.env
-cp sso-lab/.env.example sso-lab/.env
-cp infra/.env.example infra/.env
-cp runner/.env.example runner/.env
-for app in analyse-lora app-builder arbre-genealogique atelier-3d \
-           bilan-thermique carto-lab code-route conciergerie craft-lab \
-           lab-admin oauth-hub restauration robot-lab storage \
-           traitement-de-fichiers-compils; do
-  cp "$app/.env.example" "$app/.env"
-done
+# 2. Voir ce que l'installation ferait, sans rien toucher
+bash scripts/install.sh --check
 
-# 3. Amorcer l'annuaire LDAP
-#    sso-lab/ldap/init.ldif porte des mots de passe en clair : il est ignoré par
-#    git, seul le gabarit est versionné. Sans cette copie, Docker crée un
-#    RÉPERTOIRE vide à la place du bind mount et le lab démarre avec un annuaire
-#    sans aucun utilisateur ni groupe — sans message d'erreur.
-cp sso-lab/ldap/init.ldif.example sso-lab/ldap/init.ldif
-
-# 4. Renseigner bbox.env → SERVER_URL_LAN (IP LAN réelle de la machine)
-#    Laisser SERVER_URL_WAN à CHANGE_ME pour rester purement local, ou le
-#    renseigner tout de suite si le lab doit aussi être joignable depuis le
-#    WAN (voir 1.3) — reset_url.sh exige une valeur non-CHANGE_ME pour WAN.
-nano bbox.env
-
-# 5. Propager les adresses réseau vers tous les .env
-bash scripts/reset_url.sh
-
-# 6. Démarrer tout le lab (infra + sso-lab, puis toutes les apps en parallèle
-#    borné par scripts/app-priorities.conf — voir 2.1)
-#    Cette commande génère elle-même les secrets manquants (init-secrets.sh).
-bash scripts/setup2.sh --yes
+# 3. Installer (rejouable : ne refait jamais ce qui est en place)
+bash scripts/install.sh --domain mon-lab.example.org --acme-email moi@example.org
 ```
 
-À l'issue de cette commande :
+`install.sh` enchaîne, en regardant à chaque étape l'état réel de la machine :
+
+1. contrôle des prérequis, extraction des sous-modules manquants ;
+2. `.env` et `bbox.env` de la machine : IP LAN et WAN détectées (ou `--lan-ip`, `--wan`),
+   `DOMAIN`, `ACME_EMAIL`, `LAB_SUPERUSER` (`--superuser`, défaut : l'utilisateur courant) ;
+3. un `.env` pour **chaque** unité qui a un `.env.example` et pas de `.env` — à la racine comme
+   dans `deploiement/` —, avec la bonne base (`lab` pour les services du cadriciel, `dev_<uid>` /
+   `gis_<uid>` pour les apps), des secrets générés à la place des `CHANGE_ME`, et pour `lab-mcp`
+   les identités de l'hôte (`id -u`, `id -g`, GID du groupe `docker`) ;
+4. `sso-lab/ldap/init.ldif` depuis son gabarit, `.ports` reconstruit, `~/lab-work` et
+   `.lab-state/` créés ;
+5. secrets de premier passage (`init-secrets.sh`) : LDAP, Keycloak, `POSTGRES_PASSWORD`,
+   `POSTGIS_PASSWORD`, coffre d'`oauth-hub`, **un mot de passe par compte de l'annuaire**
+   (écrits dans `sso-lab/.env`, clés `<UID>_PASSWORD`) — seulement tant que les volumes
+   correspondants n'existent pas ;
+6. réseau Docker `edge-net`, propagation des adresses (`reset_url.sh`) ;
+7. `sso-lab`, realm, fédération LDAP, clients Keycloak de `code-server` et de pgAdmin ;
+8. `infra`, puis `dev-db.sh ensure-lab` (rôle et base `lab`), `dev-db.sh ensure <superutilisateur>
+   --gis`, propagation des mots de passe de base, `dev-db.sh lockdown-connect --apply` ;
+9. runner de tests ;
+10. `storage`, `oauth-hub`, `lab-admin`, `lab-mcp`, puis chaque application (`--no-apps` pour
+    s'arrêter au cadriciel) ;
+11. image `lab-workspace:latest` (≈ 8 min ; `--no-workspace-image` pour la remettre à plus tard),
+    partages de groupe de `storage`, `ports.env`, page 404 ;
+12. bilan, et la liste de ce qui reste à faire à la main.
+
+`--until <n>` arrête après l'étape *n* (par exemple `--until 6` : tout ce qui précède le premier
+démarrage de conteneur). En cas d'échec, corriger et relancer la même commande.
+
+**Ce que l'installation ne peut pas faire** (elle le rappelle à la fin) :
+
+- **Fiche GitHub dans `oauth-hub`** : enregistrer une application OAuth chez GitHub (URI de
+  rappel `https://<DOMAIN>/oauth-hub-api/api/callback/github/`, portée `read:user repo`) et saisir
+  son `client_id` / `client_secret` dans l'interface d'`oauth-hub` — pas à pas dans
+  `oauth-hub/README.md`. Sans elle : ni création de projet, ni ticket, ni éditeur. Idem, si
+  besoin, pour GitLab et Google.
+- **SMTP de Keycloak** (`sso-lab/.env` : `SMTP_FROM`, `SMTP_USER`, `SMTP_PASSWORD`).
+- **Nom de domaine et DDNS**, redirection des ports 80/443 du routeur (voir 1.3 et 1.4).
+- **`~/edge-router/`** (voir 1.5) : le Caddy de `sso-lab` ne publie plus lui-même 80/443.
+- **Adresses réelles des comptes** : le gabarit de l'annuaire donne à chacun une adresse factice
+  `<uid>@ssolab.local` ; mettre les vraies dans `sso-lab/ldap/init.ldif` **avant** l'installation
+  (après, par phpLDAPadmin) pour que « mot de passe oublié » fonctionne.
+- **Sauvegardes** : rien n'est planifié par ce dépôt. À sauvegarder, parce que hors de tout dépôt :
+  les `.env`, `infra/dev-roles.env`, `sso-lab/ldap/init.ldif`, `.ports`, `.devs`, `.owners`,
+  `.lab-state/` (clés de déploiement), `~/edge-router/`, `~/lab-work/`, et les volumes Docker.
+
+> **Sans nom de domaine**, l'installation va au bout d'un lab « HTTP local » (accès direct par
+> port), mais **le moteur `lab-mcp` refuse de démarrer** (`DOMAIN=CHANGE_ME`) : la page
+> « Projets » de `lab-admin`, les espaces de travail et le déploiement par le moteur exigent
+> HTTPS. Relancer `install.sh --domain …` une fois le domaine en place.
+
+> **Un autre installateur que le propriétaire d'origine** règle deux choses : `LAB_SUPERUSER`
+> (`.env` racine — un uid de l'annuaire, membre de `admins` et `developers` dans `init.ldif`), et
+> `LAB_TICKET_REPO` (`lab-mcp/.env` — dépôt GitHub où le moteur ouvre les tickets « lab » ;
+> défaut `Sacha37420/sso-lab`).
+
+> **`SERVER_URL_WAN`** (`bbox.env`) doit toujours valoir une vraie adresse : `reset_url.sh`
+> refuse `CHANGE_ME`, et la valeur du gabarit (`http://VOTRE_IP_WAN`) serait propagée telle
+> quelle. `install.sh` la détecte ; pour un lab purement local, lui passer `--wan <IP LAN>`.
+
+> **Projets privés** : le dépôt d'un projet peut être privé. Son sous-module porte
+> `update = none` dans `.gitmodules` (posé par `app-register.sh`), pour que le clone récursif
+> d'un tiers saute ce dossier au lieu d'avorter ; `install.sh` l'extrait pour qui y a accès.
+
+À l'issue de l'installation :
 - Keycloak est disponible sur `http://<IP_LAN>:8080/`, phpLDAPadmin sur `:8081`, pgAdmin sur
   `:5050` (accès direct LAN uniquement pour ces deux derniers, jamais exposés via Caddy).
-- Chaque app est disponible sur `http://<IP_LAN>:<port_frontend>/`.
-- `infra/` et `sso-lab/` tournent en `restart: always` : ils redémarrent automatiquement avec
-  Docker, pas besoin de relancer `setup2.sh` après un reboot de la machine.
+- Chaque app est disponible sur `https://<DOMAIN>/<app>/` (ou `http://<IP_LAN>:<port_frontend>/`).
+- `infra/` et `sso-lab/` tournent en `restart: always` : ils redémarrent avec Docker.
 
-Ensuite, on ne manipule plus que des apps individuelles :
+Ensuite, on ne manipule plus que des unités individuelles :
 
 ```bash
 bash scripts/setup2.sh mon-app --yes    # (re)déployer une app
 bash scripts/clean2.sh mon-app          # l'arrêter et supprimer ses containers
+bash scripts/install.sh --check         # l'installation est-elle toujours complète ?
 ```
 
-> **DOMAIN reste à `CHANGE_ME`** à ce stade : tout tourne en HTTP, accès direct par port. C'est
-> le mode par défaut et il fonctionne pour du développement pur LAN — HTTPS n'est nécessaire
-> que pour une exposition WAN sérieuse (voir 1.4).
+`bash scripts/setup2.sh --yes` (sans nom) redéploie **tout** le lab ; il suppose l'installation
+déjà faite.
 
 ### 1.3 Exposition sur le WAN
 
@@ -283,6 +317,13 @@ passe entièrement par Caddy sur le port 443 ; le port du container reste intern
 Docker `sso-net`.
 
 ### 1.5 Plusieurs cadriciels sur une même IP WAN — le répartiteur
+
+> **À savoir même avec un seul cadriciel** : le `docker-compose.yml` de `sso-lab` versionné ici
+> est déjà dans cette disposition. Il déclare le réseau `edge-net` **externe** (créé par
+> `install.sh` et par `setup2.sh` s'il manque — sans lui Compose ne démarre rien) et son Caddy
+> **ne publie plus 80/443** : sans `~/edge-router/`, le lab n'est pas joignable en HTTPS de
+> l'extérieur. Le répartiteur n'étant pas versionné, il est à reconstituer à la main d'après le
+> schéma ci-dessous (un `docker-compose.yml` et un `nginx.conf`).
 
 Un routeur ne peut rediriger un port externe donné (80 ou 443) que vers **une seule** machine/
 port interne. Si l'hôte fait tourner **deux cadriciels indépendants** (deux arbres type `dev/`,
@@ -442,24 +483,25 @@ printf 'mon-app\n4\n8088\n4206\nO\ndevelopers\n' | bash scripts/new-app.sh
 printf 'carto-lab\n4\n8091\n4209\nO\ndevelopers\n2\n' | bash scripts/new-app.sh
 ```
 
-Le script crée `dev/<app>/` complet (backend, frontend, docker-compose, Dockerfiles, nginx,
-`.env`…), ajoute `<app>/` au `.gitignore` racine, enregistre les ports dans `.ports`, ajoute le
-schéma SQL dans `infra/init/00_schemas.sql` (ou `infra/init-postgis/00_schemas.sql`), et crée
-`.keycloak-client-opts`. **Il ne crée ni le client Keycloak ni le dépôt GitHub.**
+Le script contrôle le nom (`check-app-name.sh`), crée **`deploiement/<app>/`** complet (backend,
+frontend, docker-compose, Dockerfiles, nginx, `.env`, feuille de route et règles
+`CLAUDE.md`/`AGENTS.md`), enregistre le propriétaire dans `.owners` et les ports dans `.ports`,
+crée le schéma de l'app **dans la base de son propriétaire** (`dev_<uid>`, ou `gis_<uid>`), et
+écrit `.keycloak-client-opts`. `--owner <uid>` crée l'app pour un développeur inscrit ; sans
+lui, elle appartient au superutilisateur. **Il ne crée ni le client Keycloak ni le dépôt GitHub.**
 
 **Étape 2 — Dépôt GitHub + sous-module :**
 
 ```bash
-cd mon-app
-git init && git checkout -b main
-git add . && git commit -m "feat: initial scaffold"
-gh repo create Sacha37420/mon-app --public
-git remote add origin https://github.com/Sacha37420/mon-app.git
-git push -u origin main
-cd ..
-sed -i '/^mon-app\/$/d' .gitignore
-git submodule add https://github.com/Sacha37420/mon-app.git mon-app
+gh repo create Sacha37420/mon-app --public      # ou --private
+LAB_GIT_AUTHOR_NAME="Prénom Nom" LAB_GIT_AUTHOR_EMAIL=moi@example.org \
+  bash scripts/app-register.sh mon-app https://github.com/Sacha37420/mon-app.git
 ```
+
+`app-register.sh` fait le `git init`, le premier commit, le `push`, puis enregistre
+`deploiement/mon-app` comme sous-module du dépôt parent (indexé, **non commité** : le commit du
+parent reste à faire à la main). Depuis `lab-admin` (page « Projets ») ou par le moteur, ces deux
+étapes et la suivante sont faites d'un seul geste.
 
 **Étape 3 — Remplir `.env`** : voir [2.3](#23-règles-env-et-rotation-des-secrets).
 
@@ -605,7 +647,7 @@ par l'API publique.
 ### 2.3 Règles `.env` et rotation des secrets
 
 Tous les `.env` sont ignorés par git. Chaque dossier contient un `.env.example` à copier (voir
-[1.2](#12-démarrage-en-local) pour la liste complète). Règles à respecter :
+[1.2](#12-installation) pour la liste complète). Règles à respecter :
 
 - **`DOMAIN`/`ACME_EMAIL`** doivent être **identiques** dans `.env` (racine) et `sso-lab/.env`.
 - **`HOST_DEV_ROOT`** (`.env` racine) : laisser vide dans le cas courant. À renseigner
@@ -808,10 +850,31 @@ instances PostgreSQL », sous-section « Fichiers rasters / médias (apps avec u
 
 `infra/docker-compose.yml` héberge **deux instances PostgreSQL séparées**, jamais une par app :
 
-| Instance | Container | Image | Base | Rôle | Pour qui |
-|---|---|---|---|---|---|
-| `postgres` | `dev-postgres` | `postgres:16-alpine` | `devdb` | `devuser` | La grande majorité des apps — un schéma par app |
-| `postgis` | `dev-postgis` | `postgis/postgis:16-3.5` | `gisdb` | `gisuser` | Apps SIG uniquement (aujourd'hui : `carto-lab`) |
+| Instance | Container | Image | Rôle d'administration | Bases applicatives |
+|---|---|---|---|---|
+| `postgres` | `dev-postgres` | `postgres:16-alpine` | `devuser` (base `devdb`, vide) | `lab` (services du cadriciel), `dev_<uid>` (une par développeur) |
+| `postgis` | `dev-postgis` | `postgis/postgis:16-3.5` | `gisuser` (base `gisdb`, vide) | `gis_<uid>` (apps SIG d'un développeur — aujourd'hui `carto-lab`) |
+
+**Qui se connecte à quoi** :
+- `devuser` / `gisuser` sont les superutilisateurs de leur instance. **Aucune app ne s'en sert** :
+  seuls les scripts, par le socket local du conteneur (`docker exec`).
+- Les services du cadriciel restés à la racine (`lab-admin`, `storage`, `oauth-hub`,
+  `app-builder`) partagent la base **`lab`**, rôle `lab`, un schéma chacun.
+- Chaque app de `deploiement/` vit dans la base de **son propriétaire** : `dev_<uid>` (rôle
+  `dev_<uid>`), ou `gis_<uid>` sur l'instance PostGIS, un schéma par app.
+- Ces rôles ne sont pas superutilisateurs, et `CONNECT` est retiré à `PUBLIC` sur chaque base :
+  un rôle n'entre que dans la sienne. `pg_hba.conf` exige un mot de passe sur le réseau.
+- Mots de passe : `infra/.env` pour `devuser`/`gisuser` ; **`infra/dev-roles.env`** (600) pour
+  `lab` (`LAB_PG_PASSWORD`) et les développeurs (`DEV_PG_PASSWORD__<uid>`,
+  `DEV_GIS_PASSWORD__<uid>`). `reset_url.sh` ne donne à chaque unité que celui de son rôle.
+
+```bash
+bash scripts/dev-db.sh ensure-lab            # rôle et base lab
+bash scripts/dev-db.sh ensure <uid> [--gis]  # rôle et base(s) d'un développeur
+bash scripts/dev-db.sh ensure-all            # tout rejouer depuis dev-roles.env (volume recréé)
+bash scripts/dev-db.sh status lab|<uid>      # lecture seule
+bash scripts/rotate-db-password.sh --yes     # rotation à chaud (--only admin|gis|lab|devs)
+```
 
 **Pourquoi deux instances** plutôt que l'extension PostGIS en plus sur `postgres` :
 - `postgres` tourne en image **alpine (musl)** ; le paquet PostGIS d'Alpine dépend de
@@ -826,23 +889,20 @@ instances PostgreSQL », sous-section « Fichiers rasters / médias (apps avec u
 **Aucune des deux instances ne publie jamais le port 5432** sur l'hôte ni sur Internet — seuls
 les containers rattachés à `dev-net` peuvent joindre `postgres:5432`/`postgis:5432`.
 
-**Convention de nommage des identifiants** : `POSTGRES_PASSWORD` (instance `postgres`) et
-`POSTGIS_PASSWORD` (instance `postgis`) dans `infra/.env`, deux clés distinctes propagées
-séparément par `reset_url.sh` (voir [2.3](#23-règles-env-et-rotation-des-secrets)).
-
 **Choisir l'instance pour une nouvelle app** : `new-app.sh` pose la question en dernier (voir
 [2.1](#21-la-méthode-standard)), défaut `postgres`. Ne choisir `postgis` que si l'app manipule
 réellement des données géospatiales — pas par précaution.
 
-**Schémas** : un schéma par app, déclaré dans `infra/init/00_schemas.sql` (instance `postgres`)
-ou `infra/init-postgis/00_schemas.sql` (instance `postgis`). Ce fichier n'est rejoué qu'à
-l'initialisation du volume — `ensure-schemas.sh` (appelé par `setup_unit.sh`/`setup2.sh` avant
-chaque déploiement) rattrape les schémas manquants à chaud, en lisant `DB_HOST` de chaque app
-pour cibler le bon container.
+**Schémas** : un schéma par app, dans la base que désigne son `.env` (`DB_NAME`, `DB_USER`,
+`DB_SCHEMA`). `infra/init*/00_schemas.sql` ne crée plus rien : c'est `ensure-schemas.sh` (appelé
+par `new-app.sh` et avant chaque déploiement) qui crée le schéma, avec pour propriétaire le rôle
+de l'app. Il refuse de le créer si l'app d'un développeur désigne une autre base que la sienne.
 
 **pgAdmin** : login interne désactivé, uniquement Keycloak (OAuth2), accès réservé au groupe
-`developers`. Prérequis : `sso-lab` démarré, `bash infra/setup-keycloak-pgadmin.sh` (une fois),
-copier `PGADMIN_OAUTH2_CLIENT_SECRET` dans `infra/.env`.
+**`admins`** (`infra/pgadmin/config_local.py`). Son client Keycloak (`infra`) est créé par
+`install.sh` (`create-app-client.sh infra --port 5050 --redirect-path /oauth2/authorize`), qui
+écrit `KEYCLOAK_CLIENT_SECRET` dans `infra/.env`. Chaque développeur a par ailleurs son propre
+pgAdmin, ouvert sur sa seule base, depuis `lab-admin`.
 
 > ⚠️ **Après une migration qui supprime une colonne de blobs** (voir [3](#3--gestion-des-fichiers)) :
 > `DROP COLUMN` ne fait que marquer la colonne supprimée, les données TOAST restent jusqu'à une
@@ -901,7 +961,7 @@ qui rend l'ajout sûr (aucun email réellement envoyé, adresse marquée vérifi
 `e2e_outsider` n'en a délibérément pas : il n'a jamais à dépasser le refus de cloisonnement.
 
 > ⚠️ Ce tableau est le reflet de `sso-lab/ldap/init.ldif`, **non versionné** (voir
-> [1.2](#12-démarrage-en-local)) : une installation neuve part de `init.ldif.example`. Tout
+> [1.2](#12-installation)) : une installation neuve part de `init.ldif.example`. Tout
 > **nouveau groupe** y ajouté doit inclure `e2e_member`, sans quoi le test de cloisonnement de
 > toute app utilisant ce groupe échoue à tort.
 

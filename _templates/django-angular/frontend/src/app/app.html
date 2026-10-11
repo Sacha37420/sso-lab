@@ -14,7 +14,7 @@
   }
 </ng-template>
 
-<div class="shell">
+<div class="shell" [attr.inert]="mobileOpen() ? '' : null">
 
   <aside class="sidebar" [class.collapsed]="collapsed()">
     <a routerLink="/" class="logo" title="__APP_TITLE__">

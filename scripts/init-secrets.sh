@@ -47,12 +47,15 @@ upsert_env() {
   local file="$1" key="$2" value="$3"
   [[ -f "$file" ]] || touch "$file"
   if grep -qE "^${key}=" "$file" 2>/dev/null; then
-    awk -v key="$key" -v val="$value" '
+    # Valeur passée par l'ENVIRONNEMENT d'awk, pas par `-v` : la ligne de
+    # commande d'un processus est lisible par `ps`.
+    _UPSERT_VAL="$value" awk -v key="$key" '
+      BEGIN { val = ENVIRON["_UPSERT_VAL"] }
       $0 ~ ("^" key "=") { print key "=" val; skip=1; next }
       skip && (/^[A-Za-z_]+=/ || /^#/ || /^[[:space:]]*$/) { skip=0 }
       skip { next }
       { print }
-    ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    ' "$file" > "${file}.tmp" && chmod --reference="$file" "${file}.tmp" && mv "${file}.tmp" "$file"
   else
     printf '\n%s=%s\n' "$key" "$value" >> "$file"
   fi
@@ -119,6 +122,31 @@ echo "✅  KEYCLOAK_ADMIN_PASSWORD            → sso-lab"
 #   coffre illisible (client_secret ET connexions de tous les comptes du lab),
 #   sans aucune reprise possible. Pour la roter volontairement, il faut d'abord
 #   vider le coffre et redemander à chacun de relier ses comptes.
+# ── Mots de passe d'administration PostgreSQL ────────────────────────────────
+# POSTGRES_PASSWORD / POSTGIS_PASSWORD (infra/.env) ne sont lus par PostgreSQL
+# qu'à la CRÉATION de son volume. On n'en génère donc un que si les deux
+# conditions sont réunies : la valeur est encore celle du gabarit (CHANGE_ME ou
+# vide) ET le volume n'existe pas. Volume présent ⇒ on ne touche à rien : le
+# fichier se désynchroniserait du mot de passe réel (pour le changer à chaud :
+# rotate-db-password.sh). Sans cette étape, une installation neuve gardait
+# « CHANGE_ME » comme mot de passe du superutilisateur de la base.
+INFRA_ENV="$SCRIPT_DIR/infra/.env"
+_pg_admin_secret() {  # <clé> <volume>
+  local key="$1" volume="$2" cur
+  [[ -f "$INFRA_ENV" ]] || { echo "⏭️   $key  (infra/.env absent)"; return; }
+  cur="$(grep -E "^${key}=" "$INFRA_ENV" 2>/dev/null | head -1 | cut -d= -f2-)"
+  if [[ -n "$cur" && "$cur" != "CHANGE_ME" ]]; then
+    echo "⏭️   $key  (déjà défini — conservé)"
+  elif docker volume inspect "$volume" > /dev/null 2>&1; then
+    echo "⚠️   $key vaut encore « ${cur:-vide} » alors que le volume $volume existe — NON modifié (rotate-db-password.sh pour le changer à chaud)"
+  else
+    upsert_env "$INFRA_ENV" "$key" "$(gen_pass)"
+    echo "✅  $key                 → infra (volume $volume à créer)"
+  fi
+}
+_pg_admin_secret POSTGRES_PASSWORD infra_postgres-data
+_pg_admin_secret POSTGIS_PASSWORD  infra_postgis-data
+
 OAUTH_HUB_ENV="$SCRIPT_DIR/oauth-hub/.env"
 if [[ -d "$SCRIPT_DIR/oauth-hub" ]]; then
   _existing_key=""
@@ -218,20 +246,11 @@ echo "  Pour des services DÉJÀ EN COURS, n'utilisez PAS ce script :"
 echo "  préférez  ./rotate-secrets.sh  qui applique la rotation à chaud"
 echo "  (LDAP + bindCredential Keycloak + .env) sans recréer les volumes."
 echo ""
-echo "  Sinon, actions requises pour appliquer ces changements :"
+echo "  Sinon, pour appliquer ces changements à sso-lab :"
 echo ""
-echo "  1. Supprimer les volumes sso-lab (LDAP et Keycloak persist leurs mots"
-echo "     de passe dans leurs volumes au premier démarrage) :"
+echo "    bash scripts/setup2.sh --restart-sso-lab --yes"
 echo ""
-echo "       docker compose -f sso-lab/docker-compose.yml down -v"
-echo ""
-echo "  2. Relancer toutes les stacks :"
-echo ""
-echo "       bash recompose_docker.sh --force"
-echo ""
-echo "  3. Re-créer les clients Keycloak (nouveau mot de passe admin) :"
-echo ""
-echo "       ./create-app-client.sh infra            --port 5050 --redirect-path /oauth2/authorize"
-echo "       ./create-app-client.sh spring-app       --port 8082"
-echo "       ./create-app-client.sh lab-admin        --port 4201"
+echo "  (supprime les volumes d'identité — annuaire LDAP et realm Keycloak —,"
+echo "   régénère ces secrets et recrée realm, fédération LDAP et clients ;"
+echo "   les certificats de Caddy et les bases PostgreSQL sont conservés.)"
 echo "═══════════════════════════════════════════════════════════════════"

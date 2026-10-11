@@ -36,6 +36,9 @@ Ce projet tourne dans un lab partagé et exposé sur Internet. Ces règles ne so
   Ne les change pas ; tu n'as accès à aucune autre.
 - **Interface : identité « Foyer ».** Aucune couleur en dur (tokens CSS de `src/styles.scss`),
   navigation verticale, rupture à 900 px, polices embarquées, cibles tactiles de 44 px minimum.
+- **Pour envoyer un email : `send_mail(...)` de Django, rien d'autre.** Le compte SMTP se règle
+  dans lab-admin (carte « Email » du projet), jamais dans le dépôt ni dans `settings.py`. Sans
+  compte rattaché, les emails s'affichent dans le journal du conteneur.
 - **Aucun secret dans le dépôt.** `.env` et `.keycloak-client-opts` sont ignorés par git et
   appartiennent au lab : ne les ajoute jamais (`git add -f` fait refuser le déploiement). Une clé
   d'API se règle par l'outil `env_set`, pas dans le code.

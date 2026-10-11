@@ -84,10 +84,10 @@ while IFS= read -r _env_dir; do
 
   # Route vers le bon container selon l'instance déclarée par l'app (DB_HOST).
   if [[ "$host" == "postgis" ]]; then
-    container="dev-postgis"; db="${db:-gisdb}"; user="${user:-gisuser}"; admin="$GIS_ADMIN"
+    container="${GIS_CONTAINER:-dev-postgis}"; db="${db:-gisdb}"; user="${user:-gisuser}"; admin="$GIS_ADMIN"
     own_db_prefix="gis_"
   else
-    container="dev-postgres"; db="${db:-devdb}"; user="${user:-devuser}"; admin="$PG_ADMIN"
+    container="${PG_CONTAINER:-dev-postgres}"; db="${db:-devdb}"; user="${user:-devuser}"; admin="$PG_ADMIN"
     own_db_prefix="dev_"
   fi
 

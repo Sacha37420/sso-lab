@@ -58,7 +58,9 @@ export class AppComponent {
       this.mobileOpen.set(false);
       this.mobileClosing.set(false);
       document.body.style.overflow = '';
-      this.burgerBtnRef?.nativeElement.focus();
+      // setTimeout : .shell est encore inerte à cet instant (voir app.html) — sans lui le focus
+      // n'est pas rendu au bouton du menu.
+      setTimeout(() => this.burgerBtnRef?.nativeElement.focus());
     }, reduced ? 0 : MOBILE_CLOSE_ANIM_MS);
   }
 

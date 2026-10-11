@@ -435,6 +435,18 @@ _render_env_content() {
     echo "# ── Reverse proxy (Caddy) ────────────────────────────────────────"
     echo "SCRIPT_NAME=${script_name}"
     echo ""
+    # Email (contrat v9, I10) : déclarées VIDES. Le compte SMTP se rattache dans
+    # lab-admin, qui les remplit par scripts/app-smtp.sh ; vides, Django affiche
+    # les emails dans le journal du conteneur.
+    echo "# ── Email (SMTP) ─────────────────────────────────────────────────"
+    echo "EMAIL_HOST="
+    echo "EMAIL_PORT="
+    echo "EMAIL_HOST_USER="
+    echo "EMAIL_HOST_PASSWORD="
+    echo "EMAIL_USE_TLS="
+    echo "EMAIL_USE_SSL="
+    echo "DEFAULT_FROM_EMAIL="
+    echo ""
   fi
   echo "# ── SSO Keycloak ─────────────────────────────────────────────────"
   echo "KEYCLOAK_CLIENT_ID=${client_id}"

@@ -134,7 +134,13 @@ trap cleanup EXIT
 
 # Fichier d'environnement du conteneur de test : le .env de l'app, puis nos
 # surcharges (docker prend la DERNIÈRE occurrence d'une clé).
-grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$APP_DIR/.env" > "$TMP/env" 2>/dev/null || true
+# `docker run --env-file` ne connaît PAS les guillemets (contrairement à
+# docker compose) : une valeur écrite 'ainsi' ou "ainsi" par app-smtp.sh
+# arriverait avec ses guillemets. Les clés d'email sont donc écartées — le
+# lanceur de tests de Django remplace de toute façon le backend d'email par une
+# boîte en mémoire, aucun test n'envoie de vrai message.
+grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$APP_DIR/.env" 2>/dev/null \
+  | grep -vE '^(EMAIL_[A-Z_]+|DEFAULT_FROM_EMAIL|LAB_SMTP_PROFILE)=' > "$TMP/env" || true
 
 if [[ "$DB_USER" =~ ^dev_[a-z][a-z0-9]{1,30}$ && -n "$DB_NAME" ]]; then
   TEST_ROLE="lab_test_$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 12 || true)"
