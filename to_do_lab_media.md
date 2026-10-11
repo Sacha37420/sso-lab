@@ -1,6 +1,12 @@
 # To-do — migrer MediaMTX vers une brique commune du lab (`lab-media`)
 
-> **Statut : non commencé.** Décision du 2026-10-04 : `peripheriques` est livrée avec MediaMTX
+> **Statut au 2026-10-11 : brique construite et prouvée sur sources synthétiques (`lab-media/`, 99
+> contrôles — `bash lab-media/verify.sh`), non déployée. Elle vit dans `lab-media/` à la racine, pas dans
+> `infra/` (toucher au compose d'`infra` recrée les conteneurs PostgreSQL). Contrat :
+> `chantiers/lab-media/CONTRAT.md`. Reste : adaptation de `peripheriques` (phase B), puis la
+> bascule de la caméra (`lab-media/BASCULE.md`), à faire avec le propriétaire.**
+>
+> *(ancien statut)* **non commencé.** Décision du 2026-10-04 : `peripheriques` est livrée avec MediaMTX
 > **privé à l'app** (`peripheriques/media/`). Ce fichier décrit la migration à faire ensuite pour
 > en faire une base commune à tous les sous-modules, au même titre que `postgres` (données
 > structurées) et `storage` (fichiers utilisateur).

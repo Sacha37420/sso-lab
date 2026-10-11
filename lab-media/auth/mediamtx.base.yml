@@ -1,0 +1,53 @@
+# MediaMTX — brique commune « lab-media » (contrat chantiers/lab-media, I1 à I5).
+# Version épinglée : 1.21.1 (voir mediamtx/Dockerfile).
+#
+# Ce fichier est la BASE FIXE. lab-media-auth lui ajoute, à son démarrage, l'authentification
+# (authMethod: http, authHTTPExclude vide — toujours) et la section `paths:` dérivée du
+# registre, puis écrit le résultat dans le volume de configuration que MediaMTX recharge à
+# chaud. Ne JAMAIS écrire ici ni `paths:` ni clé d'authentification (le générateur refuse).
+# Les valeurs qui dépendent de .env (adresse du hook, adresses d'écoute de l'API et de la
+# relecture, ICE) sont posées par mediamtx/entrypoint.sh en surcharges MTX_*.
+
+logLevel: info
+logDestinations: [stdout]
+
+readTimeout: 10s
+writeTimeout: 10s
+
+###############################################################################
+# API et relecture : réservées à lab-media-auth. Elles n'écoutent que sur l'adresse du
+# réseau interne de lab-media (MTX_APIADDRESS / MTX_PLAYBACKADDRESS, posées par l'entrypoint) :
+# depuis dev-net ou sso-net, ces ports ne sont pas ouverts du tout.
+api: yes
+playback: yes
+metrics: no
+pprof: no
+
+###############################################################################
+# RTSP : publication (capture, apps) et lecture par des apps. TCP seul : aucun port UDP.
+rtsp: yes
+rtspTransports: [tcp]
+rtspAddress: :8554
+rtmp: no
+srt: no
+moq: no
+
+###############################################################################
+# HLS — derrière Caddy (/lab-media-hls/*). Le hook n'est appelé qu'à l'OUVERTURE d'une
+# session (constaté sur 1.21.1) : une révocation passe par l'expulsion (API.md).
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsAlwaysRemux: no
+
+###############################################################################
+# WebRTC / WHEP — derrière Caddy (/lab-media-webrtc/*), ICE en direct sur MEDIA_WEBRTC_PORT.
+webrtc: yes
+webrtcAddress: :8889
+webrtcIPsFromInterfaces: no
+
+###############################################################################
+pathDefaults:
+  source: publisher
+  overridePublisher: no
+  record: no

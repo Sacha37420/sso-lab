@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "_doc": "Registre de la pile de test de verify.sh : deux apps fictives aux préfixes distincts.",
+  "apps": {
+    "appa": {
+      "prefixes": ["appa", "webcam"],
+      "read_hook": "http://lmt-appa:8000/hook",
+      "publish": true
+    },
+    "appb": {
+      "prefixes": ["appb"],
+      "read_hook": "http://lmt-appb:8000/hook",
+      "publish": true
+    }
+  },
+  "sources": {
+    "capture": {"paths": ["webcam/av", "webcam/video", "webcam/audio"]}
+  },
+  "paths": {
+    "appa/cam": {"record": true, "segment": "1h", "delete_after": "7d"},
+    "appa/short": {"record": true, "segment": "5s", "delete_after": "20s"},
+    "appb/cam": {"record": true},
+    "appb/pulled": {"source_env": "LAB_MEDIA_PULL_TEST"},
+    "webcam/av": {"record": true, "segment": "1h", "delete_after": "7d"},
+    "webcam/video": {},
+    "webcam/audio": {}
+  }
+}

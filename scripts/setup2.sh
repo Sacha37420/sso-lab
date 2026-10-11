@@ -463,6 +463,11 @@ else
       # runner/ n'est pas une app (pas de client Keycloak, pas de schéma DB) —
       # démarré séparément à l'étape 3bis, comme infra/sso-lab.
       [[ "$_name" == "infra" || "$_name" == "sso-lab" || "$_name" == "runner" ]] && continue
+      # Marqueur `.no-autodeploy` : une unité qui ne doit pas être (re)déployée par le
+      # mode « tout le lab » — par exemple lab-media tant que sa bascule n'est pas faite
+      # (elle prendrait le port ICE 8189, tenu par une autre unité). `setup2.sh <unité>`
+      # reste possible, explicitement.
+      [[ -e "$_dir/.no-autodeploy" ]] && { echo "  ■ $_name ignorée (.no-autodeploy)"; continue; }
       DISPATCH_APPS+=("$_name")
     done < <(registry_dirs_with docker-compose.yml | sed 's|$|/docker-compose.yml|')
 

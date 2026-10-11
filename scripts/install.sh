@@ -497,6 +497,7 @@ else
   # Ordre de scripts/app-priorities.conf, puis alphabétique.
   while IFS= read -r _u; do
     case "$_u" in sso-lab|infra|runner|storage|oauth-hub|lab-admin|lab-mcp) continue ;; esac
+    [[ -e "$(registry_app_dir "$_u" 2>/dev/null || echo "$_u")/.no-autodeploy" || -e "$_u/.no-autodeploy" ]] && { note "$_u ignorée (.no-autodeploy)"; continue; }
     deploy_unit "$_u"
   done < <(while IFS= read -r _dir; do
              _n="$(basename "$_dir")"

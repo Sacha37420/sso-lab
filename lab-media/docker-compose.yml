@@ -1,0 +1,156 @@
+# lab-media — la brique commune des flux audio/vidéo du lab (contrat chantiers/lab-media).
+#
+# Service partagé, à la racine du dépôt comme lab-mcp/ et runner/ : pas une app, pas un
+# sous-module. MediaMTX n'y prend AUCUNE décision d'accès : tout passe par lab-media-auth, qui
+# tranche lui-même la publication et l'accès à l'API, et relaie chaque lecture à l'app
+# propriétaire du préfixe. Mode d'emploi : README.md ; API des apps : API.md.
+#
+# Trois réseaux, et leur rôle est la sécurité de la brique — ne pas en ajouter :
+#   internal  (créé ici, `internal: true`)  MediaMTX ↔ lab-media-auth ↔ capture. L'API (9997)
+#             et la relecture (9996) de MediaMTX, ainsi que le hook (9000) de lab-media-auth,
+#             n'écoutent QUE sur ce réseau.
+#   dev-net   les apps : RTSP 8554 de MediaMTX, API de contrôle 9100 de lab-media-auth.
+#   sso-net   Caddy : WHEP 8889 et HLS 8888 de MediaMTX. lab-media-auth n'y est PAS.
+#
+# Les variables LAB_MEDIA_PREFIX, LAB_MEDIA_*_NET, LAB_MEDIA_RECORDINGS_VOLUME,
+# LAB_MEDIA_CADDY_LABEL, LAB_MEDIA_ICE_BIND, LAB_MEDIA_REGISTRY et LAB_MEDIA_ENV_FILE n'existent
+# que pour verify.sh (pile de test isolée, préfixe lmt-). En service, ne PAS les définir.
+
+name: lab-media
+
+volumes:
+  # Enregistrements — external : survit à tout `down --volumes`. Créé une fois à la main
+  # (`docker volume create lab-media-recordings`), voir README.md.
+  recordings:
+    external: true
+    name: ${LAB_MEDIA_RECORDINGS_VOLUME:-lab-media-recordings}
+  # mediamtx.yml dérivé du registre, écrit par lab-media-auth, lu par MediaMTX. Régénéré à
+  # chaque démarrage de lab-media-auth : rien à sauvegarder.
+  config:
+
+networks:
+  internal:
+    internal: true
+  sso-net:
+    external: true
+    name: ${LAB_MEDIA_SSO_NET:-sso-lab_sso-net}
+  dev-net:
+    external: true
+    name: ${LAB_MEDIA_DEV_NET:-dev-net}
+
+services:
+
+  # ── Authentification de MediaMTX + API de contrôle des apps ────────────────
+  auth:
+    build: ./auth
+    container_name: ${LAB_MEDIA_PREFIX:-lab-media}-auth
+    restart: unless-stopped
+    # Les secrets des apps portent des noms dérivés du registre (LAB_MEDIA_APP_<APP>_…) :
+    # leur liste dépend du registre, d'où l'env_file entier. Ce conteneur n'a ni socket Docker,
+    # ni volume d'enregistrements, ni périphérique.
+    env_file: ${LAB_MEDIA_ENV_FILE:-.env}
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges"]
+    volumes:
+      - ${LAB_MEDIA_REGISTRY:-${HOST_DEV_ROOT:?HOST_DEV_ROOT manquant dans lab-media/.env (propagé par reset_url.sh)}/lab-media/registry.json}:/etc/lab-media/registry.json:ro
+      - config:/config
+    networks:
+      internal:
+        aliases: [lab-media-hook]      # le hook n'écoute que sur cette adresse
+      dev-net: {}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9100/healthz', timeout=2).status == 200 else 1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+      start_interval: 1s
+
+  # ── MediaMTX ───────────────────────────────────────────────────────────────
+  media:
+    build: ./mediamtx
+    container_name: ${LAB_MEDIA_PREFIX:-lab-media}
+    restart: unless-stopped
+    # Dépendance stricte au DÉMARRAGE seulement (le fichier de configuration vient de
+    # lab-media-auth). Un redémarrage de lab-media-auth ne redémarre PAS MediaMTX : les
+    # publications et l'enregistrement en cours lui survivent (mesuré, voir README.md).
+    depends_on:
+      auth:
+        condition: service_healthy
+    environment:
+      LAB_MEDIA_HOOK_KEY: "${LAB_MEDIA_HOOK_KEY:?LAB_MEDIA_HOOK_KEY manquant dans lab-media/.env}"
+      MEDIA_WEBRTC_PORT: "${MEDIA_WEBRTC_PORT:-8189}"
+      MEDIA_WEBRTC_HOSTS: "${MEDIA_WEBRTC_HOSTS:-}"
+      MEDIA_WEBRTC_IPS_FROM_INTERFACES: "${MEDIA_WEBRTC_IPS_FROM_INTERFACES:-no}"
+    # root SANS capacités : il ne lit donc pas un fichier d'un autre compte. Le mediamtx.yml
+    # (mode 0640, compte 10001 de lab-media-auth) lui est ouvert par ce groupe.
+    cap_drop: [ALL]
+    group_add: ["10001"]
+    security_opt: ["no-new-privileges"]
+    volumes:
+      - config:/config:ro
+      - recordings:/recordings
+    ports:
+      # ICE WebRTC uniquement. API (9997), relecture (9996), RTSP (8554), HLS et WHEP ne sont
+      # JAMAIS publiés sur l'hôte.
+      - "${LAB_MEDIA_ICE_BIND:-0.0.0.0}:${MEDIA_WEBRTC_PORT:-8189}:${MEDIA_WEBRTC_PORT:-8189}/udp"
+      - "${LAB_MEDIA_ICE_BIND:-0.0.0.0}:${MEDIA_WEBRTC_PORT:-8189}:${MEDIA_WEBRTC_PORT:-8189}/tcp"
+    networks:
+      internal:
+        aliases: [lab-media-ctl, lab-media-rtsp]
+      dev-net: {}
+      sso-net: {}
+    labels:
+      # Forme liste : le NOM du label est paramétrable (verify.sh le détourne pour que le
+      # Caddy du lab ne voie jamais la pile de test).
+      - "${LAB_MEDIA_CADDY_LABEL:-caddy}=${DOMAIN:?DOMAIN manquant dans lab-media/.env (propagé par reset_url.sh)}"
+      - "${LAB_MEDIA_CADDY_LABEL:-caddy}.0_handle_path=/lab-media-webrtc/*"
+      - "${LAB_MEDIA_CADDY_LABEL:-caddy}.0_handle_path.reverse_proxy={{upstreams 8889}}"
+      # MediaMTX renvoie des Location en chemin absolu sans le préfixe retiré par handle_path
+      # (session WHEP ; 302 « ?cookieCheck=1 » de HLS sur 1.21.1, qui cassait tout le repli HLS).
+      - "${LAB_MEDIA_CADDY_LABEL:-caddy}.0_handle_path.reverse_proxy.header_down=Location ^/ /lab-media-webrtc/"
+      - "${LAB_MEDIA_CADDY_LABEL:-caddy}.1_handle_path=/lab-media-hls/*"
+      - "${LAB_MEDIA_CADDY_LABEL:-caddy}.1_handle_path.reverse_proxy={{upstreams 8888}}"
+      - "${LAB_MEDIA_CADDY_LABEL:-caddy}.1_handle_path.reverse_proxy.header_down=Location ^/ /lab-media-hls/"
+
+  # ── Source interne « périphérique de l'hôte » (webcam + micro) ─────────────
+  # Profil `capture` : la brique tourne sans aucun matériel ; ce service n'est lancé que si
+  # COMPOSE_PROFILES=capture est dans .env. SEUL conteneur du lab qui ouvre la webcam et le
+  # micro (un V4L2 ne s'ouvre qu'une fois). Réseau interne seulement : il ne joint ni les
+  # apps ni Caddy, il publie en RTSP vers MediaMTX avec ses propres identifiants.
+  capture:
+    profiles: ["capture"]
+    build: ./mediamtx
+    container_name: ${LAB_MEDIA_PREFIX:-lab-media}-capture
+    restart: unless-stopped
+    init: true
+    entrypoint: ["/bin/sh", "/opt/lab-media/capture.sh"]
+    depends_on:
+      media:
+        condition: service_started
+    environment:
+      LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER: "${LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER:-}"
+      LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD: "${LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD:-}"
+      MEDIA_DEVICE_VIDEO: "${MEDIA_DEVICE_VIDEO:-}"
+      MEDIA_DEVICE_AUDIO: "${MEDIA_DEVICE_AUDIO:-}"
+      MEDIA_CAPTURE_MODE: "${MEDIA_CAPTURE_MODE:-device}"
+    # AUCUN `devices:` : il fige major:minor à la création du conteneur, et une ré-énumération
+    # USB a déjà fait pointer la caméra sur son nœud métadonnées (« Not a tty »). Vue live de
+    # /dev + autorisation par majeur. Le `:ro` ne protège PAS les nœuds caractère : seules ces
+    # règles cgroup le font — ne jamais les élargir ni passer en privileged.
+    device_cgroup_rules:
+      - "c 81:* rmw"    # video4linux
+      - "c 116:* rmw"   # ALSA
+    group_add:
+      - "44"   # video (hôte)
+      - "29"   # audio (hôte)
+    # Options de privilèges volontairement IDENTIQUES à celles de peripheriques-media, seules
+    # éprouvées avec la vraie caméra : ce service n'a pas pu être lancé sur le matériel avant
+    # la bascule. Ne durcir (cap_drop…) qu'après un essai réel.
+    volumes:
+      - /dev:/hostdev:ro          # le lien by-id suit les ré-énumérations
+      - /dev/snd:/dev/snd         # ALSA ne cherche que /dev/snd ; bind = vue live
+    networks:
+      internal: {}

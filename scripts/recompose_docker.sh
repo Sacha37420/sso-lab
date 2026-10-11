@@ -41,6 +41,8 @@ ORDERED_DIRS=("$SCRIPT_DIR/sso-lab" "$SCRIPT_DIR/infra")
 while IFS= read -r compose; do
   dir="$(dirname "$compose")"
   [[ "$dir" == "$SCRIPT_DIR/sso-lab" || "$dir" == "$SCRIPT_DIR/infra" ]] && continue
+  # `.no-autodeploy` : jamais recomposée par le mode « toutes les stacks » (cf. setup2.sh).
+  [[ -e "$dir/.no-autodeploy" && -z "${APP_NAME:-}" ]] && continue
   ORDERED_DIRS+=("$dir")
 done < <(registry_dirs_with docker-compose.yml | sed 's|$|/docker-compose.yml|')
 
