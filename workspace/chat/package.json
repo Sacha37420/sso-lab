@@ -1,0 +1,12 @@
+{
+  "name": "lab-chat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Service de conversation de l'espace de travail du lab (pont page ⇄ agent ACP)",
+  "license": "MIT",
+  "main": "server.js",
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.81.2",
+    "ws": "8.21.3"
+  }
+}

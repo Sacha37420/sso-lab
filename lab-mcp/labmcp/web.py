@@ -144,7 +144,7 @@ def routes(engine: Engine) -> list[Route]:
         (enabled,) = need(await body(r), "enabled")
         return await call("auto_deploy", c, app=app(r), enabled=enabled)
 
-    async def ws_open(r, c): return await call("workspace_open", c, app=app(r))
+    async def ws_open(r, c): return await call("workspace_open", c, app=app(r), target=(await body(r)).get("target"))
     async def ws_close(r, c): return await call("workspace_close", c, app=app(r))
     async def job(r, c): return await call("job", c, job_id=r.path_params["job_id"], tail=q(r, "tail", 200))
 

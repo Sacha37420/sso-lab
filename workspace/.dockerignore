@@ -6,3 +6,10 @@
 !config/**
 !lib/
 !lib/**
+!chat/
+!chat/package.json
+!chat/package-lock.json
+!chat/server.js
+!chat/public/
+!chat/public/**
+chat/node_modules

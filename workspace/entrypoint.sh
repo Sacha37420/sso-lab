@@ -2,7 +2,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # lab-entrypoint — entrée de l'image lab-workspace (contrat multi-dev, I7).
 #
-# Sans argument : prépare la maison du dev puis lance code-server.
+# Sans argument : prépare la maison du dev puis lance code-server (:8080) et le
+#                 service de conversation (:8090), indépendants l'un de l'autre.
 # Avec arguments : exécute la commande telle quelle, SANS rien préparer
 #                  (diagnostic : `docker run --rm lab-workspace claude --version`).
 #
@@ -161,22 +162,79 @@ if [[ ! -e "$EXT_DIR" ]]; then
   fi
 fi
 
-[[ $echec -eq 0 ]] || err "préparation incomplète (voir ci-dessus) — l'éditeur démarre quand même"
+[[ $echec -eq 0 ]] || err "préparation incomplète (voir ci-dessus) — l'éditeur et la conversation démarrent quand même"
 
-# ── 6. Éditeur ───────────────────────────────────────────────────────────────
+# ── 6. Éditeur et service de conversation ────────────────────────────────────
+# Deux services, côte à côte, sous le même utilisateur et avec le même
+# environnement (celui que voit le terminal de l'éditeur) :
+#   :8080  code-server              à servir sous /ws/<uid>/
+#   :8090  service de conversation  à servir sous /ws/<uid>/_chat/   (chat/server.js)
+# Ils sont indépendants : si l'un ne démarre pas ou tombe, l'autre continue, et
+# celui qui est tombé est relancé (avec un délai croissant s'il retombe aussitôt).
+# Le conteneur ne s'arrête que sur SIGTERM/SIGINT (c'est le moteur qui ferme un espace).
+#
 # code-server n'a pas d'option de préfixe : toutes ses URL sont RELATIVES. Il
 # est donc servi à la racine, et c'est le proxy qui RETIRE /ws/<uid> (voir
 # README, « Ce que le proxy doit faire »). --abs-proxy-base-path ne concerne
-# que la redirection de ports /absproxy/<port>/.
+# que la redirection de ports /absproxy/<port>/. Le service de conversation suit
+# la même règle : il sert à la racine et n'émet que des URL relatives.
 cd "$WORK" || die "impossible d'entrer dans $WORK"
+
+lance_editeur() {
+  # --ignore-last-opened : la maison du dev (~/.local/share/code-server) est
+  # commune à tous ses projets, et code-server y retient le dernier dossier
+  # ouvert — qu'il préfère au dossier donné ici. Or l'espace ne monte que le
+  # projet en cours : sans cette option, ouvrir un second projet affichait
+  # « Workspace does not exist » sur le dossier du précédent.
+  code-server \
+    --config "$LAB_DIR/code-server.yaml" \
+    --abs-proxy-base-path "/ws/$LAB_UID" \
+    --ignore-last-opened \
+    "$WORK" &
+  PID_EDITEUR=$!; DEBUT_EDITEUR=$SECONDS
+}
+lance_chat() {
+  node "$LAB_DIR/chat/server.js" &
+  PID_CHAT=$!; DEBUT_CHAT=$SECONDS
+}
+
+ARRET=0; PID_EDITEUR=; PID_CHAT=; DELAI_EDITEUR=2; DELAI_CHAT=2; A_EDITEUR=0; A_CHAT=0
+arrete() {
+  ARRET=1
+  # Tous les enfants : les deux services, et le `sleep` de la boucle de surveillance.
+  # shellcheck disable=SC2046
+  kill -TERM $(jobs -p) 2>/dev/null
+}
+trap arrete TERM INT
+
 log "code-server sur :8080, dossier $WORK, à servir sous /ws/$LAB_UID/"
-# --ignore-last-opened : la maison du dev (~/.local/share/code-server) est
-# commune à tous ses projets, et code-server y retient le dernier dossier
-# ouvert — qu'il préfère au dossier donné ici. Or l'espace ne monte que le
-# projet en cours : sans cette option, ouvrir un second projet affichait
-# « Workspace does not exist » sur le dossier du précédent.
-exec code-server \
-  --config "$LAB_DIR/code-server.yaml" \
-  --abs-proxy-base-path "/ws/$LAB_UID" \
-  --ignore-last-opened \
-  "$WORK"
+lance_editeur
+log "service de conversation sur :8090, à servir sous /ws/$LAB_UID/_chat/"
+lance_chat
+
+# delai <secondes de vie> <délai courant> → délai à attendre avant de relancer
+# (doublé jusqu'à 60 s tant que le service retombe en moins de 30 s, 2 s sinon).
+delai() { if (( $1 >= 30 )); then echo 2; else echo $(( $2 < 60 ? $2 * 2 : 60 )); fi; }
+
+# Surveillance par scrutation (une fois par seconde), et non par `wait -n` : un service qui
+# tombe pendant qu'on attend l'autre serait récolté par bash sans que `wait -n` le rende
+# ensuite — il ne serait jamais relancé (constaté). `kill -0` ne se trompe pas : bash récolte
+# ses enfants dès leur fin, le PID disparaît.
+while (( ! ARRET )); do
+  if [[ -n "$PID_EDITEUR" ]] && ! kill -0 "$PID_EDITEUR" 2>/dev/null; then
+    wait "$PID_EDITEUR" 2>/dev/null; rc=$?
+    DELAI_EDITEUR=$(delai $(( SECONDS - DEBUT_EDITEUR )) "$DELAI_EDITEUR"); A_EDITEUR=$(( SECONDS + DELAI_EDITEUR )); PID_EDITEUR=
+    (( ARRET )) || warn "code-server s'est arrêté (code $rc) — relance dans ${DELAI_EDITEUR} s ; le service de conversation continue"
+  fi
+  if [[ -n "$PID_CHAT" ]] && ! kill -0 "$PID_CHAT" 2>/dev/null; then
+    wait "$PID_CHAT" 2>/dev/null; rc=$?
+    DELAI_CHAT=$(delai $(( SECONDS - DEBUT_CHAT )) "$DELAI_CHAT"); A_CHAT=$(( SECONDS + DELAI_CHAT )); PID_CHAT=
+    (( ARRET )) || warn "le service de conversation s'est arrêté (code $rc) — relance dans ${DELAI_CHAT} s ; l'éditeur continue"
+  fi
+  (( ARRET )) && break
+  [[ -z "$PID_EDITEUR" ]] && (( SECONDS >= A_EDITEUR )) && lance_editeur
+  [[ -z "$PID_CHAT" ]] && (( SECONDS >= A_CHAT )) && lance_chat
+  sleep 1 & wait $! 2>/dev/null
+done
+wait
+exit 0

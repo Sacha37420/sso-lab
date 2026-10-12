@@ -11,6 +11,10 @@
 #   2. si oui, relayer vers ws-<uid>:8080 (préfixe de nom {$LAB_WS_PREFIX}, « ws- » en service),
 #      /ws/<uid> retiré du chemin.
 #
+# Un espace porte DEUX services (chantier espace-chat) : l'éditeur (:8080) et l'écran de
+# conversation (:8090), servi sous /ws/<uid>/_chat/. Même question posée au moteur (même sorte
+# « ws », même cookie, même réponse) : seuls changent le préfixe retiré et le port de destination.
+#
 # L'uid visé est capturé UNE fois, par l'expression ci-dessous, et sert à la
 # fois à la question posée au moteur (en-tête X-Lab-Ws-Uid) et au choix de la
 # destination : les deux ne peuvent pas diverger sur une URL tordue.
@@ -26,6 +30,37 @@
 	# /ws/<uid> sans barre finale : l'éditeur n'utilise que des URL relatives.
 	@bare path_regexp bare ^/ws/([a-z][a-z0-9]{1,30})$
 	redir @bare {path}/ 308
+
+	# ── Écran de conversation : /ws/<uid>/_chat/… → ws-<uid>:8090 ──
+	# Sans barre finale : redirigé, PARAMÈTRES CONSERVÉS (l'URL d'ouverture porte `agent` et le
+	# ticket ; `{?query}` vaut « ?… » ou rien).
+	@chatbare path_regexp chatbare ^/ws/([a-z][a-z0-9]{1,30})/_chat$
+	redir @chatbare {path}/{?query} 308
+
+	# AVANT le bloc de l'éditeur, dont l'expression couvre aussi ces chemins : les `handle` à
+	# expression s'excluent dans l'ordre où ils sont écrits. Un chemin que ce bloc ne reconnaît pas
+	# (« /_chatx/ », « /_chat » encodé autrement…) tombe dans celui de l'éditeur — même contrôle,
+	# même espace : aucune forme d'URL n'échappe à la question posée au moteur.
+	@chat path_regexp chat ^/ws/([a-z][a-z0-9]{1,30})/_chat/
+	handle @chat {
+		route {
+			# Le MÊME contrôle que l'éditeur, mot pour mot : sorte « ws », uid capturé une fois.
+			forward_auth {$LAB_ENGINE_ADDR:lab-mcp:8000} {
+				uri /mcp/api/ws-auth
+				header_up X-Lab-Ws-Uid {re.chat.1}
+				header_up X-Lab-Ws-Kind ws
+			}
+			# Le service de conversation écoute à la racine et n'émet que des URL relatives.
+			uri strip_prefix /ws/{re.chat.1}/_chat
+			# Hôte public inchangé (le service refuse un WebSocket dont l'Origin n'est pas cet hôte),
+			# aucun délai sur les connexions « upgrade », keepalive off : comme pour l'éditeur.
+			reverse_proxy {$LAB_WS_PREFIX:ws-}{re.chat.1}:8090 {
+				transport http {
+					keepalive off
+				}
+			}
+		}
+	}
 
 	@ws path_regexp ws ^/ws/([a-z][a-z0-9]{1,30})/
 	handle @ws {

@@ -129,7 +129,7 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
 |---|---|---|
 | **Moteur** | `lab-mcp/` (racine, pas un sous-module), conteneurs `lab-mcp` + `lab-ws-gateway` | **Seul composant privilégié** (monte `docker.sock`). Deux entrées sur les mêmes fonctions : `/mcp` pour une IA, `/mcp/api/…` pour l'interface. Description faisant foi : `lab-mcp/API.md` |
 | **Interface** | `lab-admin` | « Mes projets » et page projet : tout se fait **sans IA**. N'a ni socket Docker ni script ; son frontend appelle le moteur |
-| **Espace de travail** | `workspace/` (image `lab-workspace`), conteneur `ws-<uid>` | Un VS Code par projet, à la demande : code-server, Claude Code, Mistral Vibe. Pas de Docker, pas de `sudo`, ni `dev-net` ni `sso-net` |
+| **Espace de travail** | `workspace/` (image `lab-workspace`), conteneur `ws-<uid>` | Un VS Code par projet, à la demande : code-server (`:8080`), Claude Code, Mistral Vibe ; et un écran de conversation pour téléphone (`:8090`, `workspace/chat/`, servi sous `/ws/<uid>/_chat/`) qui relaie un agent ACP (`claude-agent-acp`, `vibe-acp`). Pas de Docker, pas de `sudo`, ni `dev-net` ni `sso-net` |
 | **pgAdmin par dev** | conteneur `pg-<uid>`, relais `lab-pg-relay` (`lab-mcp/pg-relay/`) | Un pgAdmin à la demande vers la **seule** base du dev, sans mot de passe enregistré, sur un réseau interne qui ne joint que le relais PostgreSQL |
 | **Comptes d'envoi d'email** | `lab-mcp/labmcp/smtp.py`, `scripts/app-smtp.sh`, `scripts/app-restart.sh` | Un dev définit ses comptes SMTP ; le lab pose les variables `EMAIL_*` de Django dans l'app. **Pas de service d'envoi** : l'app parle à son fournisseur |
 | **Scripts** | `scripts/app-*.sh`, `validate-app.sh`, `check-app-name.sh`, `dev-db.sh`, `lab-lock.sh`, `lib/registry.sh` | Les seules commandes que le moteur exécute |
@@ -193,6 +193,20 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
   toucher aucun autre trafic. Elles disparaissent au redémarrage de l'hôte et sont reposées par
   le moteur. Ne jamais y ajouter une règle sans ce filtre d'interface. `sshd` et la publication
   des ports ne sont pas modifiés : le superutilisateur garde son VS Code réel par SSH.
+
+- **L'écran de conversation n'a aucune porte à lui** (2026-10-12) : `/ws/<uid>/_chat/…` passe
+  par le même `forward_auth` que l'éditeur (sorte `ws`, cookie limité à `/ws/<uid>/`) et la
+  décision du moteur ne dépend jamais du chemin. Dans `lab-mcp/gateway/Caddyfile`, le bloc `@chat`
+  reste avant `@ws`. Le service (`:8090`) n'authentifie rien : ne jamais le joindre autrement que
+  par la passerelle. Il tourne dans le conteneur d'espace existant — aucun conteneur, réseau ni
+  montage en plus. Ouverture : `POST …/workspace` avec `{"target": "chat-claude" | "chat-vibe"}`.
+  Essais rejouables sans rien toucher en service : `bash lab-mcp/tests/chat/run.sh`,
+  `WS_IMAGE=lab-workspace:latest bash workspace/verify.sh`.
+- **Dans une conversation, l'assistant demande avant d'agir** : le service impose le mode « demander »
+  à chaque ouverture et reprise (Vibe démarre de lui-même en `accept-edits`, y compris en ACP).
+  « Tout accepter » est un réglage par conversation, jamais actif par défaut ni mémorisé.
+- **Inactivité d'un espace** : trois signes — requête par la passerelle, battement de code-server,
+  `last_activity_ms` du service de conversation (ignoré s'il est absent, en erreur ou dans le futur).
 
 ### Règles de développement imposées à tout projet (IA comprises)
 
@@ -284,6 +298,16 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
 - **Le noyau rend le commentaire d'une règle iptables entre guillemets** : un script qui cherche
   ses propres règles par leur commentaire sans en tenir compte les pose en double et ne sait plus
   les retirer (constaté sur des règles de test).
+- **`lab-mcp/gateway/Caddyfile` est monté en fichier dans `lab-ws-gateway`** : une modification
+  n'est lue qu'au redémarrage du conteneur (`admin off`), mais elle partira à ce redémarrage,
+  voulu ou non.
+- **Un espace ouvert avant une mise à jour de l'image garde l'ancienne** : y ouvrir une conversation
+  attend 25 s puis donne un 502. Fermer l'espace et le rouvrir.
+- **`wait -n` de bash perd un enfant mort pendant qu'on attendait autre chose** : l'entrée de
+  l'espace surveille ses deux services par scrutation. Elle ne fait plus `exec code-server` : le
+  conteneur ne s'arrête plus à la mort de l'éditeur, il le relance.
+- **`npm install` résout les dépendances transitives au jour du build** : pour tenir « publié
+  depuis plus de deux semaines », verrou généré avec `--before=<date>` et installation par `npm ci`.
 - **L'image pgAdmin ne démarre pas sous `cap_drop ALL` seul** (son Python porte une capacité de
   fichier) : il lui faut `NET_BIND_SERVICE`. Démarrage : 35 à 55 s.
 

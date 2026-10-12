@@ -17,6 +17,12 @@ requête échange contre un COOKIE lié à (personne, espace visé) et limité a
 chemin `/ws/<uid>/`. La passerelle interroge `authorize()` à CHAQUE requête,
 demande d'« upgrade » WebSocket comprise.
 
+DEUX SERVICES DANS UN ESPACE (chantier espace-chat) : l'éditeur (`:8080`, servi
+sous `/ws/<uid>/`) et le service de conversation (`:8090`, servi sous
+`/ws/<uid>/_chat/`). Même conteneur, même réseau, même ticket, même cookie,
+même décision : la cible (`target`) ne choisit que l'URL rendue et le service
+dont on attend qu'il réponde. Ouvrir l'un ne ferme pas l'autre.
+
 Tout l'état est en mémoire, et seuls des condensats (SHA-256) des jetons,
 tickets et cookies sont gardés. Un redémarrage du moteur invalide donc tous les
 jetons d'espace : `reconcile()` ferme alors les espaces restés ouverts plutôt
@@ -26,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import secrets
 import time
@@ -41,6 +48,16 @@ from .config import Config
 from .errors import LabError
 
 HEARTBEAT = ".local/share/code-server/heartbeat"  # touché par code-server tant qu'une fenêtre est connectée
+
+# Cibles d'ouverture (API.md §3.6) : cible → (sous-dossier servi par la passerelle, paramètres de l'URL).
+CHAT = "_chat/"
+TARGETS: dict[str, tuple[str, dict[str, str]]] = {
+    "editor": ("", {}),
+    "chat-claude": (CHAT, {"agent": "claude"}),
+    "chat-vibe": (CHAT, {"agent": "vibe"}),
+}
+READY_TIMEOUT = 25      # attente de la cible demandée, éditeur comme conversation
+CLOCK_SLACK = 5         # un `last_activity_ms` plus loin que cela dans le futur est une erreur du service
 
 
 @dataclass
@@ -140,8 +157,10 @@ class WorkspaceManager:
 
     # ── cycle de vie ────────────────────────────────────────────────────────
     async def open(self, owner: str, app: str, viewer: str, gh_token: str,
-                   author: tuple[str, str] | None = None) -> dict:
-        """Ouvre (ou rejoint) l'espace de `owner` sur `app` ; rend l'URL à ticket."""
+                   author: tuple[str, str] | None = None, target: str = "editor") -> dict:
+        """Ouvre (ou rejoint) l'espace de `owner` sur `app` ; rend l'URL à ticket de la cible
+        demandée (éditeur ou conversation — le même espace, la même session)."""
+        sub, params = TARGETS[target]
         async with self._lock:
             await self.reconcile()
             current = self._ws.get(owner)
@@ -160,9 +179,16 @@ class WorkspaceManager:
                         open=len(self._ws), max=self.cfg.ws_max,
                     )
                 current = await self._start(owner, app, viewer, gh_token, author)
+            # La cible demandée doit répondre avant que l'URL ne parte (sinon la première page
+            # serait un 502). Espace neuf : une seule attente, celle de la cible. Espace rejoint :
+            # l'éditeur y tourne déjà (comportement inchangé) ; le service de conversation, lui,
+            # a pu ne pas avoir fini de démarrer — on l'attend dans la même limite.
+            if not reused or sub:
+                await self._wait_ready(current, sub)
             ticket = self.access.ticket("ws", viewer, owner)
             self._start_reaper()
-            return {"url": f"{self.url(owner)}?{urlencode({'ticket': ticket})}", "uid": owner, "app": app,
+            return {"url": f"{self.url(owner)}{sub}?{urlencode({**params, 'ticket': ticket})}",
+                    "uid": owner, "app": app, "target": target,
                     "reused": reused, "ticket_expires_in": TICKET_TTL, "workspace": current.view()}
 
     async def _start(self, owner: str, app: str, viewer: str, gh_token: str,
@@ -225,7 +251,6 @@ class WorkspaceManager:
                        # l'éditeur PAR la passerelle. Elle ne compte jamais comme une activité du dev.
                        probe_cookie=self.access.engine_session("ws", owner))
         self._ws[owner] = ws
-        await self._wait_ready(ws)
         return ws
 
     async def _probe(self, ws: Workspace, path: str, timeout: float = 3) -> httpx.Response | None:
@@ -236,13 +261,16 @@ class WorkspaceManager:
         except httpx.HTTPError:
             return None
 
-    async def _wait_ready(self, ws: Workspace, timeout: float = 25) -> bool:
-        """Attend que l'éditeur réponde derrière la passerelle (sinon la première page du dev
-        serait une erreur 502)."""
+    async def _wait_ready(self, ws: Workspace, sub: str = "", timeout: float = READY_TIMEOUT) -> bool:
+        """Attend que la cible réponde derrière la passerelle (sinon la première page du dev
+        serait une erreur 502) : l'éditeur (`sub` vide), ou le service de conversation
+        (`sub` = « _chat/ », dont `/healthz` rend 200 dès qu'il peut servir). Même limite pour
+        les deux. Un service qui ne répond pas à temps n'est pas une erreur d'ouverture : l'URL
+        est rendue quand même, comme pour l'éditeur."""
         deadline = time.time() + timeout
         while time.time() < deadline:
-            r = await self._probe(ws, "healthz")
-            if r is not None and r.status_code < 500:
+            r = await self._probe(ws, sub + "healthz")
+            if r is not None and (r.status_code == 200 if sub else r.status_code < 500):
                 return True
             await asyncio.sleep(0.7)
         return False
@@ -266,7 +294,9 @@ class WorkspaceManager:
         def touch() -> None:
             ws.last_activity = time.time()
 
-        return self.access.authorize("ws", target, forwarded_uri, cookie_header, allowed, touch)
+        # `landings` ne touche pas à la décision : seulement à l'adresse de retour après l'échange
+        # d'un ticket (la conversation revient sur la conversation, paramètre `agent` conservé).
+        return self.access.authorize("ws", target, forwarded_uri, cookie_header, allowed, touch, landings=(CHAT,))
 
     # ── arrêt après inactivité ──────────────────────────────────────────────
     async def _activity(self, ws: Workspace) -> float:
@@ -275,8 +305,15 @@ class WorkspaceManager:
         tant qu'une fenêtre de l'éditeur est connectée, même sans nouvelle requête HTTP — c'est lui
         qui évite de fermer un espace où quelqu'un tape. `/healthz` ne fait pas battre le cœur, et
         la passerelle ne garde aucune connexion ouverte vers l'éditeur (keepalive off) : sonder ne
-        prolonge donc pas la vie d'un espace."""
-        last = ws.last_activity
+        prolonge donc pas la vie d'un espace.
+
+        Troisième signe (chantier espace-chat) : `last_activity_ms` du service de conversation
+        (`GET :8090/activity`, par la passerelle). Une conversation ne tient qu'un WebSocket ouvert
+        — aucune requête ne passe pendant qu'un tour d'assistant dure, et code-server ne bat pas si
+        l'éditeur n'est pas ouvert : sans ce signe, l'espace serait fermé sous une conversation en
+        cours. Service absent, en erreur ou rendant n'importe quoi ⇒ IGNORÉ : ni une raison de
+        garder l'espace, ni une raison de le fermer."""
+        last = max(ws.last_activity, await self._chat_activity(ws))
         r = await self._probe(ws, "healthz")
         try:
             beat = float(r.json().get("lastHeartbeat") or 0) / 1000 if r is not None and r.status_code == 200 else 0
@@ -288,6 +325,23 @@ class WorkspaceManager:
             except OSError:
                 beat = 0
         return max(last, beat)
+
+    async def _chat_activity(self, ws: Workspace) -> float:
+        """Dernière activité déclarée par le service de conversation, en secondes ; 0 si elle est
+        illisible. Jamais dans le futur : une valeur au-delà de l'horloge (les deux conteneurs ont
+        celle de l'hôte) est une erreur du service, pas une activité — elle garderait l'espace
+        ouvert indéfiniment."""
+        r = await self._probe(ws, CHAT + "activity")
+        if r is None or r.status_code != 200:
+            return 0
+        try:
+            value = r.json().get("last_activity_ms")
+        except (ValueError, TypeError, AttributeError):
+            return 0
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            return 0
+        seconds = value / 1000
+        return seconds if seconds <= time.time() + CLOCK_SLACK else 0
 
     def _start_reaper(self) -> None:
         if self._reaper is None or self._reaper.done():

@@ -31,6 +31,12 @@ ARG GH_SHA256=7e54a307f90afdc59796c325ec0c49fb09e6c18537727207a8ac7513584ea5b0
 ARG CLAUDE_CODE_VERSION=2.1.296
 ARG MISTRAL_VIBE_VERSION=2.26.1
 ARG EXT_PYTHON_VERSION=2026.4.0
+# Service de conversation (chat/) : versions exactes dans chat/package.json et verrou
+# chat/package-lock.json (sommes d'intégrité de chaque paquet). Les deux ARG ci-dessous
+# les RÉPÈTENT pour que ce fichier reste la liste des versions : le build échoue s'ils
+# divergent du verrou.
+ARG CLAUDE_AGENT_ACP_VERSION=0.81.2
+ARG WS_VERSION=8.21.3
 
 ENV LANG=C.UTF-8 \
     DEBIAN_FRONTEND=noninteractive
@@ -91,6 +97,26 @@ USER root
 # par le montage, donc trompeur.
 RUN find /home/coder -mindepth 1 -delete && test -z "$(ls -A /home/coder)"
 
+# Service de conversation (:8090, lancé par l'entrée à côté de l'éditeur) : pont entre la
+# page de conversation et un agent ACP. Deux dépendances, installées depuis le verrou
+# (`npm ci` refuse tout écart et vérifie chaque somme) :
+#   - ws : le WebSocket du service ;
+#   - @agentclientprotocol/claude-agent-acp : l'agent ACP de Claude. Ses dépendances
+#     OPTIONNELLES sont un second binaire `claude` (~230 Mo) : elles ne sont PAS
+#     installées, l'agent pilote le `claude` déjà dans l'image (CLAUDE_CODE_EXECUTABLE,
+#     posé par chat/server.js). Le garde-fou ci-dessous vérifie les deux points.
+# vibe-acp, l'agent ACP de Mistral Vibe, est déjà fourni par `mistral-vibe`.
+COPY chat/package.json chat/package-lock.json /opt/lab/chat/
+RUN cd /opt/lab/chat \
+ && npm ci --omit=optional --omit=dev --ignore-scripts --no-audit --no-fund \
+ && npm cache clean --force \
+ && test "$(node -p 'require("./node_modules/@agentclientprotocol/claude-agent-acp/package.json").version')" = "${CLAUDE_AGENT_ACP_VERSION}" \
+ && test "$(node -p 'require("./node_modules/ws/package.json").version')" = "${WS_VERSION}" \
+ && test -z "$(ls -d node_modules/@anthropic-ai/claude-agent-sdk-* 2>/dev/null)" \
+ && test -x /usr/local/bin/claude && command -v vibe-acp >/dev/null
+COPY chat/server.js /opt/lab/chat/server.js
+COPY chat/public/ /opt/lab/chat/public/
+
 # Configuration posée par l'image (jamais dans la maison) :
 #   /etc/gitconfig        assistant d'identifiants lisant GH_TOKEN dans l'environnement
 #   /opt/lab/code-server.yaml  écoute et options de l'éditeur
@@ -101,7 +127,7 @@ COPY regles-lab.md /opt/lab/regles-lab.md
 COPY entrypoint.sh /usr/local/bin/lab-entrypoint
 COPY lib/ /opt/lab/lib/
 RUN chmod 0755 /usr/local/bin/lab-entrypoint \
- && chmod -R a+rX,go-w /opt/lab/lib /opt/lab/regles-lab.md /opt/lab/code-server.yaml /etc/gitconfig
+ && chmod -R a+rX,go-w /opt/lab/lib /opt/lab/chat/server.js /opt/lab/chat/public /opt/lab/regles-lab.md /opt/lab/code-server.yaml /etc/gitconfig
 
 # Garde-fous de build : ce que l'image ne doit PAS contenir.
 RUN ! command -v sudo && ! command -v docker && ! getent group docker \
@@ -110,9 +136,10 @@ RUN ! command -v sudo && ! command -v docker && ! getent group docker \
 ENV HOME=/home/coder \
     SHELL=/bin/bash \
     DISABLE_AUTOUPDATER=1 \
-    LAB_WORKSPACE_VERSIONS="code-server=${CODE_SERVER_VERSION} gh=${GH_VERSION} claude-code=${CLAUDE_CODE_VERSION} mistral-vibe=${MISTRAL_VIBE_VERSION} ms-python.python=${EXT_PYTHON_VERSION}"
+    LAB_WORKSPACE_VERSIONS="code-server=${CODE_SERVER_VERSION} gh=${GH_VERSION} claude-code=${CLAUDE_CODE_VERSION} mistral-vibe=${MISTRAL_VIBE_VERSION} ms-python.python=${EXT_PYTHON_VERSION} claude-agent-acp=${CLAUDE_AGENT_ACP_VERSION} ws=${WS_VERSION}"
 
 USER coder
 WORKDIR /work
-EXPOSE 8080
+# 8080 : éditeur · 8090 : service de conversation. Aucun des deux n'est à publier.
+EXPOSE 8080 8090
 ENTRYPOINT ["tini", "--", "/usr/local/bin/lab-entrypoint"]

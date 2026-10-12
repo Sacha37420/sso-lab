@@ -46,7 +46,7 @@ from .registry import Registry, valid_app, valid_uid
 from .access import Access
 from .firewall import Firewall
 from .pgadmin import PgAdminManager
-from .workspaces import WorkspaceManager
+from .workspaces import TARGETS as WS_TARGETS, WorkspaceManager
 
 audit_log = logging.getLogger("lab-mcp.audit")
 log = logging.getLogger("lab-mcp")
@@ -1208,9 +1208,16 @@ class Engine:
     # ═════════════════════════════════════════════════════════════════════════
     # Espaces de travail
     # ═════════════════════════════════════════════════════════════════════════
-    async def op_workspace_open(self, c: Caller, app: str) -> dict:
+    async def op_workspace_open(self, c: Caller, app: str, target: Any = None) -> dict:
+        """`target` : ce que l'URL rendue ouvre dans l'espace — l'éditeur (défaut) ou l'écran de
+        conversation d'un assistant. Même espace, mêmes contrôles, même ticket dans les trois cas."""
         viewer = self._dev(c)
         self._app(c, app)
+        if target is None or target == "":
+            target = "editor"
+        if not isinstance(target, str) or target not in WS_TARGETS:
+            raise LabError("invalid", "Cible d'ouverture inconnue : « editor », « chat-claude » ou « chat-vibe ».",
+                           field="target")
         token_kc = self._need_token(c)
         owner = self.registry.app_owner(app)
         current = self.ws.get(owner)
@@ -1234,7 +1241,7 @@ class Engine:
             code, out, err = await self._script("work-clone.sh", [owner, app], timeout=300)
             if code != 0:
                 raise LabError("failed", "work-clone.sh a échoué : " + (self._last(err or out, 4) or f"code {code}"))
-        return await self.ws.open(owner, app, viewer, gh_token, author)
+        return await self.ws.open(owner, app, viewer, gh_token, author, target)
 
     async def op_workspace_close(self, c: Caller, app: str) -> dict:
         self._app(c, app)

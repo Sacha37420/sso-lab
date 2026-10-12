@@ -74,9 +74,27 @@ format d'erreur unique, états d'un job, quatre profils de `GET /me`.
 `POST /mcp/api/projects/<app>/workspace` ouvre `ws-<uid>` : l'image `lab-workspace` (I7) sur **son**
 réseau `ws-net-<uid>`, le clone de travail du projet en `/work/<app>`, la maison du dev en
 `/home/coder`, et rien d'autre. Un par dev, `LAB_WS_MAX` (3) sur le lab, arrêt après
-`LAB_WS_IDLE_MIN` (30) minutes sans activité : dernière requête du dev passée par la passerelle, ou
+`LAB_WS_IDLE_MIN` (30) minutes sans activité : dernière requête du dev passée par la passerelle,
 dernier battement de code-server (`GET /healthz` → `lastHeartbeat`, sondé par la passerelle), qui
-continue tant qu'une fenêtre de l'éditeur reste connectée.
+continue tant qu'une fenêtre de l'éditeur reste connectée, ou dernière activité d'une conversation
+(ci-dessous).
+
+**Écran de conversation** (chantier espace-chat) — le même espace porte un second service, sur
+`:8090` : l'écran où l'on ne voit que la conversation avec Claude Code ou Mistral Vibe (pensé pour le
+téléphone). Rien de plus côté moteur qu'une cible d'ouverture : `{"target": "chat-claude" |
+"chat-vibe"}` rend l'URL `/ws/<uid>/_chat/?agent=…&ticket=…` au lieu de `/ws/<uid>/?ticket=…`.
+Même conteneur, même réseau, même ticket, même cookie, même décision à chaque requête : la
+passerelle pose pour `/ws/<uid>/_chat/…` exactement la question qu'elle pose pour l'éditeur, retire
+`/ws/<uid>/_chat` et relaie vers `ws-<uid>:8090`. Deux choses propres à la conversation :
+- l'ouverture attend le `/healthz` **de la cible demandée** (25 s au plus, comme pour l'éditeur) ;
+- une conversation ne tient qu'un WebSocket ouvert — aucune requête ne passe pendant qu'un tour
+  d'assistant dure, et code-server ne bat pas si l'éditeur n'est pas ouvert. Le moteur lit donc
+  aussi `last_activity_ms` de `GET :8090/activity` (par la passerelle, avec sa session interne, qui
+  ne compte pas comme une activité). Service absent, en erreur, ou valeur illisible ou dans le
+  futur : **ignoré** — ni une raison de garder l'espace, ni une raison de le fermer.
+
+Le service lui-même est dans l'image (`workspace/`) ; il n'a aucune authentification propre et
+compte sur la passerelle, qui est le seul chemin vers lui.
 
 **Acheminement** — question ouverte du §8, tranchée par un essai réel :
 
@@ -86,7 +104,7 @@ continue tant qu'une fenêtre de l'éditeur reste connectée.
   l'ouverture, l'en retire à la fermeture. Deux espaces n'ont aucun réseau commun ;
 - pour **chaque** requête, WebSocket compris, la passerelle demande au moteur
   (`GET /mcp/api/ws-auth`) si cette personne peut entrer dans cet espace, puis retire `/ws/<uid>` et
-  relaie vers `ws-<uid>:8080` ;
+  relaie vers `ws-<uid>:8080` (ou retire `/ws/<uid>/_chat` et relaie vers `ws-<uid>:8090`) ;
 - lab-admin reçoit une URL à **ticket** (usage unique, 60 s) ; la première requête l'échange contre un
   cookie `lab_ws_<uid>` (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/ws/<uid>/`, 12 h). Tickets,
   cookies et jetons d'espace ne sont gardés qu'en condensat, en mémoire ;
@@ -279,6 +297,11 @@ Préalables : l'image `lab-workspace:latest` construite (`workspace/`), et `lab-
 - `tests/compare.py` — les deux entrées rendent-elles le même objet ?
 - `tests/keycloak_login.js` — vrai jeton Keycloak (`lab-mcp` ou `lab-admin`) par le navigateur de `lab-runner` ;
 - `tests/ws/` — essai réseau des espaces (substitut d'espace, sonde, client WebSocket) ;
+- `tests/test_chat.py` et `tests/chat/` — écran de conversation : `bash lab-mcp/tests/chat/run.sh`
+  joue les tests du moteur seul (cible d'ouverture, échange du ticket, inactivité), puis un essai de
+  bout en bout par une passerelle jetable vers de faux espaces (HTTP, WebSocket, refus, attente,
+  fermeture après inactivité). Rejouable à tout moment : ne construit aucune image, ne touche ni au
+  moteur ni à la passerelle en service (conteneurs `zz-chat-mcp-*`, réseau sans sortie) ;
 - `tests/pgadmin_check.py` — ce qu'un pgAdmin par dev contient et accepte, par son API.
 
 ### Ce qui reste à vérifier en réel

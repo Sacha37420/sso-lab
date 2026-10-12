@@ -1,0 +1,9 @@
+# Tient lieu du Caddy du lab devant la passerelle (essai seulement) : un relais simple, qui pose
+# X-Forwarded-Host comme lui. Aucun label, aucun port publié.
+{
+	admin off
+	auto_https off
+}
+:8080 {
+	reverse_proxy {$GATEWAY}:8080
+}

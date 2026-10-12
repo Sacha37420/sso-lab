@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Conversation — espace de travail</title>
+<!-- Aucune ressource externe : tout est servi par le service, en URL relatives. -->
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app" id="app">
+
+  <aside class="tiroir" id="tiroir" aria-label="Conversations du projet">
+    <div class="tiroir-tete">
+      <strong>Conversations</strong>
+      <button type="button" class="btn-icone" id="fermer-tiroir" aria-label="Fermer la liste">✕</button>
+    </div>
+    <button type="button" class="btn btn-primaire" id="nouvelle">Nouvelle conversation</button>
+    <p class="tiroir-note" id="liste-note"></p>
+    <ul class="liste" id="liste"></ul>
+    <a class="btn btn-secondaire" id="lien-editeur" href="../">Ouvrir l'éditeur (VS Code)</a>
+  </aside>
+
+  <div class="principal">
+    <header class="tete">
+      <button type="button" class="btn-icone" id="ouvrir-tiroir" aria-label="Conversations précédentes">☰</button>
+      <div class="titre">
+        <span class="projet" id="projet">…</span>
+        <span class="sous-titre"><span class="pastille" id="pastille"></span><span id="etat-connexion" role="status">connexion…</span></span>
+      </div>
+      <div class="bascule" role="group" aria-label="Assistant">
+        <button type="button" data-agent="claude" aria-pressed="false">Claude</button>
+        <button type="button" data-agent="vibe" aria-pressed="false">Vibe</button>
+      </div>
+    </header>
+
+    <main class="fil" id="fil" aria-live="polite"></main>
+
+    <div class="quai" id="quai"></div>
+
+    <footer class="saisie" id="saisie">
+      <label class="reglage" id="reglage-auto">
+        <input type="checkbox" id="auto">
+        <span>Tout accepter sans demander <small>(cette conversation seulement)</small></span>
+      </label>
+      <div class="saisie-ligne">
+        <textarea id="texte" rows="1" placeholder="Votre message…" aria-label="Votre message" autocomplete="off"></textarea>
+        <button type="button" class="btn btn-primaire" id="envoyer">Envoyer</button>
+        <button type="button" class="btn btn-danger" id="arreter" hidden>Arrêter</button>
+      </div>
+    </footer>
+  </div>
+
+</div>
+<noscript>Cette page a besoin de JavaScript.</noscript>
+<script src="app.js"></script>
+</body>
+</html>

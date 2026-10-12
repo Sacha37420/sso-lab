@@ -1,4 +1,4 @@
-# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v11, I9 v7, I10 v9)
+# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v11, I9 v7, I10 v9 ; espace-chat v1)
 
 Écrite à partir de ce que le code rend réellement (`labmcp/engine.py`). Là où la table d'I5 et ce
 document divergent sur une **forme**, ce document l'emporte.
@@ -21,6 +21,10 @@ Ce qui reste `🟡`, et pourquoi (rien de tout cela ne change une forme) :
 > (`value` disparaît, `has_value` arrive). Une version de `lab-admin` antérieure à v11 afficherait des
 > valeurs vides : moteur et `lab-admin` v11 se déploient **ensemble**. Même changement pour l'outil
 > MCP `env_list`.
+
+**Ajout du chantier « espace-chat » (contrat v1, I3)** — compatible : `POST /projects/<app>/workspace`
+accepte un corps facultatif `{"target": "editor" | "chat-claude" | "chat-vibe"}` et rend `target` en
+plus. Sans corps, rien ne change pour un appelant existant (§3.6).
 
 **Écarts avec la table d'I5** :
 - routes **en plus** : `GET /mcp/api/groups` (v6) ; `GET /mcp/api/me/database-password`,
@@ -419,40 +423,89 @@ défaut déploie, et toujours la tête de cette branche.
 
 ### 3.6 Espace de travail (G12)
 
-#### `POST /projects/<app>/workspace` ✅ (image `lab-workspace` réelle, passerelle jetable) — sans corps
+#### `POST /projects/<app>/workspace` ✅ (image `lab-workspace` réelle, passerelle jetable) — corps facultatif `{"target"}`
+
+Ouvre l'espace de travail du projet (ou le rejoint) et rend l'URL de **ce qu'on veut y voir** :
+
+| `target` (corps JSON) | Ce que l'URL ouvre | `url` rendue |
+|---|---|---|
+| absent, `""`, `null`, ou **aucun corps** → `"editor"` | l'éditeur (VS Code) — comportement d'origine, inchangé | `https://<DOMAIN>/ws/<uid>/?ticket=…` |
+| `"chat-claude"` | l'écran de conversation, assistant Claude Code | `https://<DOMAIN>/ws/<uid>/_chat/?agent=claude&ticket=…` |
+| `"chat-vibe"` | l'écran de conversation, assistant Mistral Vibe | `https://<DOMAIN>/ws/<uid>/_chat/?agent=vibe&ticket=…` |
+
+Toute autre valeur (autre chaîne, nombre, liste… ; la casse compte) : `400 invalid` avec
+`"field": "target"` — rien n'est lancé. Les champs inconnus du corps sont ignorés.
+
+Réponse — **la même forme pour les trois cibles** ; seule `url` change, et `target` dit la valeur
+retenue :
 ```json
-{"url": "https://<DOMAIN>/ws/hassan/?ticket=…",   // à ouvrir dans un nouvel onglet, dans la minute
+{"url": "https://<DOMAIN>/ws/hassan/_chat/?agent=claude&ticket=…",   // à ouvrir dans un nouvel onglet, dans la minute
  "uid": "hassan", "app": "mon-app",
+ "target": "chat-claude",         // "editor" | "chat-claude" | "chat-vibe"
  "reused": false,                 // true : l'espace était déjà ouvert sur ce projet
  "ticket_expires_in": 60,
  "workspace": {"open": true, "app": "mon-app", "opened_by": "hassan", "opened_at": "…",
                "last_activity": "…", "github_token": true, "git_identity": true}}
 ```
-- L'URL porte un ticket **à usage unique** valable 60 s ; la première requête l'échange contre un
-  cookie limité à `/ws/<uid>/` (12 h au plus). Pour rouvrir l'onglet plus tard : rappeler cette route.
-- Un seul espace par dev : si son espace est ouvert sur **un autre** projet, il est fermé puis rouvert
-  sur celui-ci (rien n'est perdu, tout est sur disque).
-- La réponse n'arrive qu'une fois l'éditeur prêt (≈ 20 s mesurés au premier démarrage, 25 s au plus
-  d'attente ; un `502` bref sur l'URL reste possible si l'éditeur met plus longtemps).
+- **`url` est à utiliser telle quelle** (ne pas la recomposer) : elle porte un ticket **à usage
+  unique** valable 60 s, que la première requête échange contre un cookie limité à `/ws/<uid>/`
+  (12 h au plus) avant de renvoyer (302) vers la même adresse sans le ticket — `agent` conservé :
+  `/ws/<uid>/_chat/?agent=claude`. Pour rouvrir l'onglet plus tard : rappeler cette route.
+- **Un seul espace par dev, partagé par les trois cibles** : même conteneur, même session. Ouvrir une
+  conversation ne ferme pas l'éditeur et inversement (`reused: true`) ; le cookie obtenu par l'une
+  vaut pour l'autre. Si l'espace est ouvert sur **un autre** projet, il est fermé puis rouvert sur
+  celui-ci, quelle que soit la cible (rien n'est perdu, tout est sur disque) — une conversation en
+  cours sur l'autre projet est donc coupée, comme l'éditeur l'était déjà.
+- **Mêmes contrôles pour les trois cibles** : `target` ne change ni qui peut ouvrir, ni ce que le
+  ticket permet. Le superutilisateur peut ouvrir la conversation d'un autre dev comme son éditeur.
+- La réponse n'arrive qu'une fois **la cible demandée** prête : l'éditeur (≈ 20 s mesurés au premier
+  démarrage), ou le service de conversation (`/healthz`). 25 s au plus d'attente dans les deux cas ;
+  passé ce délai l'URL est rendue quand même (`200`) et peut donner un `502` bref. **Cas à connaître :**
+  un espace dont l'image n'a pas le service de conversation (ouvert avant la mise à jour de l'image)
+  répond à `chat-*` au bout de 25 s, et son URL donne `502` — fermer l'espace
+  (`DELETE …/workspace`) puis le rouvrir. Prévoir côté client un délai d'au moins 60 s, comme pour
+  l'éditeur.
 - `workspace.github_token: false` : espace ouvert par le superutilisateur sur le projet d'un autre —
   aucun jeton GitHub n'y est injecté (`git push` n'y est pas préconfiguré).
 - `workspace.git_identity` : l'auteur des commits est préréglé (nom du compte GitHub du propriétaire,
   adresse `<id>+<login>@users.noreply.github.com`). `false` quand il n'y a pas de jeton GitHub du
   propriétaire à l'ouverture (cas ci-dessus) : `git commit` demandera alors une identité.
 
-Erreurs : `429 workspace_limit` `{"open": 3, "max": 3}`, `409 github_not_linked` (le propriétaire
-doit avoir relié GitHub pour ouvrir son espace), `503 unavailable` (image ou passerelle absente),
-`500 failed`.
+Erreurs — **les mêmes pour les trois cibles** : `400 invalid` (`field: "target"`, ou corps JSON
+illisible), `404 not_found` (projet inconnu ou d'un autre), `403 forbidden`, `409 not_initialized`,
+`429 workspace_limit` `{"open": 3, "max": 3}`, `409 github_not_linked` (le propriétaire doit avoir
+relié GitHub pour ouvrir son espace), `423 busy`, `503 unavailable` (image ou passerelle absente),
+`502 upstream`, `500 failed`.
+
+Pas d'outil MCP correspondant (ni pour l'éditeur, ni pour la conversation).
 
 #### `DELETE /projects/<app>/workspace` ✅ → `{"app", "closed": true}`
-`closed: false` si l'espace n'était pas ouvert sur ce projet. Un espace se ferme aussi seul après
-`LAB_WS_IDLE_MIN` (30) minutes sans activité.
+`closed: false` si l'espace n'était pas ouvert sur ce projet. Fermer l'espace ferme l'éditeur **et**
+les conversations (c'est le même conteneur). Un espace se ferme aussi seul après `LAB_WS_IDLE_MIN`
+(30) minutes sans activité. Compte comme activité : une requête du dev passée par la passerelle,
+une fenêtre de l'éditeur connectée, ou une conversation où quelque chose se passe (message, tour
+d'assistant en cours — lu dans `GET /activity` du service de conversation). Un onglet de
+conversation simplement resté ouvert ne garde pas l'espace.
 
 Dans `GET /me` et `GET /devs`, `workspace` est `{"open": false}` ou l'objet `workspace` ci-dessus ;
 dans `GET /projects`, c'est `{"open": bool}` pour **ce** projet.
 
 #### `GET /ws-auth` ✅ — appelée par la passerelle (espaces **et** pgAdmin), pas par lab-admin
 `200` (laisser passer), `302` + `Set-Cookie` (ticket échangé), `401` (refus).
+La décision ne dépend pas du chemin demandé : l'éditeur (`/ws/<uid>/…`) et la conversation
+(`/ws/<uid>/_chat/…`) posent la même question (sorte `ws`, même cookie `lab_ws_<uid>`,
+`Path=/ws/<uid>/`). Le chemin ne sert qu'à choisir le retour après l'échange d'un ticket, entre deux
+adresses fixes : `/ws/<uid>/` ou `/ws/<uid>/_chat/`, paramètres autres que `ticket` conservés.
+
+#### Ce que la passerelle sert sous `/ws/<uid>/` (chantier espace-chat) ✅ (passerelle jetable, faux service)
+| Chemin | Destination dans `ws-<uid>` | Préfixe retiré |
+|---|---|---|
+| `/ws/<uid>/_chat/…` | service de conversation, `:8090` | `/ws/<uid>/_chat` |
+| `/ws/<uid>/_chat` (sans barre) | — `308` vers `/ws/<uid>/_chat/`, paramètres conservés | |
+| `/ws/<uid>/…` (tout le reste) | éditeur, `:8080` | `/ws/<uid>` |
+
+HTTP et WebSocket, hôte public transmis inchangé, contrôle d'accès sur chaque requête. Sans session :
+`401`. Service de conversation absent ou arrêté : `502`.
 
 ### 3.7 Ma base : mot de passe et pgAdmin (I9, v7)
 

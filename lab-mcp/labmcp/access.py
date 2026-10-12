@@ -65,11 +65,19 @@ class Access:
                 store.pop(key, None)
 
     def authorize(self, kind: str, target: str, forwarded_uri: str, cookie_header: str,
-                  allowed: Callable[[str, str], bool], touch: Callable[[], None]) -> tuple[str, dict]:
+                  allowed: Callable[[str, str], bool], touch: Callable[[], None],
+                  landings: tuple[str, ...] = ()) -> tuple[str, dict]:
         """Décision pour UNE requête : ("ok", {}), ("redirect", {location, set_cookie}) ou ("deny", {reason}).
 
         `allowed(personne, visé)` redit à chaque requête si cette personne a encore le droit
         d'entrer ; `touch()` note une activité du dev.
+
+        LE CHEMIN DEMANDÉ NE CHANGE JAMAIS LA DÉCISION : elle ne tient qu'au ticket ou au cookie, à
+        la sorte et au service visé. Il ne sert qu'à choisir OÙ renvoyer après l'échange d'un
+        ticket, parmi des destinations FIXES — la racine du service, ou l'un des sous-dossiers
+        `landings` déclarés par le service (« _chat/ » pour un espace). Jamais une adresse
+        recopiée de la requête : l'échange ne peut pas servir de tremplin de redirection.
+        Le cookie, lui, reste limité à la racine du service dans tous les cas.
         """
         now = time.time()
         parts = urlsplit(forwarded_uri or "")
@@ -83,8 +91,9 @@ class Access:
                 touch()
                 rest = urlencode([(k, v) for k, v in query if k != "ticket"])
                 path = self.path(kind, target)
+                landing = next((path + sub for sub in landings if parts.path.startswith(path + sub)), path)
                 return "redirect", {
-                    "location": path + (f"?{rest}" if rest else ""),
+                    "location": landing + (f"?{rest}" if rest else ""),
                     "set_cookie": (f"{self.cookie_name(kind, target)}={cookie}; Path={path}; HttpOnly; "
                                    f"SameSite=Lax; Max-Age={SESSION_TTL}" + ("; Secure" if self.secure else "")),
                 }
