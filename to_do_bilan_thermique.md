@@ -3163,7 +3163,7 @@ en grille.
 
 ---
 
-## Lot AM — Poses des photos par photogrammétrie (pycolmap) ⏳ en service depuis le 2026-09-27, validé sur photos réelles le 2026-10-12, non validé sur un bâtiment
+## Lot AM — Poses des photos par photogrammétrie (pycolmap) ⏸ désactivé par défaut le 2026-10-12 (trop coûteux pour cette machine)
 
 ### Pourquoi
 Le recalage photo par photo des Lots AK–AL ne tenait pas (« Reste ouvert » du Lot AL) : position
@@ -3194,7 +3194,15 @@ photos, mêmes résidus, 505 s. Avec seulement les 14 photos les plus proches du
 (6 séquences de 1 à 4 photos) : **aucune photo placée** en 140 s — la méthode a besoin de
 séquences qui se recouvrent ; l'analyse retombe alors sur l'ancien recalage.
 
-### Reste ouvert — à trancher par le propriétaire
+### Décision du 2026-10-12
+Mémoire mesurée : **3,4 Go au pic** dans le worker pour 36 photos (repos : 0,2 Go), en plus des
+~9 minutes. Sur 16 Go partagés par tout le lab, c'est trop pour tourner à chaque analyse :
+`FACADE_SFM_ENABLED` (réglage, défaut `False`) coupe la photogrammétrie ; l'analyse retombe sur le
+recalage par séquence du Lot AL (`method: 'multivue'`). Le code reste en place.
+Le manque de mémoire du 2026-09-27 venait d'un essai d'ALIKED + LightGlue (points et appariement
+appris, par onnxruntime) — variante **à ne pas retenter** sur cette machine, jamais commitée.
+
+### Reste ouvert — si le lot est repris un jour
 - **Le coût** : environ 9 minutes de plus par analyse de façades (le Lot AL avait ramené l'analyse
   à 3–6 min en limitant à 16 photos). Pistes : option à la demande, appariement séquentiel au
   lieu d'exhaustif, moins de photos, largeur réduite.
