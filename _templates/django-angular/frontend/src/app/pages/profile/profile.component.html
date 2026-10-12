@@ -28,32 +28,5 @@
       }
     </section>
 
-    <section class="card">
-      <h3>Utilisateurs enregistrés ({{ users().length }})</h3>
-      <table class="user-table">
-        <thead>
-          <tr>
-            <th>Nom</th>
-            <th>E-mail</th>
-            <th>Département</th>
-            <th>Inscrit le</th>
-          </tr>
-        </thead>
-        <tbody>
-          @for (u of users(); track u.email) {
-            <tr>
-              <td>{{ u.display_name }}</td>
-              <td>{{ u.email }}</td>
-              <td>{{ u.department?.name ?? '—' }}</td>
-              <td>{{ u.registered_at | date:'dd/MM/yyyy' }}</td>
-            </tr>
-          }
-          @if (users().length === 0) {
-            <tr><td colspan="4" class="empty">Aucun utilisateur enregistré.</td></tr>
-          }
-        </tbody>
-      </table>
-    </section>
-
   }
 </main>

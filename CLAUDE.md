@@ -222,6 +222,10 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
 - **`api/authentication.py` attrape aussi `PyJWKClientError`** : un jeton forgé avec un `kid`
   inconnu (ou un JWKS injoignable) doit donner un refus, pas une erreur 500. Défaut du gabarit,
   corrigé partout.
+- **Plus d'annuaire dans le gabarit** : les routes `/api/users/` et `/api/departments/` (et la
+  liste « Utilisateurs enregistrés » de la page profil) rendaient à tout membre l'adresse de
+  quiconque s'était connecté. Retirées du gabarit et des quatre apps qui les portaient encore
+  (2026-10-12). `/api/me/` reste ; ne pas réintroduire de liste de comptes sans règle d'accès.
 - **Reconstruire sans couper** : construire l'image pendant que l'ancienne tourne, lancer
   `scripts/app-test.sh <app>` dessus, puis `up -d --no-build` — c'est l'ordre du chemin à portes.
   `setup2.sh` sur une app historique commence au contraire par `clean2.sh` (arrêt, volumes non

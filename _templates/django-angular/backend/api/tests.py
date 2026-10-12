@@ -10,7 +10,7 @@ class CloisonnementApiTests(TestCase):
     """Verrou 2 : l'API ne répond à personne sans jeton valide."""
 
     def test_api_refuse_sans_jeton(self):
-        for path in ('/api/me/', '/api/departments/', '/api/users/'):
+        for path in ('/api/me/',):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertIn(response.status_code, (401, 403))
