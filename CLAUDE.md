@@ -59,7 +59,9 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
   réel, compte `e2edev`). Reste connu : `?token=` en paramètre d'URL (trois frontends s'en servent).
   **Neuf apps consomment son API** (les six listées plus bas, plus `code-route`, `craft-lab` et
   son propre frontend) : aucune route existante ne doit changer.
-- **Sauvegardes** — aucune procédure (voir « Installer le lab »).
+- **Sauvegardes : chiffrement à faire.** Elles tournent chaque nuit (voir « Sauvegardes ») mais
+  **en clair**, par décision du propriétaire du 2026-10-12 : à brancher dans `seal()` de
+  `scripts/backup.sh` (clé publique sur le serveur, clé privée chez lui).
 - **Constats de relecture laissés au propriétaire** : `chantiers/multi-dev/rapports/` (`relecture-lab-admin.md`,
   `audit-installation.md`) — documentation d'API publique et `.env` complet dans le conteneur
   nginx du frontend (défauts du gabarit, donc de toutes les apps), deux lanceurs de tests de
@@ -379,11 +381,43 @@ de Keycloak, domaine, routeur, `~/edge-router/`) : `README.md` §1.2.
 - **Rien de ce qui suit n'est dans un dépôt** — le perdre, c'est perdre le lab : tous les `.env`,
   `infra/dev-roles.env`, `sso-lab/ldap/init.ldif`, `.ports`, `.devs`, `.owners`, `.lab-state/`
   (clés de déploiement, comptes d'envoi), `~/edge-router/`, `~/lab-work/`, et les volumes Docker.
-  `OAUTH_HUB_ENCRYPTION_KEY` en fait partie. **Aucune sauvegarde n'est programmée** (chantier
-  ouvert) ; les seules existantes sont manuelles, dans `~/sauvegardes/`.
+  `OAUTH_HUB_ENCRYPTION_KEY` en fait partie. Tout cela est dans la sauvegarde nocturne (section
+  « Sauvegardes ») ; elle ne remplace pas la procédure de restauration, qui n'est pas automatisée.
 - Un projet privé enregistré comme sous-module porte `update = none` dans `.gitmodules` (posé par
   `app-register.sh`) : sans cela, `git clone --recurse-submodules` avorte pour quiconque n'y a pas
   accès, et n'extrait aucun sous-module.
+
+---
+
+## Sauvegardes
+
+`bash scripts/backup.sh` — chaque nuit à 3 h par le cron de `sacha` (`crontab -l`). `--check` ne
+fait rien et dit ce qui serait sauvegardé ; `--list` montre les copies ; `--local` saute le NAS.
+
+- **Contenu** (un dossier daté par passage) : chaque base des deux instances PostgreSQL
+  (`pg_dump -Fc`, restaurable base par base) et leurs rôles ; l'annuaire LDAP (`slapcat`) ; les
+  volumes `infra_storage-media`, `sso-lab_keycloak-data`, `sso-lab_caddy-data`,
+  `lab-media_config` ; et tout ce qui n'est dans aucun dépôt (`.env`, registres, `.lab-state/`,
+  `init.ldif`, `~/edge-router/`). **Pas** les enregistrements de `lab-media`, ni les caches, ni
+  `~/lab-work`.
+- **Deux copies** : `~/sauvegardes/lab/` et le NAS (partage et compte dédié dans le `.env`
+  racine : `LAB_BACKUP_NAS`, `LAB_BACKUP_NAS_USER` ; dossier `lab/` ; mot de passe dans
+  `~/.lab-backup-nas`). Le NAS est joint par `smbclient` dans un
+  conteneur jetable (image `lab-backup`), SMB 3 et chiffrement de transport exigés — pas de
+  montage CIFS sur l'hôte.
+- **Rétention** : 14 jours, plus la première du mois pendant 6 mois, des deux côtés ; appliquée
+  seulement après une sauvegarde sans défaut. Sur le NAS, ce qui protège d'un effacement (serveur
+  compromis) est la tâche d'**instantanés ZFS** du jeu de données, pas ce script.
+- **En cas de défaut** : code 1, un email part par le SMTP du lab, rien n'est purgé. Le compte
+  rendu est `RAPPORT.txt` dans le dossier du passage.
+- **⚠ Non chiffrées** pour l'instant : les archives contiennent tous les secrets du lab. Ne jamais
+  élargir les droits du partage de sauvegarde.
+- Restauration éprouvée le 2026-10-12 depuis la copie du NAS : empreintes identiques, les six
+  bases restaurées dans des PostgreSQL jetables avec le même nombre de tables et de lignes qu'en
+  service. **Non éprouvé** : restaurer Keycloak depuis son volume (copie à chaud d'une base H2),
+  et remonter un lab entier sur une machine neuve.
+- Piège : un conteneur lancé avec `--cap-drop ALL` ne lit pas un fichier `600` d'un autre
+  utilisateur, même en root — le lancer sous l'identité de l'appelant (`--user`).
 
 ---
 
@@ -1233,6 +1267,7 @@ ci-dessous, lancé avec `bash sso-lab/…`).
 | `lab-lock.sh <commande>` | Exécute sous le verrou de déploiement (code 75 si occupé) |
 | `workspace-image.sh` | Construit l'image `lab-workspace` des espaces VS Code |
 | `storage-shares.sh [--check]` | Partages de groupe de `storage` attendus par les apps |
+| `backup.sh [--check\|--list\|--local]` | Sauvegarde nocturne : bases, annuaire, storage, configuration hors dépôt ; copie locale et NAS |
 | `setup2.sh <app> --yes` | Déploiement complet d'une app (ou de tout le lab) |
 | `create-app-client.sh <app>` | Créer/mettre à jour le client Keycloak seul (`--native-redirect`, `--pkce`, `--no-env`) |
 | `sso-lab/setup-code-server-auth.sh` | Créer le client Keycloak pour oauth2-proxy/code-server |
