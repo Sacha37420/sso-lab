@@ -34,6 +34,8 @@ ALLOWED_SCRIPTS = frozenset({
     "app-remote.sh",
     # v9 : variables SMTP d'une app (profil sur stdin), application sans reconstruire
     "app-smtp.sh", "app-restart.sh",
+    # essai-dev : adresse d'essai d'un développeur (up/down lancés PAR lab-lock.sh, status sans verrou)
+    "app-preview.sh",
 })
 
 LOCK_BUSY = 75  # code rendu par les scripts quand le verrou de déploiement est occupé

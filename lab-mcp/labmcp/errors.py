@@ -20,6 +20,7 @@ STATUS = {
     "github_scope": 409,       # liaison GitHub sans la portée « repo » ; `connect_url`
     "busy": 423,               # verrou de déploiement occupé (code 75 d'I4) — réessayer
     "job_exists": 409,         # un job est déjà en file ou en cours pour ce projet ; `job_id`
+    "no_workspace": 409,       # essai demandé pour un projet sans dossier de travail : ouvrir d'abord son espace
     "queue_full": 429,
     "workspace_limit": 429,    # LAB_WS_MAX espaces ouverts ; `open`, `max`
     "pg_trust_enabled": 409,   # PostgreSQL accepte encore devuser sans mot de passe : pas de pgAdmin par dev

@@ -35,7 +35,7 @@ from typing import Any
 import anyio
 import httpx
 
-from . import procs, seed as seed_rules, smtp, sqlconsole
+from . import preview, procs, seed as seed_rules, smtp, sqlconsole
 from .auth import Authenticator, Caller
 from .config import Config
 from .errors import LabError
@@ -65,8 +65,9 @@ MAX_LOG_LINES = 4000
 # même exécution que pour lui (rôle dev_<uid> du propriétaire, schéma du projet).
 # (v9) `smtp_status` : quel profil SMTP est rattaché au projet (identifiant et libellé, aucun secret).
 # (v11) `env_get` : lire la valeur d'une de SES variables, une à la fois.
+# (essai-dev) `preview_*` : l'adresse d'essai se construit depuis l'espace (commande `lab-essai`).
 WS_OPS = frozenset({"me", "project", "logs", "env_list", "env_get", "env_set", "env_unset", "deploy", "run_tests",
-                    "job", "sql", "smtp_status"})
+                    "job", "sql", "smtp_status", "preview_deploy", "preview_status", "preview_stop"})
 
 # Écart avec GitHub (I5 v8) : cache en mémoire, rafraîchi en arrière-plan.
 REMOTE_MAX_AGE = 300      # au plus un rafraîchissement automatique toutes les 5 minutes par projet
@@ -100,6 +101,10 @@ class Engine:
         self._remote_asked: dict[str, float] = {}   # app → dernier rafraîchissement lancé
         self._remote_tasks: set[asyncio.Task] = set()
         self._remote_gate: asyncio.Semaphore | None = None
+        # Adresse d'essai (essai-dev) : rien n'est gardé ici — l'état se relit par `app-preview.sh status`.
+        self._preview_lock: asyncio.Lock | None = None    # un `up` ou un `down` lancé par le moteur à la fois
+        self._preview_task: asyncio.Task | None = None    # veille du terme
+        self._preview_err: dict[str, str] = {}            # uid → dernière erreur de veille déjà journalisée
 
         def job_done(job: Job) -> None:
             audit(job.owner, f"job:{job.kind}", job.app, "ok" if job.state == "succeeded" else "error",
@@ -128,6 +133,13 @@ class Engine:
             audit("(moteur)", "firewall", "", "error", exc.detail)
         await self.ws.reconcile()
         await self.pg.reconcile()
+        # Adresses d'essai : le terme ne vit pas dans la mémoire du moteur, il se relit. Ce qui est
+        # échu (ou dont le projet a été retiré) pendant que le moteur était arrêté est démonté ici.
+        try:
+            await self.preview_sweep()
+        except Exception:
+            log.exception("veille des adresses d'essai : passage de démarrage en échec")
+        self._preview_lock = None     # créé dans la boucle de démarrage : la boucle du serveur aura le sien
 
     # ═════════════════════════════════════════════════════════════════════════
     # Point d'entrée unique des deux entrées
@@ -138,7 +150,7 @@ class Engine:
             if c.scope_app is not None and op not in WS_OPS:
                 raise LabError("forbidden",
                                "Un jeton d'espace de travail ne permet que d'agir sur le projet ouvert "
-                               "(état, journaux, variables, base, déploiement, tests).")
+                               "(état, journaux, variables, base, déploiement, tests, adresse d'essai).")
             result = await getattr(self, "op_" + op)(c, **kw)
         except LabError as exc:
             audit(c.label, op, app, "refused" if exc.refused else "error", f"{exc.code} : {exc.detail}", c.entrance)
@@ -309,7 +321,7 @@ class Engine:
 
     # ── jobs ────────────────────────────────────────────────────────────────
     def _submit(self, kind: str, app: str, launched_by: str, work) -> dict:
-        active = self.jobs.active_for(app)
+        active = self.jobs.active_for(app, preview=(kind == "preview"))
         if active:
             what = f"pour « {app} »" if app else "(lancement de tous les tests de cloisonnement)"
             raise LabError("job_exists", f"Un job est déjà en file ou en cours {what}.", job_id=active.id)
@@ -931,6 +943,231 @@ class Engine:
             raise LabError("invalid", "sha : 7 à 40 caractères hexadécimaux (pas de nom de branche ni de tag).")
         # Aucun jeton GitHub (v5) : app-sync.sh lit la clé de déploiement du projet.
         return self._submit("deploy", app, c.uid or "?", self._chain(["deploy", app] + ([sha] if sha else [])))
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # Adresse d'essai d'un développeur (chantier « essai-dev », I2)
+    #
+    # Le moteur ne fait que LANCER `scripts/app-preview.sh` (I1) et TENIR LE TERME. Aucune logique
+    # de réécriture, de base ni de Keycloak ici : voir preview.py pour ce qui est lu du script.
+    # L'essai est celui du PROPRIÉTAIRE du projet (`.owners`), quel que soit celui qui le lance.
+    # ═════════════════════════════════════════════════════════════════════════
+    def _preview_installed(self) -> bool:
+        return os.path.isfile(os.path.join(self.cfg.scripts, "app-preview.sh"))
+
+    def _preview_need(self) -> None:
+        if not self._preview_installed():
+            raise LabError("unavailable", "scripts/app-preview.sh n'est pas installé sur ce lab.")
+
+    def _preview_gate(self) -> asyncio.Lock:
+        """Un seul `up`/`down` lancé par le moteur à la fois. Le verrou du lab sérialise déjà les
+        commandes, mais pas leur ORDRE : sans ceci, un démontage décidé avant un build (terme échu)
+        pourrait obtenir le verrou après lui, et démonter l'essai qui vient d'être construit."""
+        if self._preview_lock is None:
+            self._preview_lock = asyncio.Lock()
+        return self._preview_lock
+
+    def _preview_job(self, uid: str) -> Job | None:
+        """Job d'essai en file ou en cours pour l'adresse de ce développeur."""
+        for job in self.jobs.active("preview"):
+            if self.registry.app_owner(job.app) == uid:
+                return job
+        return None
+
+    async def _preview_status(self, uid: str) -> dict:
+        """`app-preview.sh status <uid>` — lecture seule, SANS verrou (I1)."""
+        self._preview_need()
+        code, out, err = await procs.run(
+            procs.script(self.cfg, "app-preview.sh") + ["status", uid],
+            procs.base_env(self.cfg, self.cfg.quick_lock_timeout), cwd=self.cfg.root, timeout=60)
+        if code != 0:
+            raise LabError("failed", f"app-preview.sh status a rendu {code} : {self._last(err, 3)}".rstrip(" :"))
+        try:
+            return preview.status(preview.parse(preview.last_line(out)), uid)
+        except preview.Incoherent as exc:
+            raise LabError("failed", f"app-preview.sh status a rendu une sortie inexploitable : {exc}.") from None
+
+    async def _preview_down(self, uid: str, lock_timeout: int) -> bool:
+        """`lab-lock.sh app-preview.sh down <uid>` ; rend `stopped`. `busy` si le verrou est occupé."""
+        self._preview_need()
+        argv = procs.script(self.cfg, "lab-lock.sh") + procs.script(self.cfg, "app-preview.sh") + ["down", uid]
+        code, out, err = await procs.run(argv, procs.base_env(self.cfg, lock_timeout), cwd=self.cfg.root,
+                                         timeout=lock_timeout + 600)
+        if code == procs.LOCK_BUSY:
+            raise LabError("busy", "Un déploiement ou une création est en cours sur le lab (verrou occupé) — "
+                                   "réessayez dans quelques minutes.")
+        try:
+            return preview.down(preview.parse(preview.last_line(out)), uid, code)
+        except preview.Incoherent as exc:
+            raise LabError("failed", f"app-preview.sh down a échoué : {exc}.") from None
+
+    def _preview_work(self, uid: str, app: str):
+        """Travail d'un job `preview` : `lab-lock.sh app-preview.sh up <uid> <app>`, dont les lignes
+        font le journal et dont la DERNIÈRE ligne (`RESULTAT=`) fait le résultat. Aucun jeton, aucun
+        secret dans l'environnement (procs.base_env)."""
+        cfg = self.cfg
+
+        def failed(step: str, error: str) -> dict:
+            return {"ok": False, "step": step, "error": error, "reasons": []}
+
+        async def work(job: Job) -> dict:
+            async with self._preview_gate():
+                job.add_line(f"══ [lab-mcp] étape « preview » — essai de {app} à l'adresse dev-{uid} "
+                             f"(app-preview.sh up {uid} {app})")
+                seen = {"last": ""}
+
+                def on_line(line: str) -> None:
+                    if line.strip():
+                        seen["last"] = line.strip()
+                    if not line.startswith(preview.PREFIX):     # la ligne de résultat est une donnée
+                        job.add_line(line)
+
+                argv = (procs.script(cfg, "lab-lock.sh") + procs.script(cfg, "app-preview.sh") + ["up", uid, app])
+                code, _, err = await procs.run(argv, procs.base_env(cfg, cfg.job_lock_timeout), cwd=cfg.root,
+                                               timeout=3 * 3600, on_line=on_line)
+                if not seen["last"].startswith(preview.PREFIX):
+                    if code == procs.LOCK_BUSY:
+                        return failed("lock", f"verrou de déploiement toujours occupé après {cfg.job_lock_timeout} s — "
+                                              "rien n'a été lancé, recommencez plus tard")
+                    return failed("interne", f"app-preview.sh s'est arrêté sans résultat (code {code}) {err}".strip())
+                try:
+                    failure = preview.up(preview.parse(seen["last"]), uid, app, code)
+                except preview.Incoherent as exc:
+                    return failed("interne", f"résultat d'app-preview.sh inexploitable : {exc} (code {code})")
+                if failure is not None:
+                    return failure
+                # L'objet rendu est l'ÉTAT relu (I1 `status`), pas ce que `up` vient d'annoncer.
+                try:
+                    st = await self._preview_status(uid)
+                except LabError as exc:
+                    return failed("interne", f"l'essai a été construit, mais son état ne se lit pas : {exc.detail}")
+                if st["state"] == "absent" or st["app"] != app:
+                    return failed("interne", "app-preview.sh annonce un succès, mais l'adresse ne montre pas ce projet")
+                return {"ok": True, "step": "done", "preview": preview.view(st, app, cfg.preview_ttl_h)}
+
+        return work
+
+    async def op_preview_deploy(self, c: Caller, app: str) -> dict:
+        """Construit l'essai du projet à l'adresse de son propriétaire, depuis son dossier de travail."""
+        self._app(c, app)
+        owner = self.registry.app_owner(app)
+        self._preview_need()
+        if not self.cfg.domain or self.cfg.domain == "CHANGE_ME" or not self.cfg.public_origin.startswith("https://"):
+            raise LabError("unavailable", "Pas d'adresse d'essai sur un lab sans domaine (HTTPS requis).")
+        if not os.path.isdir(self.ws.clone(owner, app)):
+            raise LabError("no_workspace", f"Aucun dossier de travail pour « {app} » : ouvrez d'abord son espace "
+                                           "de travail (l'essai se construit à partir de ce dossier).")
+        return self._submit("preview", app, c.uid or "?", self._preview_work(owner, app))
+
+    async def op_preview_status(self, c: Caller, app: str) -> dict:
+        """L'objet « essai » — lecture seule : ne prend aucun verrou, ne lance que `status`."""
+        self._app(c, app)
+        st = await self._preview_status(self.registry.app_owner(app))
+        return preview.view(st, app, self.cfg.preview_ttl_h)
+
+    async def op_preview_stop(self, c: Caller, app: str) -> dict:
+        """Arrête l'essai SI l'adresse du propriétaire montre ce projet ; sinon rien n'est arrêté."""
+        self._app(c, app)
+        owner = self.registry.app_owner(app)
+        self._preview_need()
+        gate = self._preview_gate()
+        try:
+            await asyncio.wait_for(gate.acquire(), timeout=self.cfg.quick_lock_timeout)
+        except asyncio.TimeoutError:
+            raise LabError("busy", "Un essai est en cours de construction ou d'arrêt sur le lab — "
+                                   "réessayez dans quelques minutes.") from None
+        try:
+            st = await self._preview_status(owner)
+            if st["state"] == "absent" or st["app"] != app:
+                return {"app": app, "stopped": False}
+            return {"app": app, "stopped": await self._preview_down(owner, self.cfg.quick_lock_timeout)}
+        finally:
+            gate.release()
+
+    # ── terme d'un essai ────────────────────────────────────────────────────
+    def _preview_uids(self) -> list[str]:
+        """Les adresses à regarder : tout développeur inscrit, le superutilisateur, et tout uid qui a
+        un dossier d'état d'essai (un développeur désinscrit peut avoir laissé un essai)."""
+        uids = set(self.registry.devs()) | {self.registry.superuser()}
+        try:
+            uids.update(os.listdir(os.path.join(self.registry.state_dir(), "preview")))
+        except OSError:
+            pass
+        return sorted(u for u in uids if valid_uid(u))
+
+    def _preview_due(self, uid: str, st: dict) -> str | None:
+        """Pourquoi l'essai de `uid` est à démonter, ou None."""
+        if st["state"] == "absent":
+            return None
+        if not self.registry.app_exists(st["app"]) or self.registry.app_owner(st["app"]) != uid:
+            return "son projet a été retiré (ou n'appartient plus à ce développeur)"
+        return preview.due(st, time.time(), self.cfg.preview_ttl_h)
+
+    async def _preview_expire(self, uid: str) -> bool:
+        if self._preview_job(uid):
+            return False                # jamais sous un build en file ou en cours
+        if not self._preview_due(uid, await self._preview_status(uid)):
+            return False
+        gate = self._preview_gate()
+        if gate.locked():
+            return False                # un `up`/`down` est en cours : au prochain passage
+        async with gate:
+            # Tout est relu une fois la main prise : un build a pu passer entre-temps.
+            if self._preview_job(uid):
+                return False
+            st = await self._preview_status(uid)
+            reason = self._preview_due(uid, st)
+            if not reason:
+                return False
+            try:
+                # Verrou du lab occupé (déploiement, build lancé à la main) : on n'attend pas — un
+                # démontage qui patienterait derrière un build démonterait ce qu'il vient de construire.
+                await self._preview_down(uid, 1)
+            except LabError as exc:
+                if exc.code == "busy":
+                    return False
+                raise
+        audit("(moteur)", "preview_expire", st["app"], "ok", f"essai de {uid} démonté : {reason}")
+        return True
+
+    async def preview_sweep(self) -> list[str]:
+        """Un passage de la veille : démonte (`down`) tout essai échu ou dont le projet a été
+        retiré. Rend les uid démontés. Sans effet tant que le script n'est pas installé."""
+        if not self._preview_installed():
+            return []
+        done = []
+        for uid in self._preview_uids():
+            try:
+                if await self._preview_expire(uid):
+                    done.append(uid)
+                self._preview_err.pop(uid, None)
+            except LabError as exc:
+                seen = f"{exc.code} : {exc.detail}"
+                if self._preview_err.get(uid) != seen:      # une fois par erreur, pas à chaque passage
+                    self._preview_err[uid] = seen
+                    audit("(moteur)", "preview_expire", "", "error", f"essai de {uid} — {seen}")
+        return done
+
+    def preview_watch(self) -> None:
+        """Lance la veille du terme dans la boucle du serveur (appelée à chaque requête et au
+        démarrage du serveur : un essai construit avant un redémarrage doit expirer sans qu'aucune
+        requête n'arrive)."""
+        if self._preview_task is not None and not self._preview_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._preview_task = loop.create_task(self._preview_loop(), name="lab-preview-terms")
+
+    async def _preview_loop(self) -> None:
+        while True:
+            await asyncio.sleep(min(300.0, max(2.0, self.cfg.preview_ttl_h * 3600 / 4)))
+            try:
+                await self.preview_sweep()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("veille des adresses d'essai : passage en échec")
 
     async def op_commits(self, c: Caller, app: str) -> dict:
         self._app(c, app)

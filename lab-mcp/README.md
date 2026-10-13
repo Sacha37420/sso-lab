@@ -34,7 +34,7 @@ rendu par les deux entrées, succès comme erreurs).
 ### Depuis l'éditeur du lab
 Rien à régler : l'espace de travail reçoit `LAB_MCP_URL` et `LAB_MCP_TOKEN`, et l'image déclare le
 serveur à Claude Code et à Mistral Vibe. Ce jeton est **limité au projet ouvert** (état, journaux,
-variables, base, déploiement, tests) et ne se voit annoncer que les outils qu'il peut appeler.
+variables, base, déploiement, tests, adresse d'essai) et ne se voit annoncer que les outils qu'il peut appeler.
 
 ### Depuis son propre poste (Claude Code ≥ 2.1.231)
 ```bash
@@ -55,9 +55,20 @@ d'autorisation échoue (le realm a un chemin, `/auth/realms/ssolab`) :
 
 ### Outils MCP
 `whoami` · `list_apps` · `check_name` · `create_app` · `deploy` · `job_status` · `status` · `logs` ·
-`env_list` / `env_get` / `env_set` / `env_unset` · `sql` · `run_tests` · `smtp_status` · `open_ticket`.
+`env_list` / `env_get` / `env_set` / `env_unset` · `sql` · `run_tests` · `smtp_status` · `open_ticket` ·
+`preview_deploy` / `preview_status` / `preview_stop`.
 `create_app` accepte une graine facultative (`seed` : lots métier et cahier des charges d'une
 spécification, posés dans le premier commit — `API.md` §3.2).
+
+### Adresse d'essai (chantier « essai-dev »)
+`preview_deploy` (ou `POST /mcp/api/projects/<app>/preview`) construit **l'essai** d'un projet : son
+dossier de travail tel qu'il est, sans tests, servi à `https://<DOMAIN>/dev-<uid>/` — une adresse par
+développeur, celle du **propriétaire** du projet. Le moteur ne fait que lancer
+`scripts/app-preview.sh` (`up` et `down` par `lab-lock.sh`, `status` sans verrou), lire sa dernière
+ligne `RESULTAT=` (`labmcp/preview.py`) et tenir le terme : `LAB_PREVIEW_TTL_H` heures (défaut 12)
+après sa construction, l'essai est démonté ; il l'est aussi quand son projet est retiré. Le terme
+n'est gardé nulle part : il se relit toutes les 5 minutes et au démarrage du moteur. Formes et
+erreurs : `API.md` §3.9.
 `create_app`, `deploy`, `run_tests` rendent un `job_id` : rappeler `job_status` jusqu'à
 `terminal: true`. Résultats et erreurs : ceux d'`API.md` (table de correspondance au §1).
 
@@ -220,10 +231,11 @@ Django dans le `.env` de l'app, et `scripts/app-restart.sh` les met en service s
 | `azp` **exact par entrée** : `lab-mcp` pour `/mcp`, `lab-admin` pour `/mcp/api` ; `admin-cli` refusé partout | `labmcp/auth.py` |
 | Entrée MCP : compte dans `.devs`, relu à chaque requête. Superutilisateur = `LAB_SUPERUSER`, jamais un groupe | `labmcp/auth.py`, `registry.py` |
 | Propriété du projet pour toute opération qui en prend un ; « inconnu » et « à un autre » indistincts | `Engine._app` |
-| Jeton d'espace : 256 bits, haché, limité à un projet et à douze opérations (annoncées seules), jamais superutilisateur | `workspaces.py`, `Engine.call` |
+| Jeton d'espace : 256 bits, haché, limité à un projet et à quinze opérations (annoncées seules), jamais superutilisateur | `workspaces.py`, `Engine.call` |
 | Seuls les scripts d'I4 sont exécutés, en liste d'arguments ; enchaînements lancés **par** `lab-lock.sh` | `procs.py`, `chain.py` |
 | `docker` lancé directement **uniquement** pour les espaces, les pgAdmin et le pare-feu, avec des noms dérivés d'un uid validé | `workspaces.py`, `pgadmin.py`, `firewall.py` |
 | Jeton GitHub = celui de l'appelant, redemandé à oauth-hub à chaque fois, jamais écrit ni journalisé ; pas de `gh` dans l'image | `oauthhub.py`, `github.py` |
+| Essai : propriété du projet contrôlée avant tout lancement ; l'adresse est celle du propriétaire (`.owners`), jamais un uid fourni par l'appelant ; le résultat du script ne décide d'aucun droit, et un résultat absent, illisible ou qui parle d'un autre développeur ou d'un autre projet est un échec ; le script ne reçoit ni jeton ni secret | `Engine.op_preview_*`, `preview.py` |
 | **Un déploiement ne reçoit aucun jeton** : clé de déploiement en lecture seule, déposée à la création | `chain.py` |
 | Console SQL : connexion réseau avec le rôle `dev_<propriétaire>` et son mot de passe ; jamais `devuser` | `sqlconsole.py` |
 | Pare-feu des ponts d'espace : règles limitées à `-i lws+`, posées par un conteneur jetable `NET_ADMIN` ; échec = rien ne s'ouvre | `firewall.py`, `firewall/lab-ws-firewall.sh` |
@@ -276,6 +288,7 @@ Préalables : l'image `lab-workspace:latest` construite (`workspace/`), et `lab-
 | `LAB_WS_IMAGE` / `LAB_WS_MAX` / `LAB_WS_IDLE_MIN` | `lab-workspace:latest` / 3 / 30 |
 | `LAB_WS_MEMORY` / `LAB_WS_CPUS` / `LAB_WS_PIDS` | `2g` / `1` / 512 |
 | `LAB_PG_MAX` / `LAB_PG_MEMORY` / `LAB_PG_IMAGE` | 3 / `512m` / `dpage/pgadmin4:8` |
+| `LAB_PREVIEW_TTL_H` | 12 — durée de vie d'un essai après sa construction, en heures (nombre > 0 ; le moteur refuse de démarrer sinon). Non transmise par `docker-compose.yml` à ce jour : le défaut s'applique |
 | `LAB_WS_BRIDGE_PREFIX` | `lws` — préfixe d'interface des ponts d'espace (essais : `lwt`) |
 | `LAB_WS_PUBLIC_VIA_HOST` | `1` : `<DOMAIN>` résolu vers l'hôte dans l'espace |
 | `LAB_SQL_TIMEOUT_S` / `LAB_SQL_MAX_ROWS` | 10 / 500 |
@@ -313,7 +326,14 @@ Préalables : l'image `lab-workspace:latest` construite (`workspace/`), et `lab-
   quand le gabarit n'a plus de `## Lot 2 — `, et l'absence du contenu de la graine dans les arguments
   des processus et les journaux. Il compare enfin une création **sans** graine entre le moteur
   d'avant (`SEED_BASELINE`) et le moteur courant. Rejouable à tout moment : aucune image construite,
-  aucun réseau, racine du lab factice, GitHub et quatre scripts en doubles (`tests/seed/scripts/`).
+  aucun réseau, racine du lab factice, GitHub et quatre scripts en doubles (`tests/seed/scripts/`) ;
+- `tests/test_preview.py` et `tests/preview/` — adresse d'essai : `bash lab-mcp/tests/preview/run.sh`
+  (≈ 1 min) joue les trois routes et les trois outils contre un **double** de `scripts/app-preview.sh`
+  (`tests/preview/scripts/`, interface I1 du contrat « essai-dev ») sous le vrai `lab-lock.sh` : formes
+  exactes, propriété (un autre développeur : `404`, rien n'est lancé), jeton d'espace, lecture sans
+  verrou, chaque résultat absent, illisible ou incohérent, arrêt, terme (échu, build en cours ou en
+  file, verrou occupé, date illisible, projet retiré), redémarrage du moteur et veille de fond.
+  Aucune image construite, aucun réseau, racine du lab factice.
 
 ### Ce qui reste à vérifier en réel
 1. Un compte humain : première connexion (`me/init` qui inscrit réellement), parcours complet.

@@ -1,4 +1,4 @@
-# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v11, I9 v7, I10 v9 ; espace-chat v1 ; app-builder-lab v1)
+# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v11, I9 v7, I10 v9 ; espace-chat v1 ; app-builder-lab v1 ; essai-dev v1)
 
 Écrite à partir de ce que le code rend réellement (`labmcp/engine.py`). Là où la table d'I5 et ce
 document divergent sur une **forme**, ce document l'emporte.
@@ -30,6 +30,12 @@ plus. Sans corps, rien ne change pour un appelant existant (§3.6).
 MCP `create_app` acceptent un champ facultatif `seed` (lots métier et cahier des charges d'une
 spécification, posés dans le premier commit). Sans `seed`, rien ne change pour un appelant existant
 (§3.2). Le job `create` a alors une étape de plus, `seed` (§4).
+
+**Ajout du chantier « essai-dev » (contrat v1, I2)** — compatible : trois routes
+(`POST`, `GET`, `DELETE /projects/<app>/preview`) et trois outils MCP (`preview_deploy`,
+`preview_status`, `preview_stop`) pour l'**adresse d'essai** d'un développeur (§3.9), un genre de job
+de plus (`preview`, §4) et une erreur de plus (`no_workspace`, §2). Rien d'existant ne change : un job
+d'essai ne bloque ni un déploiement ni un test du même projet, et inversement.
 
 **Écarts avec la table d'I5** :
 - routes **en plus** : `GET /mcp/api/groups` (v6) ; `GET /mcp/api/me/database-password`,
@@ -74,6 +80,7 @@ contrôles, même objet rendu, même erreur. Correspondance :
 | `auto_deploy` | `PUT /projects/<app>/auto-deploy` | — |
 | `workspace_open` / `workspace_close` | `POST` / `DELETE /projects/<app>/workspace` | — |
 | `job` | `GET /jobs/<id>` | `job_status` |
+| `preview_deploy` / `preview_status` / `preview_stop` | `POST` / `GET` / `DELETE /projects/<app>/preview` | `preview_deploy` / `preview_status` / `preview_stop` |
 
 Conventions de l'entrée web :
 - corps de requête et de réponse en JSON (`Content-Type: application/json`) ; corps de requête ≤ 256 Ko
@@ -106,7 +113,8 @@ reformulé. Entrée MCP : le même objet, en JSON, dans le texte de l'erreur d'o
 | `github_not_linked` | 409 | compte GitHub non relié dans oauth-hub | `connect_url` |
 | `github_scope` | 409 | liaison GitHub sans la portée `repo` | `connect_url` parfois |
 | `busy` | 423 | verrou de déploiement occupé (code 75 d'I4) sur une action synchrone — réessayer | — |
-| `job_exists` | 409 | un job est déjà en file ou en cours pour ce projet | `job_id` |
+| `job_exists` | 409 | un job est déjà en file ou en cours pour ce projet (les jobs d'essai `preview` ne comptent qu'entre eux, §3.9) | `job_id` |
+| `no_workspace` | 409 | essai demandé pour un projet qui n'a pas de dossier de travail : ouvrir d'abord son espace | — |
 | `queue_full` | 429 | 8 jobs en attente sur le lab | — |
 | `workspace_limit` | 429 | `LAB_WS_MAX` espaces déjà ouverts | `open`, `max` |
 | `pg_trust_enabled` | 409 | pgAdmin par dev refusé : PostgreSQL accepte encore le rôle d'administration sans mot de passe depuis les réseaux du lab | — |
@@ -671,6 +679,87 @@ n'est rattaché. Modifier un profil ne met **pas** à jour les projets : refaire
 Outil MCP : **`smtp_status(app)`** → `{"profile": "<id>" | null, "label": "…" | null}` — rien d'autre
 par MCP (un mot de passe SMTP ne se confie pas à une IA). Autorisé au jeton d'espace sur le projet ouvert.
 
+### 3.9 Adresse d'essai (chantier « essai-dev », I2)
+
+Chaque développeur a **une** adresse d'essai, `https://<DOMAIN>/dev-<uid>/` (API :
+`https://<DOMAIN>/dev-<uid>-api/`), qui sert **un** de ses projets à la fois, construit depuis son
+**dossier de travail tel qu'il est** (non commité compris), **sans tests**, dans un schéma à part
+(`<projet>__essai`) et derrière un client Keycloak à elle (`dev-<uid>`, groupes requis du projet).
+Construire l'essai d'un autre projet remplace le précédent. L'essai ne remplace pas le déploiement
+(§3.3) et n'y écrit rien.
+
+**L'adresse est celle du propriétaire du projet** (`.owners`), quel que soit l'appelant : le
+superutilisateur qui construit, lit ou arrête l'essai du projet d'un autre agit sur l'adresse de ce
+propriétaire. Le moteur ne fait que lancer `scripts/app-preview.sh` et tenir le terme : aucune
+logique de réécriture, de base ni de Keycloak dans `labmcp/`.
+
+Objet **essai**, le même partout (clés dans cet ordre) :
+```json
+{"state": "running", "current": true, "app": "mon-app",
+ "url": "https://<DOMAIN>/dev-hassan/", "api_url": "https://<DOMAIN>/dev-hassan-api/",
+ "groups": ["developers"], "built_at": "2026-10-13T15:02:11+02:00",
+ "expires_at": "2026-10-14T03:02:11+02:00",
+ "services": [{"service": "backend", "state": "running"}, {"service": "frontend", "state": "running"}]}
+```
+- `state` : `absent` (jamais construit, ou démonté) · `running` (tous les services tournent) ·
+  `degraded` (au moins un ne tourne pas) · `stopped` (conteneurs présents, tous arrêtés) ;
+- `current` : l'adresse du propriétaire montre **ce** projet. `false` quand elle montre un autre de
+  ses projets (`app` le nomme, et tous les autres champs décrivent cet autre essai) ou rien ;
+- `url` / `api_url` : `null` pour un projet sans interface / sans API ; `groups` : groupes admis ;
+- `services[].state` : `running` | `starting` | `exited` | `unhealthy` ;
+- `built_at` : tel que le script le rend (ISO 8601 avec décalage horaire) ;
+- `expires_at` : `built_at` + `LAB_PREVIEW_TTL_H` heures (défaut 12), même décalage horaire. `null`
+  si `state` vaut `absent`, **ou si `built_at` est illisible** (absent, sans décalage horaire).
+
+Adresse vide (`state: "absent"`) : `{"state": "absent", "current": false, "app": null, "url": null,
+"api_url": null, "groups": [], "built_at": null, "expires_at": null, "services": []}`.
+
+#### `POST /projects/<app>/preview` ✅ (contre un double du script) — **sans corps** → ticket de job
+`{"job_id", "kind": "preview", "app", "state": "queued", "jobs_ahead": 0}`. À suivre par
+`GET /jobs/<id>` (§4, genre `preview`). Erreurs immédiates — rien n'est alors lancé :
+
+| Erreur | Quand |
+|---|---|
+| `404 not_found` | projet inconnu, ou d'un autre développeur |
+| `403 forbidden` / `409 not_initialized` | compte hors `developers` / pas encore initialisé |
+| `409 no_workspace` | `{"error": "no_workspace", "detail": "…"}` — aucun dossier de travail pour ce projet (`<LAB_WORK_DIR>/<propriétaire>/<app>`) : ouvrir d'abord son espace (§3.6) |
+| `409 job_exists` | un job d'**essai** est déjà en file ou en cours pour ce projet ; `job_id` le nomme |
+| `429 queue_full` | 8 jobs en attente sur le lab |
+| `503 unavailable` | lab sans domaine (pas d'essai en HTTP local), ou `scripts/app-preview.sh` absent |
+
+Deux projets du même développeur peuvent avoir chacun un job d'essai en file : ils se jouent l'un
+après l'autre, et l'adresse montre le dernier construit.
+
+#### `GET /projects/<app>/preview` ✅ → l'objet essai
+Lecture seule : ne prend **aucun verrou** (répond pendant un déploiement) et ne lance rien d'autre
+que `app-preview.sh status <propriétaire>`. Erreurs : `404 not_found`, `403`/`409 not_initialized`,
+`503 unavailable` (script absent), `500 failed` (sortie du script inexploitable : le moteur n'invente
+pas un état).
+
+#### `DELETE /projects/<app>/preview` ✅ → `{"app", "stopped": true}`
+`stopped: false` si l'adresse ne montrait pas ce projet (elle est vide, ou montre un autre projet) :
+**rien n'est arrêté**. Le schéma d'essai et le client Keycloak sont gardés. Synchrone, sous le verrou
+du lab. Erreurs : `404 not_found`, `403`/`409 not_initialized`, **`423 busy`** (un déploiement tient
+le verrou, ou un essai est en cours de construction — réessayer ; pendant un build l'arrêt n'est pas
+mis en attente, il serait joué après lui), `503 unavailable`, `500 failed`.
+
+#### Terme d'un essai
+Le moteur démonte seul (`app-preview.sh down`) :
+- un essai **échu** : `LAB_PREVIEW_TTL_H` heures après `built_at` ;
+- un essai dont le **projet a été retiré** du lab, ou n'appartient plus à ce développeur ;
+- un essai dont la date de construction est **illisible ou dans le futur** (plus de 5 min) : on ne
+  sait pas son âge, il ne doit pas vivre indéfiniment.
+
+Le terme n'est gardé nulle part dans le moteur : il se **relit** (`status`) à chaque passage de la
+veille (toutes les 5 minutes) et **au démarrage du moteur**, qui démonte alors ce qui est échu
+depuis son arrêt. Reconstruire un essai repousse son terme. Un essai n'est **jamais** démonté tant
+qu'un job d'essai du même développeur est en file ou en cours, ni pendant que le verrou du lab est
+tenu (la veille n'attend pas : elle repasse). Chaque démontage laisse une ligne d'audit
+(`op: "preview_expire"`, `user: "(moteur)"`).
+
+Rien de ce que rend le script ne décide d'un droit : qui peut agir sur un projet est décidé avant,
+par le registre. Un résultat qui ne nomme pas le développeur et le projet demandés est un échec.
+
 ---
 
 ## 4. Jobs (G1, G10)
@@ -679,7 +768,7 @@ par MCP (un mot de passe SMTP ne se confie pas à une IA). Autorisé au jeton d'
 ```json
 {
   "job_id": "d359abbb4186de01",
-  "kind": "deploy",                 // "create" | "deploy" | "tests" | "tests_all"
+  "kind": "deploy",                 // "create" | "deploy" | "tests" | "tests_all" | "preview"
   "app": "mon-app",
   "state": "running",               // "queued" | "running" | "succeeded" | "failed"
   "terminal": false,                // true pour "succeeded" et "failed" : arrêter d'interroger
@@ -726,6 +815,20 @@ si la création porte une graine — §3.2] → `register` → `deploy_key` → 
 `rollback_complete: false` = il reste quelque chose à faire à la main, dit dans `rollback` (cas
 attendu : le dépôt GitHub vide n'a pas pu être supprimé — le lab n'a pas la portée `delete_repo`).
 
+**`preview`** (essai-dev, §3.9) — le journal est fait des lignes d'`app-preview.sh up` (précédées
+d'une ligne du moteur, `étape « preview »`) ; `step` vaut `preview` tant que le job tourne.
+```json
+{"ok": true, "step": "done", "preview": {"state": "running", "current": true, "app": "mon-app", "…": "objet essai, §3.9"}}
+```
+Échec : `{"ok": false, "step": "<étape>", "error": "<phrase>", "reasons": ["…"]}` — `reasons` toujours
+présent, éventuellement vide. Aucun autre champ (pas d'`exit_code`).
+
+| `step` | Sens |
+|---|---|
+| `arguments` · `source` · `rewrite` · `validate` · `env` · `schema` · `build` · `client` · `up` | étape d'`app-preview.sh` en échec, relayée telle quelle avec son `error` et ses `reasons` (`validate` : les raisons du contrôle de sûreté). Un échec avant `client` laisse l'essai précédent en service |
+| `lock` | verrou du lab occupé trop longtemps — rien n'a été lancé |
+| `interne` | le script s'est arrêté sans dernière ligne `RESULTAT=`, ou elle est illisible, ou incohérente (autre développeur ou autre projet que ceux demandés, succès annoncé avec un code d'échec, état illisible ou adresse vide après un succès annoncé). **Jamais un succès** |
+
 **`tests_all`** (v11) — voir `POST /tests/run-all`, §3.5.
 
 **`tests`** — étape : `cloisonnement`
@@ -745,8 +848,8 @@ Autre échec (runner injoignable…) : `{"ok": false, "step": "cloisonnement", "
   connexion). L'initialisation ne se fait que par lab-admin.
 - **Jeton d'espace de travail** (`labws_…`, variable `LAB_MCP_TOKEN` dans l'espace) : vaut son dev,
   **limité au projet ouvert**, et aux outils `whoami`, `status`, `logs`, `env_list`, `env_set`,
-  `env_unset`, `deploy`, `run_tests`, `job_status`, (v8) **`sql`**, (v9) `smtp_status` et (v11) `env_get` — même exécution que pour le dev :
-  rôle `dev_<uid>` du propriétaire, schéma du projet. `tools/list` n'annonce à ce jeton **que ces douze
+  `env_unset`, `deploy`, `run_tests`, `job_status`, (v8) **`sql`**, (v9) `smtp_status`, (v11) `env_get` et (essai-dev) `preview_deploy`, `preview_status`, `preview_stop` — même exécution que pour le dev :
+  rôle `dev_<uid>` du propriétaire, schéma du projet. `tools/list` n'annonce à ce jeton **que ces quinze
   outils** ; un autre outil appelé quand même : `forbidden` ; tout autre projet : `not_found`. Il
   meurt à la fermeture de l'espace et au redémarrage du moteur.
 - Les outils rendent exactement les objets des routes correspondantes (§1).

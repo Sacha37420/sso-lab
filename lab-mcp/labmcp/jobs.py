@@ -38,7 +38,7 @@ _STEP = re.compile(r"\[lab-mcp\] étape « ([a-z0-9_]+) »")
 @dataclass
 class Job:
     id: str
-    kind: str                 # deploy | create | tests | tests_all
+    kind: str                 # deploy | create | tests | tests_all | preview
     app: str
     owner: str                # qui l'a lancé : un uid, ou « auto-deploy »
     state: str = "queued"     # queued | running | succeeded | failed  (les deux derniers sont terminaux)
@@ -100,11 +100,17 @@ class JobManager:
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
-    def active_for(self, app: str) -> Job | None:
+    def active_for(self, app: str, preview: bool = False) -> Job | None:
+        """Job en file ou en cours pour ce projet. Les jobs d'ESSAI (`preview`) forment une famille à
+        part : un essai ne touche jamais à l'app en service, il ne bloque donc ni un déploiement ni
+        un test du même projet, et inversement (la file les joue l'un après l'autre)."""
         for job in self._jobs.values():
-            if job.app == app and job.state in ("queued", "running"):
+            if job.app == app and job.state in ("queued", "running") and (job.kind == "preview") == preview:
                 return job
         return None
+
+    def active(self, kind: str) -> list[Job]:
+        return [j for j in self._jobs.values() if j.kind == kind and j.state in ("queued", "running")]
 
     def submit(self, kind: str, app: str, owner: str,
                work: Callable[[Job], Awaitable[dict]]) -> Job:

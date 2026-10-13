@@ -111,6 +111,9 @@ def routes(engine: Engine) -> list[Route]:
     async def project(r, c): return await call("project", c, app=app(r), refresh=flag(r, "refresh"))
     async def deploy(r, c): return await call("deploy", c, app=app(r), sha=(await body(r)).get("sha") or "")
     async def commits(r, c): return await call("commits", c, app=app(r))
+    async def preview_deploy(r, c): return await call("preview_deploy", c, app=app(r))   # sans corps (I2)
+    async def preview_status(r, c): return await call("preview_status", c, app=app(r))
+    async def preview_stop(r, c): return await call("preview_stop", c, app=app(r))
     async def logs(r, c): return await call("logs", c, app=app(r), service=q(r, "service", ""), tail=q(r, "tail", 200))
     async def env_list(r, c): return await call("env_list", c, app=app(r))
 
@@ -211,6 +214,8 @@ def routes(engine: Engine) -> list[Route]:
         R("/projects/{app}", project, "GET"),
         R("/projects/{app}/deploy", deploy, "POST"),
         R("/projects/{app}/commits", commits, "GET"),
+        R("/projects/{app}/preview", preview_deploy, "POST"), R("/projects/{app}/preview", preview_status, "GET"),
+        R("/projects/{app}/preview", preview_stop, "DELETE"),
         R("/projects/{app}/logs", logs, "GET"),
         R("/projects/{app}/env", env_list, "GET"),
         Route(P + "/projects/{app}/env/{key}", env_get, methods=["GET"]),

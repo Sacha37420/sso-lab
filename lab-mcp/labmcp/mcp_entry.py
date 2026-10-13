@@ -25,6 +25,7 @@ TOOL_OPS = {
     "deploy": "deploy", "job_status": "job", "status": "project", "logs": "logs",
     "env_list": "env_list", "env_get": "env_get", "env_set": "env_set", "env_unset": "env_unset", "sql": "sql",
     "run_tests": "run_tests", "open_ticket": "open_ticket", "smtp_status": "smtp_status",
+    "preview_deploy": "preview_deploy", "preview_status": "preview_status", "preview_stop": "preview_stop",
 }
 
 
@@ -66,7 +67,10 @@ def build(cfg: Config, engine: Engine) -> FastMCP:
             "d'environnement, interroger sa base, lancer le test de cloisonnement, ouvrir un ticket. Un "
             "développeur n'agit que sur ses propres projets. `deploy`, `create_app` et `run_tests` sont "
             "asynchrones : ils rendent un `job_id` à suivre avec `job_status` jusqu'à `terminal: true`. Seul un "
-            "commit présent sur GitHub est déployable. Une erreur est un objet JSON {error, detail}."
+            "commit présent sur GitHub est déployable. `preview_deploy` (asynchrone lui aussi) construit "
+            "l'ESSAI d'un projet : son dossier de travail, non commité compris, servi à l'adresse d'essai du "
+            "développeur (/dev-<uid>/), sans tests et avec sa propre base — il ne remplace pas le déploiement. "
+            "Une erreur est un objet JSON {error, detail}."
         ),
         stateless_http=True, json_response=True, streamable_http_path="/mcp",
         host=cfg.host, port=cfg.port,
@@ -120,6 +124,28 @@ def build(cfg: Config, engine: Engine) -> FastMCP:
         Asynchrone → `job_id`. Le résultat nomme le commit déployé et le résultat des tests.
         """
         return await call(ctx, "deploy", app=app, sha=sha)
+
+    @mcp.tool()
+    async def preview_deploy(app: str, ctx: Context) -> dict:
+        """Construit l'ESSAI d'un projet : le dossier de travail tel qu'il est (non commité compris), sans tests.
+
+        Servi à l'adresse d'essai du propriétaire (`https://<domaine>/dev-<uid>/`, une par développeur :
+        construire l'essai d'un autre projet remplace le précédent), réservé aux groupes requis du projet,
+        dans un schéma à part (`<projet>__essai`, vide au départ) — jamais les données en service.
+        Ne remplace PAS `deploy` (commit poussé, tests). Asynchrone → `job_id` ; le résultat du job porte
+        `preview` (adresse, état, terme `expires_at`) ou l'étape en échec et ses `reasons`.
+        """
+        return await call(ctx, "preview_deploy", app=app)
+
+    @mcp.tool()
+    async def preview_status(app: str, ctx: Context) -> dict:
+        """État de l'adresse d'essai du propriétaire du projet. `current: false` = elle montre un autre projet, ou rien."""
+        return await call(ctx, "preview_status", app=app)
+
+    @mcp.tool()
+    async def preview_stop(app: str, ctx: Context) -> dict:
+        """Arrête l'essai du projet. `stopped: false` = l'adresse ne montrait pas ce projet, rien n'est arrêté."""
+        return await call(ctx, "preview_stop", app=app)
 
     @mcp.tool()
     async def job_status(job_id: str, ctx: Context, tail: int = 200) -> dict:

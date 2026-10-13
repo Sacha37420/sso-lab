@@ -54,6 +54,8 @@ class Config:
     ws_cpus: str
     ws_pids: int
     ws_public_via_host: bool # DOMAIN résolu vers l'hôte dans l'espace (indépendant du NAT en épingle)
+    # ── adresse d'essai (chantier essai-dev, I2) ──
+    preview_ttl_h: float     # LAB_PREVIEW_TTL_H : durée de vie d'un essai après sa construction
     # ── console SQL ──
     sql_timeout_s: int
     sql_max_rows: int
@@ -63,6 +65,16 @@ class Config:
     @property
     def scripts(self) -> str:
         return os.path.join(self.root, "scripts")
+
+
+def _ttl_hours(raw: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0.0
+    if not 0 < value <= 24 * 365:
+        raise SystemExit("LAB_PREVIEW_TTL_H doit être un nombre d'heures strictement positif (défaut : 12).")
+    return value
 
 
 def load() -> Config:
@@ -115,6 +127,7 @@ def load() -> Config:
         ws_cpus=_env("LAB_WS_CPUS", "1"),
         ws_pids=int(_env("LAB_WS_PIDS", "512")),
         ws_public_via_host=_env("LAB_WS_PUBLIC_VIA_HOST", "1") == "1",
+        preview_ttl_h=_ttl_hours(_env("LAB_PREVIEW_TTL_H", "12")),
         sql_timeout_s=int(_env("LAB_SQL_TIMEOUT_S", "10")),
         sql_max_rows=int(_env("LAB_SQL_MAX_ROWS", "500")),
         host=_env("LAB_MCP_HOST", "0.0.0.0"),

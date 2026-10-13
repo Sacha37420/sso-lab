@@ -29,6 +29,9 @@ class AuthMiddleware:
         self.cfg = cfg
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        # Veille du terme des adresses d'essai : lancée dans la boucle du serveur dès son démarrage
+        # (le premier appel reçu est celui de « lifespan »), relancée si elle s'est arrêtée.
+        self.engine.preview_watch()
         if scope["type"] != "http" or web.is_open_path(scope["path"]):
             await self.app(scope, receive, send)
             return
