@@ -134,7 +134,7 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
 | **Espace de travail** | `workspace/` (image `lab-workspace`), conteneur `ws-<uid>` | Un VS Code par projet, à la demande : code-server (`:8080`), Claude Code, Mistral Vibe ; et un écran de conversation pour téléphone (`:8090`, `workspace/chat/`, servi sous `/ws/<uid>/_chat/`) qui relaie un agent ACP (`claude-agent-acp`, `vibe-acp`). Pas de Docker, pas de `sudo`, ni `dev-net` ni `sso-net` |
 | **pgAdmin par dev** | conteneur `pg-<uid>`, relais `lab-pg-relay` (`lab-mcp/pg-relay/`) | Un pgAdmin à la demande vers la **seule** base du dev, sans mot de passe enregistré, sur un réseau interne qui ne joint que le relais PostgreSQL |
 | **Comptes d'envoi d'email** | `lab-mcp/labmcp/smtp.py`, `scripts/app-smtp.sh`, `scripts/app-restart.sh` | Un dev définit ses comptes SMTP ; le lab pose les variables `EMAIL_*` de Django dans l'app. **Pas de service d'envoi** : l'app parle à son fournisseur |
-| **Scripts** | `scripts/app-*.sh`, `validate-app.sh`, `check-app-name.sh`, `dev-db.sh`, `lab-lock.sh`, `lib/registry.sh` | Les seules commandes que le moteur exécute |
+| **Scripts** | `scripts/app-*.sh` (dont `app-preview.sh`), `validate-app.sh`, `check-app-name.sh`, `dev-db.sh`, `lab-lock.sh`, `lib/registry.sh` | Les seules commandes que le moteur exécute |
 
 ### Règles à ne pas rouvrir
 
@@ -209,6 +209,53 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
   « Tout accepter » est un réglage par conversation, jamais actif par défaut ni mémorisé.
 - **Inactivité d'un espace** : trois signes — requête par la passerelle, battement de code-server,
   `last_activity_ms` du service de conversation (ignoré s'il est absent, en erreur ou dans le futur).
+
+### Adresse d'essai d'un développeur — `/dev-<uid>` (2026-10-13)
+
+Chaque développeur a **une** adresse à lui, `https://<DOMAIN>/dev-<uid>/` (API : `/dev-<uid>-api/`),
+qui sert le projet ouvert dans son espace **tel qu'il est dans son dossier de travail, non commité,
+sans tests**, quand il le demande. Ce n'est pas un déploiement : le chemin à portes (commit poussé,
+tests) est inchangé et l'essai n'y écrit rien. Contrat et rapports : `chantiers/essai-dev/`.
+
+- **Qui le lance** : dans l'espace, la commande `lab-essai` (`lab-essai`, `status`, `stop`), les
+  tâches VS Code « Lab : construire / état / arrêter l'essai » (extension intégrée à code-server,
+  `workspace/vscode/lab-essai/`), ou les outils MCP `preview_deploy`, `preview_status`,
+  `preview_stop` ; dans `lab-admin`, le bloc « Adresse d'essai » de la page d'un projet (actions
+  réservées au propriétaire). Jamais par un push ni un webhook.
+- **Tout est dans `scripts/app-preview.sh`** (`up|down|status`, lancé sous `lab-lock.sh`) ; le
+  moteur ne fait que l'appeler et tenir le terme (`LAB_PREVIEW_TTL_H`, 12 h après la construction).
+- **Une adresse par développeur, pas par projet** (un espace = un projet à la fois) : construire
+  l'essai d'un autre projet remplace le précédent. L'essai est celui du **propriétaire** de l'app.
+- **Le contrôle de sûreté reste entier** : le dossier de travail est copié (liste établie par un
+  dépôt git à nous — la configuration git du développeur n'est jamais lue), réécrit **dans la
+  copie** (chemin Caddy → `dev-<uid>`, conteneurs `dev-<uid>-<service>`, aucun port publié), puis
+  c'est la copie réécrite qui passe `validate_compose.py` comme une app nommée `dev-<uid>`. Une
+  réécriture incomplète est un refus, jamais un essai à moitié.
+- **Accès : exactement les groupes requis de l'app**, par un client Keycloak propre (`dev-<uid>`,
+  flow `require-dev-<uid>`, `create-app-client.sh --exact-groups` : un groupe de l'essai précédent
+  perd l'accès). Un jeton de l'app en service est refusé par l'API de l'essai, et inversement.
+- **Données à part** : schéma `<slug>__essai` dans la base du propriétaire (un slug d'app ne
+  contient jamais `__`), gardé d'un essai à l'autre et supprimé par `app-remove.sh`. C'est une
+  séparation de données, pas une barrière : le rôle `dev_<uid>` possède aussi ses autres schémas.
+- **Un essai n'a ni le compte de service de l'app** (donc pas ses fichiers dans `storage`) **ni son
+  compte d'envoi d'email**, ne publie aucun port, et n'existe pas sans domaine (HTTP local).
+- **`dev` et tout nom en `dev-…` sont réservés** (`check-app-name.sh`, règle 8), pour tous.
+- **Règle `[image]` ajoutée à `validate_compose.py`, pour tous les déploiements** : un service
+  construit ne nomme son image que `<app>-…` — sinon un dépôt pouvait poser son code sous
+  l'étiquette `storage-backend` ou celle du moteur.
+- **`work-clone.sh` ne lance plus aucune commande git dans un dossier de travail existant**
+  (faille fermée le 2026-10-13) : le développeur écrit le `.git/config` de son clone, et un
+  `git status` du moteur y exécutait `core.fsmonitor`, un filtre ou un hook avec le socket Docker
+  — un accès root à l'hôte pour tout développeur. Le clone est seulement créé ; le développeur
+  fait son `git pull`. **Ne jamais lancer git, côté moteur, dans un dossier qu'un développeur écrit.**
+- Limites connues : app `postgis` et app à volume `external` non éprouvées ou refusées ; un chemin
+  d'app écrit en dur ailleurs que dans `docker-compose.yml`, `nginx.conf` et `nginx-entrypoint.sh`
+  n'est pas réécrit ; le superutilisateur ne peut construire l'essai d'un autre que par le MCP ou
+  l'API, pas depuis l'interface.
+- Essais rejouables : `bash scripts/tests/preview/run.sh`, `bash lab-mcp/tests/preview/run.sh`,
+  `WS_IMAGE=lab-workspace:latest bash workspace/verify.sh`.
+- **Non éprouvé** : le parcours complet par un développeur réel (bouton de lab-admin ou
+  `lab-essai` dans un espace ouvert, avec un vrai jeton d'espace).
 
 ### De la spécification au projet — `app-builder` → `lab-admin` → moteur (2026-10-13)
 
@@ -1301,6 +1348,7 @@ ci-dessous, lancé avec `bash sso-lab/…`).
 | `new-app.sh [--owner <uid>]` | Scaffold d'une nouvelle app dans `deploiement/` (appelé par le moteur) |
 | `app-register.sh`, `app-sync.sh`, `app-remote.sh`, `app-status.sh`, `app-logs.sh`, `app-env.sh`, `app-test.sh`, `app-smtp.sh`, `app-restart.sh`, `app-remove.sh`, `app-relocate.sh` | Les commandes d'exploitation d'une app — les seules que le moteur exécute. Chacune documente son usage en tête de fichier |
 | `validate-app.sh`, `check-app-name.sh` | Contrôle de sûreté d'un dépôt avant déploiement ; règles de nommage |
+| `app-preview.sh up\|down\|status <uid> [app]` | Adresse d'essai d'un développeur (`/dev-<uid>`) : dossier de travail non commité, sans tests |
 | `dev-db.sh ensure\|ensure-lab\|ensure-all\|status\|hba-status\|rotate\|lockdown-*` | Rôles et bases par propriétaire |
 | `lab-lock.sh <commande>` | Exécute sous le verrou de déploiement (code 75 si occupé) |
 | `workspace-image.sh` | Construit l'image `lab-workspace` des espaces VS Code |

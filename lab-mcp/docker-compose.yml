@@ -47,6 +47,7 @@ services:
       LAB_WS_IMAGE: "${LAB_WS_IMAGE:-lab-workspace:latest}"
       LAB_WS_MAX: "${LAB_WS_MAX:-3}"
       LAB_WS_IDLE_MIN: "${LAB_WS_IDLE_MIN:-30}"
+      LAB_PREVIEW_TTL_H: "${LAB_PREVIEW_TTL_H:-12}"
       LAB_PG_MAX: "${LAB_PG_MAX:-3}"
     networks:
       - sso-net            # Keycloak (clés du realm), oauth-hub, lab-runner, Caddy, passerelle
