@@ -398,7 +398,7 @@ fait rien et dit ce qui serait sauvegardé ; `--list` montre les copies ; `--loc
   (`pg_dump -Fc`, restaurable base par base) et leurs rôles ; l'annuaire LDAP (`slapcat`) ; les
   volumes `infra_storage-media`, `sso-lab_keycloak-data`, `sso-lab_caddy-data`,
   `lab-media_config` ; et tout ce qui n'est dans aucun dépôt (`.env`, registres, `.lab-state/`,
-  `init.ldif`, `~/edge-router/`). **Pas** les enregistrements de `lab-media`, ni les caches, ni
+  `init.ldif`, `~/edge-router/`, `chantiers/`). **Pas** les enregistrements de `lab-media`, ni les caches, ni
   `~/lab-work`.
 - **Deux copies** : `~/sauvegardes/lab/` et le NAS (partage et compte dédié dans le `.env`
   racine : `LAB_BACKUP_NAS`, `LAB_BACKUP_NAS_USER` ; dossier `lab/` ; mot de passe dans

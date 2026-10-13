@@ -116,6 +116,8 @@ config_list() {
     find . -maxdepth 3 \( -name '.keycloak-client-opts' -o -name '.keycloak-service-account-roles' -o -name '.no-autodeploy' \) \
          -not -path './.git/*' 2>/dev/null
     [[ -d .lab-state ]] && find .lab-state -type f -not -name '*.log' -not -name 'deploy.lock*' 2>/dev/null
+    # Contrats et rapports de chantier : en grande partie hors dépôt (.git/info/exclude).
+    [[ -d chantiers ]] && find chantiers -type f 2>/dev/null
   } | sort -u
 }
 
