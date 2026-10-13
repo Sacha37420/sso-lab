@@ -217,6 +217,19 @@ def main():
             for name, extra in (build.get("additional_contexts") or {}).items():
                 if not inside(str(extra), app_dir):
                     refuse("build", f"{where} : contexte additionnel `{name}` hors du dossier de l'app")
+            # Le NOM de l'image construite : `image: storage-backend` (ou une
+            # entrée de `build.tags`) ferait poser, par le build de cette app,
+            # l'étiquette de l'image d'une AUTRE app — son prochain démarrage
+            # lancerait alors ce code-ci, avec son .env et ses volumes. Sans
+            # `image:`, Compose nomme l'image « <app>-<service> » : c'est la
+            # seule forme permise à un service construit.
+            built_re = re.compile(r"^%s-[a-z0-9][a-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?$" % re.escape(app))
+            named = ([svc["image"]] if svc.get("image") is not None else []) + list(build.get("tags") or [])
+            for image_name in named:
+                if not built_re.match(str(image_name)):
+                    refuse("image", f"{where} : l'image construite s'appellerait « {image_name} » — un service "
+                                    f"construit ne peut nommer son image que « {app}-… » "
+                                    "(sinon il remplacerait l'image d'une autre app)")
             for k, v in build.items():
                 if k in {"context", "dockerfile", "args", "target", "labels", "additional_contexts",
                          "dockerfile_inline", "platforms", "pull", "no_cache", "shm_size", "tags"}:

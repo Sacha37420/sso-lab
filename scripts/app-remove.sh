@@ -20,6 +20,9 @@
 #   3. le schéma PostgreSQL de l'app — UNIQUEMENT s'il vit dans la base de son
 #      propriétaire (dev_<uid>/gis_<uid>) ; un schéma de devdb/gisdb n'est jamais
 #      supprimé par ce script (il affiche la commande) ;
+#      et le schéma d'essai <slug>__essai, cherché par son nom dans les seules
+#      bases du propriétaire ; l'essai du propriétaire (adresse dev-<uid>) est
+#      démonté d'abord s'il montre cette app (étape 1) ;
 #   4. dans le dépôt parent : lien de sous-module (index), section .gitmodules,
 #      configuration et dossier .git/modules, ligne « <app>/ » du .gitignore ;
 #   5. le dossier $ROOT/<app> ;
@@ -81,6 +84,17 @@ _left="$(docker ps -aq --filter "label=com.docker.compose.project=${APP}" 2>/dev
 if [[ -n "$_left" ]]; then
   # shellcheck disable=SC2086
   docker rm -f $_left > /dev/null 2>&1 || true
+fi
+
+# L'essai du propriétaire (chantier « essai-dev », I1) : s'il montre CETTE app,
+# il est démonté — ses conteneurs servent le code d'un projet qui disparaît.
+# S'il montre un autre projet, on n'y touche pas. Le verrou est déjà tenu par
+# ce script : app-preview.sh le constate et ne le reprend pas.
+_PV_STATE="$(registry_state_dir)/preview/${OWNER}/state.json"
+if [[ -s "$_PV_STATE" && "$(jq -r '.app // empty' "$_PV_STATE" 2>/dev/null || true)" == "$APP" ]]; then
+  log "    l'adresse d'essai dev-${OWNER} montre '$APP' : démontage"
+  bash "$SCRIPT_DIR/app-preview.sh" down "$OWNER" 2>&1 | grep -v '^RESULTAT=' | sed 's/^/    /' >&2 \
+    || log "    ⚠ l'essai dev-${OWNER} n'a pas pu être démonté — à faire : bash scripts/lab-lock.sh bash scripts/app-preview.sh down ${OWNER}"
 fi
 
 # ── 2. Keycloak ───────────────────────────────────────────────────────────────
@@ -176,6 +190,23 @@ else
   done
   log "    (pas de .env — schéma cherché par son nom dans les bases de « ${OWNER} »)"
 fi
+
+# Schéma d'essai de l'app (<slug>__essai — chantier « essai-dev », I1). Son nom
+# se déduit de celui de l'app, jamais du .env ; il n'est cherché que dans les
+# bases du propriétaire, comme ci-dessus — jamais dans devdb/gisdb ni `lab`.
+_essai="${APP//-/_}__essai"
+for _pair in "dev-postgres:dev_${OWNER}:$(_infra_val POSTGRES_USER):devuser" "dev-postgis:gis_${OWNER}:$(_infra_val POSTGIS_USER):gisuser"; do
+  IFS=: read -r _container _db _admin _admin_default <<< "$_pair"
+  _admin="${_admin:-$_admin_default}"
+  [[ "$(docker exec "$_container" psql -X -U "$_admin" -d postgres -tAc \
+        "SELECT 1 FROM pg_database WHERE datname = '${_db}'" < /dev/null 2>/dev/null || true)" == "1" ]] || continue
+  [[ "$(docker exec "$_container" psql -X -U "$_admin" -d "$_db" -tAc \
+        "SELECT 1 FROM pg_namespace WHERE nspname = '${_essai}'" < /dev/null 2>/dev/null || true)" == "1" ]] || continue
+  docker exec "$_container" psql -X -U "$_admin" -d "$_db" -v ON_ERROR_STOP=1 -q \
+    -c "DROP SCHEMA IF EXISTS \"${_essai}\" CASCADE;" < /dev/null > /dev/null 2>&1 \
+    && log "    schéma d'essai ${_essai} supprimé de ${_db} (${_container})" \
+    || log "    ⚠ suppression du schéma d'essai ${_essai} dans ${_db} impossible"
+done
 
 # ── 4. Dépôt parent ───────────────────────────────────────────────────────────
 log "▶ 4/6 dépôt parent (sous-module)"

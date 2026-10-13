@@ -22,10 +22,12 @@
 # seule : ne prend pas le verrou lui-même — c'est l'appelant (new-app.sh) qui
 # fait le contrôle ET l'écriture de .ports/.owners sous le verrou.
 #
-# Les 7 règles sont TOUTES évaluées (pas d'arrêt à la première) : l'appelant
-# affiche d'un coup tout ce qui cloche. La 8ᵉ vérification du contrat (« le
-# dépôt GitHub <login>/<nom> existe déjà ») dépend du compte GitHub de
-# l'appelant : elle appartient au serveur MCP, pas à ce script.
+# Les règles sont TOUTES évaluées (pas d'arrêt à la première) : l'appelant
+# affiche d'un coup tout ce qui cloche. La vérification « le dépôt GitHub
+# <login>/<nom> existe déjà » dépend du compte GitHub de l'appelant : elle
+# appartient au serveur MCP, pas à ce script.
+# Règle 8 (chantier « essai-dev ») : le préfixe « dev- » est réservé aux
+# adresses d'essai des développeurs.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
@@ -126,6 +128,17 @@ for _r in "${RESERVED[@]}"; do
     break
   fi
 done
+
+# ── Règle 8 — préfixe réservé aux adresses d'essai ────────────────────────────
+# Chantier « essai-dev » : chaque développeur a une adresse d'essai /dev-<uid>
+# (et /dev-<uid>-api), un projet Compose et un client Keycloak « dev-<uid> ».
+# Le préfixe est réservé EN ENTIER, pas seulement pour les uid existants : un
+# développeur peut être inscrit demain. Vaut pour tout créateur, superutilisateur
+# compris. « dev » tout court est réservé avec lui : son chemin backend /dev-api
+# serait l'adresse d'essai d'un développeur nommé « api ».
+if [[ "$NAME" == dev-* || "$NAME" == "dev" ]]; then
+  refuse "règle 8 : « ${NAME} » — préfixe réservé aux adresses d'essai des développeurs (dev-<uid>)"
+fi
 
 # ── Règle 6 — chemin Caddy réellement servi ───────────────────────────────────
 # Le chemin servi peut DIFFÉRER du nom de dossier (analyse-lora sert /lora et

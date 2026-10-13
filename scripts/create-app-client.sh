@@ -30,6 +30,16 @@
 #                            --native-redirect 'http://127.0.0.1:8765/callback'
 #                            Implique --pkce (voir ci-dessous).
 #   --pkce / --no-pkce     Force / retire l'exigence PKCE S256 sur le client.
+#   --exact-groups         Les groupes de --require-group REMPLACENT ceux que le
+#                            client portait : le rôle <client>-access est retiré
+#                            à tout groupe (et à tout compte) qui n'est pas dans
+#                            la liste ; sans --require-group, le flow dédié est
+#                            délié du client. Échoue (code 1) si, à la fin, le
+#                            rôle n'est pas porté par EXACTEMENT ces groupes.
+#                            Sans cette option, rien ne change : les groupes
+#                            s'ajoutent, comme avant. Sert à l'adresse d'essai
+#                            d'un développeur (app-preview.sh), dont le client
+#                            dev-<uid> montre tour à tour des apps différentes.
 #
 # ⚠ PKCE et clients publics — pourquoi ce n'est PAS activé par défaut
 #   Un client public sans PKCE est vulnérable à l'interception du code
@@ -77,6 +87,7 @@ usage() {
   echo "  --native-redirect <u>  URI de rappel ajoutée telle quelle (répétable, implique --pkce)"
   echo "  --pkce | --no-pkce     Force / retire l'exigence PKCE S256"
   echo "  --no-env               N'écrit aucun <app>/.env (client sans dossier d'app)"
+  echo "  --exact-groups         Les groupes de --require-group remplacent ceux du client"
   echo ""
   echo "Exemples :"
   echo "  $0 mon-api --port 8083"
@@ -169,6 +180,7 @@ declare -a NATIVE_REDIRECTS=()
 NO_ENV=false
 # vide = « laisser tel quel » ; true/false = décision explicite
 PKCE_CHOICE=""
+EXACT_GROUPS=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -183,6 +195,7 @@ while [[ $# -gt 0 ]]; do
     --require-group)   [[ $# -gt 1 ]] || die "--require-group requiert une valeur"; REQUIRE_GROUP="$2"; shift ;;
     --native-redirect) [[ $# -gt 1 ]] || die "--native-redirect requiert une valeur"; NATIVE_REDIRECTS+=("$2"); shift ;;
     --no-env)          NO_ENV=true ;;
+    --exact-groups)    EXACT_GROUPS=true ;;
     --pkce)            PKCE_CHOICE="true" ;;
     --no-pkce)         PKCE_CHOICE="false" ;;
     --caddy-path)      [[ $# -gt 1 ]] || die "--caddy-path requiert une valeur"; CADDY_PATH="$2"; shift ;;
@@ -1248,6 +1261,83 @@ if [[ -n "$REQUIRE_GROUP" ]]; then
     [[ "$BIND_HTTP" =~ ^2 ]] \
       && success "  Flow '$FLOW_ALIAS' lié au client '$CLIENT_ID'." \
       || warn    "  Liaison flow → client : HTTP $BIND_HTTP — $(cat /tmp/_kc_bind.json)"
+  fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# --exact-groups — les groupes demandés REMPLACENT ceux que le client portait
+#
+#   Le bloc 6/5 ne fait qu'AJOUTER le rôle <client>-access à des groupes. Pour un
+#   client qui change d'app (adresse d'essai dev-<uid>), un groupe servi par
+#   l'essai précédent garderait la porte ouverte sur le suivant. Ici : tout
+#   groupe et tout compte qui porte le rôle sans être dans la liste le perd, et
+#   le résultat est RELU — une différence est une erreur, pas un avertissement.
+#   Les rôles <groupe>-member, eux, ne sont jamais retirés : ils décrivent le
+#   groupe, pas ce client, et d'autres apps s'en servent.
+# ══════════════════════════════════════════════════════════════════════════════
+if $EXACT_GROUPS; then
+  _XG_ROLE="${CLIENT_ID}-access"
+  info "Groupes exacts — le rôle '$_XG_ROLE' ne doit rester qu'à : ${REQUIRE_GROUP:-(aucun groupe)}"
+  _XG_WANT="$(jq -cn --arg g "$REQUIRE_GROUP" '$g | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | unique')"
+  _XG_ROLE_JSON="$(curl -s -K "$_KC_AUTH" "$KEYCLOAK_URL/admin/realms/$REALM/roles/$(_urlenc "$_XG_ROLE")")"
+  _XG_ROLE_ID="$(jq -r '.id // empty' <<< "$_XG_ROLE_JSON" 2>/dev/null || true)"
+
+  if [[ -n "$_XG_ROLE_ID" ]]; then
+    _XG_BODY="$(jq -cn --arg i "$_XG_ROLE_ID" --arg n "$_XG_ROLE" '[{id: $i, name: $n}]')"
+    _XG_GROUPS="$(curl -sf -K "$_KC_AUTH" "$KEYCLOAK_URL/admin/realms/$REALM/roles/$(_urlenc "$_XG_ROLE")/groups?max=1000")" \
+      || die "Lecture des groupes portant le rôle '$_XG_ROLE' impossible."
+    while IFS=$'\t' read -r _xg_id _xg_name; do
+      [[ -n "$_xg_id" ]] || continue
+      _xg_http=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+        -K "$_KC_AUTH" -H "Content-Type: application/json" -d "$_XG_BODY" \
+        "$KEYCLOAK_URL/admin/realms/$REALM/groups/$_xg_id/role-mappings/realm")
+      [[ "$_xg_http" =~ ^2 ]] \
+        && success "  Rôle '$_XG_ROLE' retiré au groupe '$_xg_name'." \
+        || die "Retrait du rôle '$_XG_ROLE' au groupe '$_xg_name' : HTTP $_xg_http"
+    done < <(jq -r --argjson want "$_XG_WANT" '.[] | select(.name as $n | $want | index($n) | not) | [.id, .name] | @tsv' <<< "$_XG_GROUPS")
+
+    # Un compte à qui le rôle aurait été donné directement passerait la porte
+    # sans être d'aucun groupe requis.
+    _XG_USERS="$(curl -sf -K "$_KC_AUTH" "$KEYCLOAK_URL/admin/realms/$REALM/roles/$(_urlenc "$_XG_ROLE")/users?max=1000")" \
+      || die "Lecture des comptes portant le rôle '$_XG_ROLE' impossible."
+    while IFS=$'\t' read -r _xg_id _xg_name; do
+      [[ -n "$_xg_id" ]] || continue
+      _xg_http=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+        -K "$_KC_AUTH" -H "Content-Type: application/json" -d "$_XG_BODY" \
+        "$KEYCLOAK_URL/admin/realms/$REALM/users/$_xg_id/role-mappings/realm")
+      [[ "$_xg_http" =~ ^2 ]] \
+        && success "  Rôle '$_XG_ROLE' retiré au compte '$_xg_name' (il lui était donné directement)." \
+        || die "Retrait du rôle '$_XG_ROLE' au compte '$_xg_name' : HTTP $_xg_http"
+    done < <(jq -r '.[] | [.id, .username] | @tsv' <<< "$_XG_USERS")
+
+    # Relecture : exactement les groupes demandés, ni plus ni moins.
+    _XG_HAVE="$(curl -sf -K "$_KC_AUTH" "$KEYCLOAK_URL/admin/realms/$REALM/roles/$(_urlenc "$_XG_ROLE")/groups?max=1000" \
+                | jq -c '[.[].name] | unique')" || die "Relecture des groupes du rôle '$_XG_ROLE' impossible."
+    [[ "$_XG_HAVE" == "$_XG_WANT" ]] \
+      || die "Le rôle '$_XG_ROLE' est porté par $_XG_HAVE au lieu de $_XG_WANT (groupe absent de Keycloak ? synchroniser LDAP)."
+    success "  Rôle '$_XG_ROLE' porté par exactement : $_XG_HAVE"
+  elif [[ "$_XG_WANT" != "[]" ]]; then
+    die "Le rôle '$_XG_ROLE' n'existe pas alors que des groupes sont requis."
+  fi
+
+  if [[ -z "$REQUIRE_GROUP" ]]; then
+    # Aucun groupe requis : le flow dédié refuserait tout le monde (plus aucun
+    # groupe ne porte le rôle). Une valeur vide retire la liaison.
+    _xg_http=$(curl -s -o /tmp/_kc_unbind.json -w "%{http_code}" -X PUT \
+      -K "$_KC_AUTH" -H "Content-Type: application/json" \
+      -d '{"authenticationFlowBindingOverrides": {"browser": ""}}' \
+      "$KEYCLOAK_URL/admin/realms/$REALM/clients/$CLIENT_UUID")
+    [[ "$_xg_http" =~ ^2 ]] || die "Retrait de la liaison du flow dédié : HTTP $_xg_http"
+    _xg_bound="$(curl -sf -K "$_KC_AUTH" "$KEYCLOAK_URL/admin/realms/$REALM/clients/$CLIENT_UUID" \
+                 | jq -r '.authenticationFlowBindingOverrides.browser // ""')"
+    [[ -z "$_xg_bound" ]] || die "Le client '$CLIENT_ID' reste lié à un flow dédié alors qu'aucun groupe n'est requis."
+    success "  Aucun groupe requis : le client '$CLIENT_ID' n'est lié à aucun flow dédié."
+  else
+    # Des groupes sont requis : la porte du navigateur doit être en place.
+    _xg_bound="$(curl -sf -K "$_KC_AUTH" "$KEYCLOAK_URL/admin/realms/$REALM/clients/$CLIENT_UUID" \
+                 | jq -r '.authenticationFlowBindingOverrides.browser // ""')"
+    [[ -n "$_xg_bound" && "$_xg_bound" == "${FLOW_ID:-}" ]] \
+      || die "Le client '$CLIENT_ID' n'est pas lié au flow 'require-${CLIENT_ID}' : la porte du navigateur manque."
   fi
 fi
 
