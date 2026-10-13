@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# work-clone.sh — crée ou met à jour le clone de TRAVAIL d'un projet.
+# work-clone.sh — crée le clone de TRAVAIL d'un projet (ne le met jamais à jour).
 # Contrat « multi-dev » v5, interfaces I3/I4.
 #
 # Usage :
@@ -19,10 +19,9 @@
 #
 # IDEMPOTENT, ET PRUDENT :
 #   • clone absent  → créé depuis l'origin du projet, sur sa branche par défaut ;
-#   • clone présent, SANS modification (ni fichier modifié, ni fichier non
-#     suivi, ni commit local en avance) → mis à jour en avance rapide ;
-#   • clone présent AVEC la moindre modification → RIEN n'est touché, pas même
-#     un fetch : c'est le travail en cours de quelqu'un.
+#   • clone présent → RIEN n'est touché, et AUCUNE commande git n'y est
+#     lancée : le développeur écrit son `.git/config`, git l'exécuterait avec
+#     les droits du moteur (voir la fin du script). Il fait son `git pull`.
 #
 # Identifiants pour lire le dépôt, dans cet ordre : la clé de déploiement du
 # projet (<LAB_STATE_DIR>/deploy-keys/<app>), sinon LAB_GIT_TOKEN, sinon rien
@@ -113,36 +112,19 @@ if [[ ! -e "$CLONE" ]]; then
   exit 0
 fi
 
-# ── Mise à jour ───────────────────────────────────────────────────────────────
-[[ "$(git -C "$CLONE" rev-parse --show-toplevel 2>/dev/null || true)" == "$CLONE" ]] \
-  || die "$CLONE existe mais n'est pas un dépôt git — rien n'a été touché"
-
-# La moindre modification ⇒ on ne touche à rien.
-if [[ -n "$(git -C "$CLONE" status --porcelain 2>/dev/null)" ]]; then
-  log "· $CLONE a des modifications en cours — laissé tel quel (ni fetch, ni fusion)"
-  echo "$CLONE"; exit 0
+# ── Clone déjà là : on n'y lance PLUS RIEN ────────────────────────────────────
+# Ce dossier est écrit par le développeur depuis son espace, `.git/config`
+# compris. Y lancer git d'ici — même un `git status` — exécute ce que ce fichier
+# désigne (core.fsmonitor, filtres smudge/clean, hooks, core.sshCommand…) avec
+# les droits de l'appelant : le moteur, qui tient le socket Docker. L'ancienne
+# mise à jour en avance rapide (status, fetch avec la clé de déploiement, merge)
+# donnait donc à tout développeur un accès root à l'hôte, et la clé de
+# déploiement en prime (constaté par le chantier « essai-dev », 2026-10-13).
+# Le développeur met son clone à jour lui-même (`git pull`, avec son jeton) ;
+# ce script ne fait plus que le créer. Ne jamais réintroduire ici une commande
+# git dans un clone existant, quelle que soit la liste d'options « sûres ».
+if [[ -L "$CLONE" || ! -d "$CLONE" || -L "$CLONE/.git" || ! -d "$CLONE/.git" ]]; then
+  die "$CLONE existe mais n'est pas un dépôt git — rien n'a été touché"
 fi
-_cur="$(git -C "$CLONE" symbolic-ref -q --short HEAD || true)"
-if [[ -z "$_cur" ]]; then
-  log "· $CLONE est sur un commit détaché — laissé tel quel"
-  echo "$CLONE"; exit 0
-fi
-if [[ -n "$(git -C "$CLONE" rev-list --max-count=1 "refs/remotes/origin/${_cur}..HEAD" 2>/dev/null)" ]]; then
-  log "· $CLONE a des commits locaux non poussés sur ${_cur} — laissé tel quel"
-  echo "$CLONE"; exit 0
-fi
-
-if ! gitnet "$CLONE" fetch -q --no-tags "$FETCH_URL" "$REFSPEC" >&2; then
-  log "⚠ lecture du dépôt impossible — clone laissé en l'état ($(git -C "$CLONE" rev-parse --short HEAD))"
-  echo "$CLONE"; exit 0
-fi
-if git -C "$CLONE" rev-parse --verify -q "refs/remotes/origin/${_cur}" > /dev/null; then
-  if git -C "$CLONE" merge -q --ff-only "refs/remotes/origin/${_cur}" >&2; then
-    log "✓ clone à jour sur ${_cur} ($(git -C "$CLONE" rev-parse --short HEAD))"
-  else
-    log "· avance rapide impossible sur ${_cur} — clone laissé tel quel"
-  fi
-else
-  log "· la branche ${_cur} n'existe pas sur origin — clone laissé tel quel"
-fi
+log "· $CLONE existe — laissé tel quel (le développeur le met à jour lui-même : git pull)"
 echo "$CLONE"
