@@ -79,6 +79,54 @@ const prefixe = new URL(URL_WS).pathname;
     await page.keyboard.press('Enter');
     await page.waitForTimeout(8000);
   });
+  // Tâches de l'essai (contrat « essai-dev », I3) : fournies par l'extension intégrée à l'image,
+  // sans .vscode/tasks.json. Ce que les tâches ont réellement lancé se lit dans le journal du
+  // faux serveur MCP (verify.sh) ; ici on relève ce que l'éditeur PROPOSE.
+  const liste = () => page.evaluate(() => {
+    const w = [...document.querySelectorAll('.quick-input-widget')].find(e => e.getBoundingClientRect().height > 0);
+    return w ? [...w.querySelectorAll('.monaco-list-row')].map(e => (e.getAttribute('aria-label') || e.textContent || '').trim()) : null;
+  });
+  const capture = async nom => { if (process.env.CAPTURE) await page.screenshot({ path: process.env.CAPTURE.replace(/\.png$/, `-${nom}.png`) }).catch(() => {}); };
+  // La palette classe « Tasks: Restart Running Task » devant « Tasks: Run Task » : on clique la ligne exacte.
+  const commandeExacte = async titre => {
+    await page.keyboard.press('F1');
+    await page.waitForSelector('.quick-input-widget .input', { state: 'visible', timeout: 20000 });
+    await page.keyboard.type(titre, { delay: 15 });
+    await page.waitForTimeout(1500);
+    const lignes = page.locator('.quick-input-widget .monaco-list-row');
+    for (let i = 0; i < await lignes.count(); i++) {
+      const nom = ((await lignes.nth(i).getAttribute('aria-label')) || '').split(',')[0].trim();
+      if (nom === titre) return lignes.nth(i).click();
+    }
+    throw new Error(`commande « ${titre} » absente de la palette`);
+  };
+  await etape('taches_proposees', async () => {
+    await commandeExacte('Tasks: Run Task');
+    await page.waitForTimeout(4000);
+    await page.keyboard.type('lab-essai', { delay: 20 });
+    await page.waitForTimeout(2500);
+    res.tachesTypes = await liste();
+    await capture('taches-types');
+    await page.keyboard.press('Enter');          // ouvre le type « lab-essai » : ses trois tâches
+    await page.waitForTimeout(5000);
+    res.taches = await liste();
+    await capture('taches');
+    if (!res.taches || !res.taches.some(t => /Lab : état de l'essai/.test(t))) throw new Error('tâche « Lab : état de l\'essai » non proposée');
+    await page.keyboard.type('état', { delay: 20 });
+    await page.waitForTimeout(1500);
+    await page.keyboard.press('Enter');          // lance « Lab : état de l'essai »
+    await page.waitForTimeout(8000);
+    res.apresEtat = await liste();               // null attendu : aucune question posée (détecteur d'erreurs…)
+    await page.keyboard.press('Escape');
+  });
+  await etape('tache_build_par_defaut', async () => {
+    await commandeExacte('Tasks: Run Build Task');   // ce que fait Ctrl+Maj+B
+    await page.waitForTimeout(8000);
+    res.choixBuild = await liste();              // null attendu : la tâche par défaut part sans rien demander
+    await capture('build');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(6000);
+  });
   if (process.env.CAPTURE) await page.screenshot({ path: process.env.CAPTURE }).catch(() => {});
   res.barreEtat = await page.evaluate(() => [...document.querySelectorAll('.statusbar-item')].map(e => (e.textContent || '').trim()).filter(Boolean));
   res.erreurs = [...new Set(res.erreurs)];

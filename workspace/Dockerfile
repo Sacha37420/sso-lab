@@ -129,6 +129,22 @@ COPY lib/ /opt/lab/lib/
 RUN chmod 0755 /usr/local/bin/lab-entrypoint \
  && chmod -R a+rX,go-w /opt/lab/lib /opt/lab/chat/server.js /opt/lab/chat/public /opt/lab/regles-lab.md /opt/lab/code-server.yaml /etc/gitconfig
 
+# Essai du développeur (contrat « essai-dev », I3) :
+#   /usr/local/bin/lab-essai   la commande (Python de l'image, bibliothèque standard seule)
+#   …/vscode/extensions/lab-essai   les trois tâches VS Code « Lab : … l'essai »
+# Les tâches sont une extension INTÉGRÉE à code-server, pas une extension de la maison ni un
+# .vscode/tasks.json : la maison du dev est montée par-dessus l'image (et ses extensions n'y
+# sont recopiées qu'une fois), le dépôt du projet ne doit rien recevoir. Posée ici, elle est
+# proposée dans tout espace et suit l'image à chaque mise à jour.
+COPY bin/lab-essai /usr/local/bin/lab-essai
+COPY vscode/lab-essai/ /usr/lib/code-server/lib/vscode/extensions/lab-essai/
+RUN chmod 0755 /usr/local/bin/lab-essai \
+ && chmod -R a+rX,go-w /usr/lib/code-server/lib/vscode/extensions/lab-essai \
+ && lab-essai --help >/dev/null \
+ && node --check /usr/lib/code-server/lib/vscode/extensions/lab-essai/extension.js \
+ && test "$(jq -r '.main + " " + .contributes.taskDefinitions[0].type' /usr/lib/code-server/lib/vscode/extensions/lab-essai/package.json)" = "./extension.js lab-essai" \
+ && test -z "$(ls -A /home/coder)"
+
 # Garde-fous de build : ce que l'image ne doit PAS contenir.
 RUN ! command -v sudo && ! command -v docker && ! getent group docker \
  && test "$(id -u coder)" = 1000 && test "$(id -Gn coder)" = coder

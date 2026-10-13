@@ -9,6 +9,9 @@
 # Couvre l'éditeur (code-server, :8080) ET le service de conversation (:8090, chantier
 # « espace-chat ») : vrais agents ACP sans identifiants réels, puis conversation complète avec
 # le faux agent de tests/faux_agent_acp.js, au niveau du protocole et en navigateur réel.
+# Couvre aussi l'essai du développeur (chantier « essai-dev ») : la commande `lab-essai` contre
+# le faux moteur de tests/faux_mcp.py (section 3g), et les trois tâches VS Code en navigateur
+# réel (section 7).
 #
 # Ne construit PAS l'image (un build passe par le verrou du lab) :
 #   bash scripts/lab-lock.sh docker build -t lab-workspace:dev workspace
@@ -199,6 +202,13 @@ SORTIE="$(docker run --rm --name "$P-outils" --network none "${ENFERME[@]}" "$IM
   echo "chat_deps=$(cd /opt/lab/chat && node -p "[\"ws\",\"@agentclientprotocol/claude-agent-acp\"].map(p=>p+\"@\"+require(\"./node_modules/\"+p+\"/package.json\").version).join(\" \")" 2>&1)"
   echo "vibe_acp=$(command -v vibe-acp)"
   echo "ecrit_hors_maison=$( (touch /usr/local/bin/x 2>/dev/null && echo oui) || echo non)"
+  echo "lab_essai=$(command -v lab-essai)"
+  echo "lab_essai_aide=$(lab-essai --help 2>&1 | head -1)"
+  echo "lab_essai_sans_env=$(env -u LAB_APP -u LAB_MCP_URL -u LAB_MCP_TOKEN lab-essai status >/dev/null 2>/tmp/e; echo "$? $(grep -c Traceback /tmp/e)")"
+  X=/usr/lib/code-server/lib/vscode/extensions/lab-essai
+  echo "ext_essai=$(jq -r ".publisher + \".\" + .name + \" \" + .main + \" \" + .contributes.taskDefinitions[0].type" $X/package.json 2>&1)"
+  echo "ext_essai_ecrit=$( ([ -w $X ] || [ -w $X/extension.js ] || [ -w /usr/local/bin/lab-essai ]) && echo oui || echo non)"
+  echo "taches_ailleurs=$(ls -d /home/coder/.vscode /work/.vscode /opt/lab/extensions/lab* 2>/dev/null | tr "\n" " ")"
 ' 2>&1)"
 val() { grep -m1 "^$1=" <<<"$SORTIE" | cut -d= -f2-; }
 [[ "$(val uid)" == "1000 gid=1000 groupes=coder" ]] && ok "utilisateur uid 1000, gid 1000, seul groupe « coder »" || ko "utilisateur inattendu : uid=$(val uid)"
@@ -215,6 +225,10 @@ grep -q '^present=' <<<"$SORTIE" && ko "présent dans l'image alors qu'interdit 
 [[ "$(val chat_deps)" == "ws@$(jq -r .dependencies.ws "$ICI/chat/package.json") @agentclientprotocol/claude-agent-acp@$(jq -r '.dependencies["@agentclientprotocol/claude-agent-acp"]' "$ICI/chat/package.json")" ]] && ok "service de conversation : dépendances installées = versions du verrou ($(val chat_deps))" || ko "dépendances du service de conversation inattendues : $(val chat_deps)"
 [[ -z "$(val second_claude)" && -n "$(val vibe_acp)" ]] && ok "pas de second binaire claude embarqué par l'agent ACP (il pilote celui de l'image) ; vibe-acp présent" || ko "second binaire claude embarqué ($(val second_claude)) ou vibe-acp absent"
 [[ "$(val ecrit_hors_maison)" == "non" ]] && ok "coder ne peut pas écrire dans /usr/local/bin" || ko "coder peut écrire dans /usr/local/bin"
+[[ "$(val lab_essai)" == "/usr/local/bin/lab-essai" && "$(val lab_essai_aide)" == "Usage : lab-essai"* ]] && ok "lab-essai est dans le PATH et répond (--help)" || ko "lab-essai absent ou muet : $(val lab_essai) · $(val lab_essai_aide)"
+[[ "$(val lab_essai_sans_env)" == "2 0" ]] && ok "lab-essai sans variables de l'espace : code 2, pas de trace Python" || ko "lab-essai sans environnement : $(val lab_essai_sans_env)"
+[[ "$(val ext_essai)" == "lab.lab-essai ./extension.js lab-essai" ]] && ok "tâches VS Code : extension lab.lab-essai intégrée à code-server (hors de la maison, hors du projet)" || ko "extension des tâches absente ou inattendue : $(val ext_essai)"
+[[ "$(val ext_essai_ecrit)" == "non" && -z "$(val taches_ailleurs)" ]] && ok "coder ne peut modifier ni lab-essai ni l'extension ; aucune tâche posée ailleurs" || ko "lab-essai/extension inscriptibles ($(val ext_essai_ecrit)) ou tâches posées ailleurs : $(val taches_ailleurs)"
 
 # ═════════════════════════════════════════════════════════════════════════════
 titre "2. L'entrée refuse des variables absentes ou invalides (code 64)"
@@ -236,6 +250,8 @@ essai "LAB_MCP_URL avec caractères de commande" -e LAB_UID=alice -e LAB_APP=dem
 titre "3. Espace complet : maison déjà habitée, variables d'I3 posées"
 mkdir -p "$H/.claude" "$H/.vibe" "$H/.config/gh" "$H/.local/share/code-server/User" "$H/.ssh"
 echo 'print("bonjour")' > "$W/main.py"
+# Un script « build » npm : l'éditeur en fait une tâche de build, concurrente de celle du lab (section 7).
+echo '{"name":"demo-app","version":"1.0.0","private":true,"scripts":{"build":"echo npm-build"}}' > "$W/package.json"
 # Ce qui appartient au dev et ne doit JAMAIS bouger :
 echo '{"claudeAiOauth":{"accessToken":"identifiant-factice-claude"}}' > "$H/.claude/.credentials.json"
 echo 'MISTRAL_API_KEY=identifiant-factice-mistral'                      > "$H/.vibe/.env"
@@ -382,12 +398,38 @@ RESTES="$(dx "$P-a" sh -c 'ps -eo args | grep -E "claude-agent-acp|vibe-acp|^/us
 [[ -z "$RESTES" ]] && ok "service tué : aucun processus d'agent ne lui survit (ni l'agent ACP, ni le claude qu'il pilote, ni vibe-acp)" || { ko "des agents survivent à l'arrêt du service"; info "$RESTES"; }
 attend_sante "$P-a" 30 8090 >/dev/null && ok "… et l'entrée relance le service" || ko "service de conversation non relancé"
 
+titre "3g. Essai du développeur : la commande lab-essai contre le faux moteur (contrat « essai-dev », I3)"
+# tests/lab_essai_essais.py lance son propre faux moteur (boucle locale, jeton factice) et joue la
+# commande de l'image dans chaque situation ; chaque ligne « OK … » / « KO … » devient un contrôle.
+RE="$(dx "$P-a" python3 /t/lab_essai_essais.py 2>&1)"
+while IFS= read -r ligne; do
+  case "$ligne" in
+    "OK "*) ok "lab-essai — ${ligne#OK }" ;;
+    "KO "*) ko "lab-essai — ${ligne#KO }" ;;
+  esac
+done <<<"$RE"
+grep -q '^BILAN [0-9]* 0$' <<<"$RE" && [[ "$(grep -c '^OK ' <<<"$RE")" -ge 70 ]] && ok "lab-essai : la série d'essais est allée au bout ($(grep '^BILAN' <<<"$RE" | cut -d' ' -f2) contrôles)" || { ko "lab-essai : série d'essais incomplète ou rouge"; info "$(tail -3 <<<"$RE")"; }
+# Et avec l'environnement RÉEL de l'espace (LAB_MCP_URL et jeton posés par qui l'a lancé) :
+R="$(dx "$P-a" lab-essai status 2>&1)"; RC=$?
+[[ $RC -eq 0 && "$(tail -1 <<<"$R")" == "https://lab.exemple.test/dev-alice/" ]] && ok "lab-essai status avec les variables de l'espace : code 0, adresse en dernière ligne" || { ko "lab-essai status dans l'espace : code $RC"; info "$R"; }
+contient "$R" "$JETON_MCP" && ko "lab-essai affiche le jeton" || ok "lab-essai n'affiche pas le jeton de l'espace"
+R="$(dx -e LAB_MCP_TOKEN=mauvais-jeton "$P-a" lab-essai status 2>&1)"; RC=$?
+[[ $RC -eq 1 ]] && contient "$R" "refusé" && ! contient "$R" "Traceback" && ok "négatif — lab-essai avec un autre jeton : code 1, refus dit en clair" || { ko "négatif lab-essai : code $RC"; info "$R"; }
+LOGMCP="$(dx "$P-a" cat /tmp/faux-mcp.log 2>/dev/null)"
+grep -q '^tools/call auth=OK agent=lab-essai/1 outil=preview_status$' <<<"$LOGMCP" && grep -q '^tools/call auth=KO agent=lab-essai/1 outil=preview_status$' <<<"$LOGMCP" \
+  && ok "vu par le serveur : preview_status de lab-essai avec le bon jeton, et l'essai négatif" || ko "le serveur n'a pas vu lab-essai"
+T="$(dx "$P-a" sh -c "grep -rlF -- '$JETON_MCP' /tmp /opt/lab /etc 2>/dev/null")"; [[ -z "$T" && -z "$(grep -rlF -- "$JETON_MCP" "$H" "$W" 2>/dev/null)" ]] \
+  && ok "après lab-essai : le jeton n'est toujours dans aucun fichier (maison, projet, /tmp, /opt/lab, /etc)" || ko "jeton écrit dans : $T"
+N_ETAT_AVANT="$(grep -c 'auth=OK agent=lab-essai/1 outil=preview_status$' <<<"$LOGMCP")"
+
 # ═════════════════════════════════════════════════════════════════════════════
 titre "4. Préfixe /ws/<uid>/ : ce que le proxy doit faire (proxy Caddy jetable)"
 docker run -d --name "$P-proxy" --network "$P-net" --memory 128m --cpus 0.5 -v "$TMP/Caddyfile:/Caddyfile:ro" \
   --entrypoint caddy "$PROXY_IMAGE" run --config /Caddyfile --adapter caddyfile >/dev/null
-sleep 3
 code() { dx "$P-a" curl -s -o /dev/null -m 8 -w '%{http_code}' "$@"; }
+# Le proxy met de 1 à plus de 5 s à écouter selon la charge de l'hôte : on attend qu'il réponde
+# lui-même (sa redirection 308), 30 s au plus, au lieu d'un délai fixe.
+for _ in $(seq 1 30); do [[ "$(code "$PX:8081/ws/alice")" == 308 ]] && break; sleep 1; done
 [[ "$(code "$PX:8081/ws/alice/?folder=/work/demo-app")" == 200 ]] && ok "préfixe retiré : la page de l'éditeur répond 200 sous /ws/alice/" || ko "page KO derrière le proxy qui retire le préfixe"
 LOC="$(dx "$P-a" curl -s -o /dev/null -m 8 -D - "$PX:8081/ws/alice/" | tr -d '\r' | awk 'tolower($1)=="location:"{print $2}')"
 [[ "$LOC" == "./?folder=/work/demo-app" ]] && ok "redirection RELATIVE vers le dossier du projet (Location: $LOC)" || ko "redirection inattendue : $LOC"
@@ -472,6 +514,7 @@ mesure "au repos, personne de connecté : $(mem_mo "$P-a") Mo (dont $(anon_mo "$
 if [[ $NAVIGATEUR -eq 1 ]] && docker image inspect "$NAV_IMAGE" >/dev/null 2>&1; then
   titre "7. Navigateur réel (Chromium) à travers le proxy, sous /ws/alice/"
   dx -i "$P-a" sh -c 'cat > /tmp/preuve_terminal.sh' < "$ICI/tests/preuve_terminal.sh"
+  PROJET_AVANT="$(cd "$W" && find . | sort)"
   docker run -d --name "$P-nav" --network "$P-net" --memory 1500m --cpus 1 -v "$ICI/tests:/t:ro" \
     -e NODE_PATH=/app/node_modules -e WS_URL="$PX:8081/ws/alice" -e TENIR_S=75 "$NAV_IMAGE" node /t/navigateur.js >/dev/null
   for _ in $(seq 1 240); do docker logs "$P-nav" 2>&1 | grep -q '^PRET' && break; docker ps -q --filter "name=^$P-nav$" | grep -q . || break; sleep 2; done
@@ -480,7 +523,7 @@ if [[ $NAVIGATEUR -eq 1 ]] && docker image inspect "$NAV_IMAGE" >/dev/null 2>&1;
   else
     q() { jq -r "$1" <<<"$RES"; }
     [[ "$(q .urlFinale)" == "$PX:8081/ws/alice/?folder=/work/demo-app" ]] && ok "arrivée par /ws/alice → URL finale $(q .urlFinale)" || ko "URL finale inattendue : $(q .urlFinale)"
-    for e in page fichier_python extension_python terminal; do
+    for e in page fichier_python extension_python terminal taches_proposees tache_build_par_defaut; do
       [[ "$(q ".etapes.$e")" == ok ]] && ok "étape « $e »" || ko "étape « $e » : $(q ".etapes.$e")"
     done
     # vsda : module propriétaire de Microsoft absent de toute distribution libre de VS Code — 404 attendu, même en accès direct.
@@ -497,6 +540,22 @@ if [[ $NAVIGATEUR -eq 1 ]] && docker image inspect "$NAV_IMAGE" >/dev/null 2>&1;
       grep -qx 'jeton_mcp=present' <<<"$PT" && grep -qx 'LAB_APP=demo-app' <<<"$PT" && ok "terminal intégré : variables d'I3 héritées (LAB_APP, LAB_MCP_TOKEN présent)" || ko "terminal : variables non héritées"
       grep -qx 'auteur=Alice Essai <alice@example.org>' <<<"$PT" && ok "terminal intégré : un commit porte l'auteur de LAB_GIT_AUTHOR_NAME/_EMAIL" || ko "terminal : auteur de commit inattendu ($(grep '^auteur=' <<<"$PT"))"
     else ko "la commande tapée dans le terminal intégré ne s'est pas exécutée"; fi
+    # Tâches de l'essai (I3) : proposées par l'éditeur, lancées sans question, sans rien écrire dans le projet.
+    TACHES="$(q '(.taches // []) | map(split(",")[0]) | join(" | ")')"
+    for t in "Lab : construire l'essai" "Lab : état de l'essai" "Lab : arrêter l'essai"; do
+      contient " | $TACHES | " " | $t | " && ok "tâche proposée par l'éditeur : « $t »" || ko "tâche « $t » non proposée (vu : $TACHES)"
+    done
+    [[ "$(q '.apresEtat')" == null ]] && ok "« Lab : état de l'essai » part sans aucune question de l'éditeur" || ko "l'éditeur a posé une question au lancement de la tâche : $(q '.apresEtat | tostring')"
+    [[ "$(q '.choixBuild')" == null ]] && ok "« Run Build Task » (Ctrl+Maj+B) lance la tâche du lab sans rien demander, malgré la tâche « npm: build » du projet : c'est la tâche de build par défaut" \
+                                    || ko "« Run Build Task » demande de choisir : $(q '.choixBuild | tostring')"
+    LOGMCP="$(dx "$P-a" cat /tmp/faux-mcp.log 2>/dev/null)"
+    [[ "$(grep -c 'auth=OK agent=lab-essai/1 outil=preview_status$' <<<"$LOGMCP")" -eq $(( N_ETAT_AVANT + 1 )) ]] \
+      && ok "vu par le serveur : la tâche « état » a appelé preview_status avec le jeton de l'espace (une fois)" || ko "la tâche « état » n'a pas joint le serveur"
+    [[ "$(grep -c 'auth=OK agent=lab-essai/1 outil=preview_deploy$' <<<"$LOGMCP")" -eq 1 ]] && grep -q 'auth=OK agent=lab-essai/1 outil=job_status$' <<<"$LOGMCP" \
+      && ok "vu par le serveur : la tâche de build a appelé preview_deploy (une fois) puis suivi le job" || ko "la tâche de build n'a pas lancé preview_deploy exactement une fois"
+    grep 'agent=lab-essai/1' <<<"$LOGMCP" | grep -qv 'auth=OK\|outil=preview_status$' && ko "une tâche a joint le serveur sans le bon jeton" || ok "aucun appel des tâches sans le bon jeton"
+    [[ "$(cd "$W" && find . | sort)" == "$PROJET_AVANT" ]] && ok "les tâches n'ont rien écrit dans le projet (ni .vscode/tasks.json ni autre fichier)" || ko "le projet a changé : $(cd "$W" && find . | sort | tr '\n' ' ')"
+    [[ ! -e "$H/.local/share/code-server/User/tasks.json" ]] && ok "aucune tâche écrite dans les réglages d'éditeur du dev" || ko "tasks.json écrit dans les réglages du dev"
     mesure "éditeur ouvert + fichier Python + extension Python active + un terminal : $(mem_mo "$P-a") Mo (dont $(anon_mo "$P-a") Mo anonymes) · $(dx "$P-a" cat /sys/fs/cgroup/pids.current) processus/fils"
     # Les deux IA à leur premier écran (aucun identifiant : pas de conversation possible).
     dx -d -t -w /work/demo-app "$P-a" claude; dx -d -t -w /work/demo-app "$P-a" vibe; sleep 25
@@ -537,6 +596,9 @@ if attend_sante "$P-a" 90 >/dev/null && attend_sante "$P-a" 30 8090 >/dev/null; 
   && ok "Vibe : déclaration mise à jour vers la nouvelle LAB_MCP_URL, sans doublon" || ko "Vibe : URL non mise à jour"
 [[ "$(sommes)" == "$AVANT" ]] && ok "identifiants factices et réglages d'éditeur toujours inchangés (sha256)" || ko "un fichier protégé a changé"
 T="$(grep -rlF -- "$JETON_MCP" "$H" 2>/dev/null)"; [[ -z "$T" ]] && ok "le jeton n'est toujours dans aucun fichier de la maison" || ko "jeton écrit dans : $T"
+R="$(dx "$P-a" timeout 60 lab-essai status 2>&1)"; RC=$?
+[[ $RC -eq 1 ]] && contient "$R" "injoignable" && ! contient "$R" "Traceback" && ! contient "$R" "$JETON_MCP" \
+  && ok "lab-essai en lecture seule, moteur réellement injoignable (nom sans adresse) : code 1, dit en clair, sans trace ni jeton" || { ko "lab-essai, moteur injoignable : code $RC"; info "$R"; }
 
 docker rm -f "$P-a" >/dev/null 2>&1
 fi   # fin des sections 1 à 9 (sautées avec --conversation)
@@ -628,7 +690,7 @@ if [[ $NAVIGATEUR -eq 1 ]] && docker image inspect "$NAV_IMAGE" >/dev/null 2>&1;
   titre "10c. Navigateur réel (Chromium) : la conversation jouée à l'écran, à 390 px et 1280 px"
   docker run -d --name "$P-proxy" --network "$P-net" --memory 128m --cpus 0.5 -v "$TMP/Caddyfile:/Caddyfile:ro" \
     --entrypoint caddy "$PROXY_IMAGE" run --config /Caddyfile --adapter caddyfile >/dev/null
-  sleep 3
+  for _ in $(seq 1 30); do [[ "$(dx "$P-c" curl -s -o /dev/null -m 8 -w '%{http_code}' "$PX:8081/ws/alice")" == 308 ]] && break; sleep 1; done
   [[ -n "$CAPTURES" ]] && mkdir -p "$CAPTURES"
   for LARG in 390 1280; do
     runner_libre || { ko "le runner du lab est occupé depuis 5 min : navigateur non lancé"; continue; }

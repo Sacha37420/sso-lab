@@ -1,0 +1,439 @@
+#!/usr/local/bin/python3 -I
+# ─────────────────────────────────────────────────────────────────────────────
+# lab-essai — construit, montre ou arrête l'essai du projet de cet espace.
+#
+#   lab-essai            construit l'essai du projet ($LAB_APP) à partir du dossier de travail,
+#                        suit le build et affiche l'adresse
+#   lab-essai status     état de l'adresse d'essai
+#   lab-essai stop       arrête l'essai
+#
+# L'essai est l'adresse propre au développeur (https://<domaine>/dev-<uid>/) : elle sert ce
+# qu'il y a dans le dossier de travail, non commité compris, sans tests, avec sa propre base.
+# Il ne remplace pas le déploiement (commit poussé, tests) — voir les règles de l'espace.
+#
+# La commande parle au moteur du lab par son entrée MCP (Streamable HTTP, réponses JSON,
+# sans session), avec les outils preview_deploy, preview_status, preview_stop et job_status.
+#
+# Variables lues : LAB_APP, LAB_MCP_URL, LAB_MCP_TOKEN (posées par le lab dans tout espace).
+# Le jeton n'est jamais affiché, jamais écrit, jamais passé à un autre processus : la commande
+# n'en lance aucun, et ne joint aucune autre adresse que LAB_MCP_URL (ni proxy, ni redirection).
+#
+# Codes de sortie : 0 réussi · 1 échec (la raison est affichée) · 2 usage ou environnement
+# incomplet. Bibliothèque standard seule ; « -I » : ni PYTHON*, ni dossier courant dans le
+# chemin d'import (la commande est lancée depuis le dépôt du projet).
+# ─────────────────────────────────────────────────────────────────────────────
+import datetime
+import json
+import os
+import re
+import signal
+import sys
+import time
+import urllib.error
+import urllib.request
+
+USAGE = """\
+Usage : lab-essai            construit l'essai du projet de cet espace et affiche son adresse
+        lab-essai status     état de l'adresse d'essai
+        lab-essai stop       arrête l'essai
+
+L'essai sert le dossier de travail tel qu'il est (non commité compris), sans tests, avec sa
+propre base, vide au départ. Il ne remplace pas le déploiement : commit poussé, puis `deploy`.
+Codes de sortie : 0 réussi, 1 échec, 2 usage ou environnement incomplet."""
+
+RE_APP = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
+# https obligatoire hors boucle locale : le jeton voyage dans un en-tête (même règle que l'entrée).
+RE_URL = re.compile(r"^(https://[A-Za-z0-9.-]+|http://(127\.0\.0\.1|localhost))(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$")
+RE_CONTROLE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")   # tout caractère de commande sauf \t et \n
+DELAI_APPEL = 30          # secondes par appel au moteur
+TAIL = 1000               # maximum servi par job_status
+ESSAIS_RESEAU = 5         # coupures consécutives tolérées pendant un suivi
+RELANCES_MAX = 3          # jobs d'une autre nature attendus avant de renoncer
+
+ETATS = {
+    "running": "en service",
+    "degraded": "dégradé — au moins un service ne tourne pas",
+    "stopped": "arrêté — les conteneurs sont là, aucun ne tourne",
+    "absent": "aucun essai — jamais construit, ou démonté",
+}
+
+_jeton = ""               # gardé pour être MASQUÉ dans tout ce qui est affiché, par précaution
+
+
+class Arret(Exception):
+    """Fin de la commande avec un message pour l'utilisateur et un code de sortie."""
+
+    def __init__(self, code, message=""):
+        super().__init__(message)
+        self.code, self.message = code, message
+
+
+class ErreurLab(Exception):
+    """Erreur rendue par le moteur : {"error", "detail", …} (lab-mcp/API.md §2)."""
+
+    def __init__(self, corps):
+        super().__init__(corps.get("error"))
+        self.corps = corps
+        self.code = str(corps.get("error") or "")
+        self.detail = str(corps.get("detail") or "")
+
+
+class Injoignable(Exception):
+    """Le moteur n'a pas répondu (réseau, délai, passerelle) : peut être passager."""
+
+
+# ── Affichage ────────────────────────────────────────────────────────────────
+def propre(texte):
+    texte = str(texte)
+    if _jeton:
+        texte = texte.replace(_jeton, "***")
+    return RE_CONTROLE.sub("", texte)
+
+
+def dire(texte="", flux=None):
+    flux = flux or sys.stdout
+    flux.write(propre(texte) + "\n")
+    flux.flush()
+
+
+def plainte(texte):
+    dire(texte, sys.stderr)
+
+
+def quand(iso):
+    """« 2026-10-14T03:02:11+02:00 » → « 14/10/2026 à 03:02 » ; la valeur telle quelle sinon."""
+    try:
+        return datetime.datetime.fromisoformat(str(iso)).strftime("%d/%m/%Y à %H:%M")
+    except ValueError:
+        return str(iso)
+
+
+# ── Client MCP minimal ───────────────────────────────────────────────────────
+class _SansRedirection(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_a, **_k):   # le jeton ne suit aucune redirection
+        return None
+
+
+class Moteur:
+    """Appels d'outils MCP : un POST JSON-RPC par appel, sans session (le moteur est sans état)."""
+
+    def __init__(self, url, jeton):
+        self.url, self._auth, self._id = url, "Bearer " + jeton, 0
+        # ProxyHandler({}) : aucune variable *_proxy de l'environnement n'est suivie.
+        self._ouvre = urllib.request.build_opener(urllib.request.ProxyHandler({}), _SansRedirection()).open
+
+    def appel(self, outil, arguments):
+        self._id += 1
+        corps = json.dumps({"jsonrpc": "2.0", "id": self._id, "method": "tools/call",
+                            "params": {"name": outil, "arguments": arguments}}).encode()
+        requete = urllib.request.Request(self.url, data=corps, method="POST", headers={
+            "Authorization": self._auth, "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream", "User-Agent": "lab-essai/1"})
+        try:
+            with self._ouvre(requete, timeout=DELAI_APPEL) as rep:
+                brut = rep.read()
+        except urllib.error.HTTPError as exc:
+            self._refus_http(exc)
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            raison = getattr(exc, "reason", exc)
+            raise Injoignable(f"{type(raison).__name__ if not isinstance(raison, str) else raison}") from None
+        try:
+            message = json.loads(brut)
+            if not isinstance(message, dict):
+                raise ValueError
+        except ValueError:
+            raise Arret(1, "Réponse illisible du moteur du lab (ce n'est pas du JSON) : "
+                           "LAB_MCP_URL désigne-t-elle bien l'entrée MCP du lab ?") from None
+        if message.get("error"):
+            erreur = message["error"] if isinstance(message["error"], dict) else {}
+            raise Arret(1, f"Le moteur du lab refuse l'appel « {outil} » : {erreur.get('message', 'erreur de protocole')}")
+        resultat = message.get("result")
+        if not isinstance(resultat, dict):
+            raise Arret(1, "Réponse inattendue du moteur du lab (ni résultat ni erreur).")
+        texte = "".join(c.get("text", "") for c in resultat.get("content") or []
+                        if isinstance(c, dict) and c.get("type") == "text")
+        if resultat.get("isError"):
+            self._erreur_outil(outil, texte)
+        try:
+            objet = json.loads(texte) if texte else resultat.get("structuredContent")
+        except ValueError:
+            objet = None
+        if not isinstance(objet, dict):
+            raise Arret(1, f"Réponse inattendue du moteur du lab à « {outil} » (un objet JSON était attendu).")
+        return objet
+
+    @staticmethod
+    def _erreur_outil(outil, texte):
+        # Forme du moteur : « Error executing tool <outil>: {"error": …, "detail": …} ».
+        debut = texte.find("{")
+        if debut != -1:
+            try:
+                corps = json.loads(texte[debut:])
+                if isinstance(corps, dict) and corps.get("error"):
+                    raise ErreurLab(corps)
+            except ValueError:
+                pass
+        if texte.startswith("Unknown tool"):
+            raise Arret(1, f"Le moteur du lab ne propose pas l'outil « {outil} » : il n'est pas (encore) à jour "
+                           "pour les essais. Rien n'a été lancé.")
+        raise Arret(1, f"Le moteur du lab a refusé « {outil} » : {texte[:400] or 'sans explication'}")
+
+    @staticmethod
+    def _refus_http(exc):
+        try:
+            corps = json.loads(exc.read(65536))
+        except (ValueError, OSError):
+            corps = None
+        if isinstance(corps, dict) and corps.get("error"):
+            raise ErreurLab(corps) from None
+        if exc.code in (401, 403):
+            raise ErreurLab({"error": "unauthorized" if exc.code == 401 else "forbidden", "detail": ""}) from None
+        if exc.code in (301, 302, 303, 307, 308):
+            raise Arret(1, "Le moteur du lab répond par une redirection, qui n'est pas suivie (le jeton ne "
+                           "quitte pas LAB_MCP_URL) : vérifier l'adresse, sans barre finale.") from None
+        if exc.code in (502, 503, 504):
+            raise Injoignable(f"HTTP {exc.code} — le moteur est arrêté ou redémarre") from None
+        raise Arret(1, f"Le moteur du lab a répondu HTTP {exc.code} : LAB_MCP_URL désigne-t-elle bien "
+                       "l'entrée MCP du lab ?") from None
+
+
+def message_erreur(exc):
+    """Phrase affichable pour une erreur du moteur, `reasons` comprises."""
+    if exc.code == "unauthorized":
+        lignes = ["Jeton de l'espace refusé par le lab" + (f" : {exc.detail}" if exc.detail else "."),
+                  "Ce jeton meurt à la fermeture de l'espace et au redémarrage du moteur : "
+                  "fermer puis rouvrir l'espace depuis lab-admin."]
+    elif exc.code == "busy":
+        lignes = [f"Le lab est occupé (busy) : {exc.detail or 'un déploiement ou un build est en cours'}",
+                  "Rien n'a été fait : réessayer dans un moment."]
+    elif exc.code in ("failed", "unavailable", "upstream"):
+        lignes = [f"Le lab n'a pas pu répondre ({exc.code}) : {exc.detail or 'sans explication'}",
+                  "Ce n'est pas le projet qui est en cause : si cela dure, le dire à l'administrateur du lab."]
+    else:
+        lignes = [f"Refusé par le lab ({exc.code}) : {exc.detail or 'sans explication'}"]
+    raisons = exc.corps.get("reasons")
+    if isinstance(raisons, list):
+        lignes += [f"  - {r}" for r in raisons]
+    return "\n".join(lignes)
+
+
+# ── Présentation de l'objet « essai » (contrat essai-dev, I2) ────────────────
+def services(essai):
+    liste = [f"{s.get('service')} ({s.get('state')})" for s in essai.get("services") or [] if isinstance(s, dict)]
+    return ", ".join(liste) or "aucun"
+
+
+def montrer(essai, app, titre):
+    etat = essai.get("state")
+    dire(titre)
+    dire(f"  État      : {ETATS.get(etat, etat)}")
+    if etat == "absent":
+        return
+    montre = essai.get("app")
+    if essai.get("current") is False and montre != app:
+        dire(f"  Projet    : {montre} — l'adresse montre un AUTRE de vos projets, pas {app}")
+    else:
+        dire(f"  Projet    : {montre}")
+    dire(f"  Accès     : groupes {', '.join(essai.get('groups') or []) or '(aucun)'}")
+    dire(f"  Services  : {services(essai)}")
+    if essai.get("built_at"):
+        dire(f"  Construit : le {quand(essai['built_at'])}")
+    if essai.get("expires_at"):
+        dire(f"  Valable   : jusqu'au {quand(essai['expires_at'])}, puis démonté (le reconstruire le prolonge)")
+    if essai.get("url") and essai.get("api_url"):
+        dire(f"  API       : {essai['api_url']}")
+
+
+def adresse(essai):
+    """L'adresse sur une ligne à elle, la dernière : celle de l'interface, à défaut celle de l'API."""
+    url = essai.get("url") or essai.get("api_url")
+    if url:
+        dire("Adresse de l'essai :")
+        dire(url)
+    return bool(url)
+
+
+# ── Les trois actions ────────────────────────────────────────────────────────
+def suivre(moteur, job_id):
+    """Affiche le journal du job au fil de l'eau, sans répéter une ligne ; rend sa vue finale."""
+    vues, devant, coupures = 0, None, 0
+    pas = max(0.05, float(os.environ.get("LAB_ESSAI_POLL_S") or 2))   # essais seulement ; conseillé : 2 s
+    while True:
+        try:
+            vue = moteur.appel("job_status", {"job_id": job_id, "tail": TAIL})
+            coupures = 0
+        except Injoignable as exc:
+            coupures += 1
+            if coupures > ESSAIS_RESEAU:
+                raise Arret(1, f"Le moteur du lab ne répond plus ({exc}). Le build n'est pas arrêté pour autant : "
+                               "`lab-essai status` dira où en est l'adresse.") from None
+            time.sleep(min(10, pas * coupures))
+            continue
+        except ErreurLab as exc:
+            if exc.code == "not_found":
+                raise Arret(1, f"Le job {job_id} n'existe plus : le moteur a redémarré (un job ne survit pas à "
+                               "un redémarrage). `lab-essai status` dira où en est l'adresse.") from None
+            raise
+        journal = [str(x) for x in vue.get("log") or []]
+        total = vue.get("log_lines_total")
+        total = total if isinstance(total, int) else len(journal)
+        nouvelles = total - vues
+        if nouvelles > 0:
+            if nouvelles > len(journal):
+                dire(f"… ({nouvelles - len(journal)} ligne(s) du journal non affichée(s))")
+                nouvelles = len(journal)
+            for ligne in journal[len(journal) - nouvelles:]:
+                dire(ligne)
+            vues = total
+        if vue.get("terminal"):
+            return vue
+        if vue.get("state") == "queued" and vue.get("jobs_ahead") != devant:
+            devant = vue.get("jobs_ahead")
+            dire(f"En file d'attente : {devant} job(s) devant celui-ci." if devant else "En file d'attente.")
+        time.sleep(pas)
+
+
+def construire(moteur, app):
+    job_id = None
+    try:
+        for _ in range(RELANCES_MAX + 1):
+            rejoint = False
+            try:
+                ticket = moteur.appel("preview_deploy", {"app": app})
+                job_id = ticket.get("job_id")
+                if not isinstance(job_id, str) or not job_id:
+                    raise Arret(1, "Réponse inattendue du moteur du lab à « preview_deploy » (pas de job_id).")
+                dire(f"Essai de {app} : build lancé à partir du dossier de travail (job {job_id}).")
+            except ErreurLab as exc:
+                job_id = exc.corps.get("job_id")
+                if exc.code != "job_exists" or not isinstance(job_id, str) or not job_id:
+                    raise
+                rejoint = True
+                dire(f"Un job est déjà en cours pour {app} (job {job_id}) : suivi de ce job.")
+            vue = suivre(moteur, job_id)
+            resultat = vue.get("result") if isinstance(vue.get("result"), dict) else {}
+            if not rejoint or vue.get("kind") == "preview" or "preview" in resultat:
+                return conclure(app, resultat, rejoint)
+            # Le job rejoint n'était pas un build d'essai (déploiement, tests…) : il est fini, on lance l'essai.
+            dire(f"Ce job ({vue.get('kind')}) est terminé : lancement du build de l'essai.")
+            job_id = None
+        raise Arret(1, f"{app} reste occupé par d'autres jobs : réessayer dans un moment.")
+    except KeyboardInterrupt:
+        if job_id:
+            raise Arret(1, f"\nSuivi interrompu. Le build N'EST PAS arrêté : il continue côté lab (job {job_id}).\n"
+                           "`lab-essai` reprend le suivi, `lab-essai status` donne l'état de l'adresse, "
+                           "`lab-essai stop` arrête l'essai une fois construit.") from None
+        raise Arret(1, "\nInterrompu. Si le build a été lancé, il continue côté lab : `lab-essai` reprend "
+                       "le suivi.") from None
+
+
+def conclure(app, resultat, rejoint):
+    essai = resultat.get("preview")
+    if resultat.get("ok") is True and isinstance(essai, dict):
+        dire()
+        montrer(essai, app, f"Essai construit — {essai.get('app') or app}")
+        dire("  Base      : un schéma d'essai à part, vide au premier build — jamais les données en service")
+        if rejoint:
+            dire("  Note      : ce build avait été lancé avant cette commande ; relancer `lab-essai` si des "
+                 "fichiers ont changé depuis.")
+        if not adresse(essai):
+            plainte("Le moteur n'a rendu aucune adresse pour cet essai.")
+        return 0
+    etape = resultat.get("step") or "inconnue"
+    lignes = [f"Échec de l'essai à l'étape « {etape} » : {resultat.get('error') or 'sans explication (voir le journal ci-dessus)'}"]
+    raisons = resultat.get("reasons")
+    if isinstance(raisons, list):
+        lignes += [f"  - {r}" for r in raisons]
+    raise Arret(1, "\n".join(lignes))
+
+
+def etat(moteur, app):
+    essai = moteur.appel("preview_status", {"app": app})
+    montrer(essai, app, f"Adresse d'essai — vue depuis {app}")
+    if essai.get("state") == "absent":
+        dire("  `lab-essai` construit l'essai de ce projet.")
+    elif essai.get("current") is False:
+        dire(f"  `lab-essai` la remplacera par l'essai de {app}.")
+        adresse(essai)
+    else:
+        adresse(essai)
+    return 0
+
+
+def arreter(moteur, app):
+    rendu = moteur.appel("preview_stop", {"app": app})
+    if rendu.get("stopped") is True:
+        dire(f"Essai de {app} arrêté. Sa base d'essai est conservée pour le prochain build.")
+    else:
+        dire(f"Rien à arrêter : l'adresse d'essai ne montrait pas {app}.")
+    return 0
+
+
+# ── Entrée ───────────────────────────────────────────────────────────────────
+def environnement():
+    global _jeton
+    app, url = os.environ.get("LAB_APP", ""), os.environ.get("LAB_MCP_URL", "")
+    _jeton = os.environ.get("LAB_MCP_TOKEN", "").strip()
+    manquantes = [n for n, v in (("LAB_APP", app), ("LAB_MCP_URL", url), ("LAB_MCP_TOKEN", _jeton)) if not v]
+    if manquantes:
+        raise Arret(2, f"Variable(s) d'environnement absente(s) : {', '.join(manquantes)}.\n"
+                       "lab-essai se lance dans un espace de travail du lab, qui les pose. Dans un espace : "
+                       "le fermer puis le rouvrir depuis lab-admin.")
+    if not RE_APP.fullmatch(app) or "--" in app:
+        raise Arret(2, "LAB_APP n'a pas la forme d'un nom de projet du lab.")
+    if not RE_URL.fullmatch(url):
+        raise Arret(2, "LAB_MCP_URL invalide : https://… attendu (http:// admis seulement en boucle locale).")
+    return app, Moteur(url, _jeton)
+
+
+def principal(argv):
+    if len(argv) == 1 and argv[0] in ("-h", "--help", "help"):
+        dire(USAGE)
+        return 0
+    actions = {(): construire, ("status",): etat, ("stop",): arreter}
+    action = actions.get(tuple(argv))
+    if action is None:
+        raise Arret(2, USAGE)
+    app, moteur = environnement()
+    try:
+        return action(moteur, app)
+    except ErreurLab as exc:
+        raise Arret(1, message_erreur(exc)) from None
+    except Injoignable as exc:
+        raise Arret(1, f"Moteur du lab injoignable ({exc}). Rien n'a été fait. Réessayer dans un moment ; "
+                       "si cela dure, le dire à l'administrateur du lab.") from None
+
+
+def main():
+    def _terme(*_a):          # SIGTERM (tâche arrêtée depuis l'éditeur) : même sortie que Ctrl-C
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _terme)
+    # Lancée en arrière-plan par un shell, la commande hériterait d'un SIGINT ignoré : on le rétablit.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        try:
+            code = principal(sys.argv[1:])
+        except Arret as exc:
+            if exc.message:
+                plainte(exc.message)
+            code = exc.code
+        except KeyboardInterrupt:
+            plainte("\nInterrompu.")
+            code = 1
+        except BrokenPipeError:
+            raise
+        except Exception as exc:   # jamais de trace Python devant l'utilisateur
+            plainte(f"Erreur inattendue dans lab-essai ({type(exc).__name__}) : {exc}")
+            code = 1
+        sys.stdout.flush()
+    except BrokenPipeError:        # sortie fermée par le lecteur (`lab-essai | head`)
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except OSError:
+            pass
+        code = 1
+    sys.exit(code)
+
+
+if __name__ == "__main__":
+    main()

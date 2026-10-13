@@ -1,0 +1,33 @@
+{
+  "name": "lab-essai",
+  "displayName": "Lab : essai",
+  "description": "Tâches du lab pour l'adresse d'essai du développeur : construire, état, arrêter. Elles lancent la commande lab-essai de l'espace ; rien n'est écrit dans le dépôt du projet.",
+  "publisher": "lab",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "extensionKind": ["workspace"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished", "onTaskType:lab-essai"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": true },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "taskDefinitions": [
+      {
+        "type": "lab-essai",
+        "required": ["action"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["construire", "etat", "arreter"],
+            "description": "construire : lab-essai · etat : lab-essai status · arreter : lab-essai stop"
+          }
+        }
+      }
+    ]
+  }
+}

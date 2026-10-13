@@ -22,7 +22,8 @@ développeur. Ces règles s'imposent à toute IA comme à tout humain. Les règl
 
 - Le serveur MCP **`lab`** est déjà déclaré. Outils disponibles pour ce projet : `whoami`,
   `status`, `logs`, `env_list` / `env_get` / `env_set` / `env_unset`, `deploy`, `run_tests`, `job_status`,
-  `sql` (ta base, schéma de ce projet), `smtp_status` (quel compte d'envoi d'email est rattaché).
+  `sql` (ta base, schéma de ce projet), `smtp_status` (quel compte d'envoi d'email est rattaché),
+  `preview_deploy` / `preview_status` / `preview_stop` (l'adresse d'essai, voir plus bas).
 - **Pousse, puis appelle `deploy`.** Seul un commit présent sur GitHub est déployable. Suis le
   job avec `job_status` jusqu'au bout et lis le résultat des tests.
 - Les tests backend passent **avant** la mise en service : s'ils sont rouges, rien n'est déployé.
@@ -32,6 +33,23 @@ développeur. Ces règles s'imposent à toute IA comme à tout humain. Les règl
 - Il n'y a **ni Docker, ni `sudo`, ni accès à l'hôte** ici, et il n'y en aura pas : ne cherche
   pas à les obtenir. Ce qui ne passe pas par le moteur ne se fait pas depuis cet espace.
 - Un problème du lab lui-même (pas du projet) : ouvre un ticket depuis `lab-admin`, ne bricole pas.
+
+## Essayer avant de pousser — l'adresse d'essai
+
+- Chaque développeur a **une** adresse d'essai, `https://<domaine>/dev-<uid>/` (API :
+  `/dev-<uid>-api/`). Elle sert le dossier de travail **tel qu'il est, non commité compris**.
+- Pour la construire : l'outil MCP **`preview_deploy`** (puis `job_status` jusqu'au bout), ou la
+  commande **`lab-essai`** dans le terminal, ou dans l'éditeur la tâche « Lab : construire
+  l'essai » (Ctrl+Maj+B). `preview_status` / `lab-essai status` disent ce que l'adresse montre ;
+  `preview_stop` / `lab-essai stop` l'arrêtent. Rien ne la construit tout seul : seulement sur demande.
+- **L'essai ne remplace pas le déploiement.** Il ne passe aucun test et n'est pas la version en
+  service : un lot n'est livré que par un commit poussé, `deploy`, et ses tests verts.
+- **L'essai a sa propre base** (un schéma à part, vide au départ), jamais les données en service :
+  crée-y les données dont tu as besoin, n'attends pas d'y retrouver celles de l'app.
+- Une seule adresse par développeur : construire l'essai d'un autre projet remplace le précédent.
+  Elle est réservée aux groupes requis du projet, et démontée d'office après quelques heures.
+- Un essai refusé l'est pour une raison affichée (contrôle de sûreté, build) : corrige-la, ne la
+  contourne pas. L'essai ne publie aucun port et n'envoie aucun email.
 
 ## Règles qui s'imposent à toute app du lab
 

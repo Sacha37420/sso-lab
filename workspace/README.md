@@ -26,6 +26,8 @@ pensée pour le téléphone où l'on ne voit que la conversation avec Claude Cod
 | … son WebSocket | `ws@8.21.3` (npm, verrou `chat/package-lock.json`) | `/opt/lab/chat/node_modules` |
 | … agent ACP de Claude | `@agentclientprotocol/claude-agent-acp@0.81.2` (npm, même verrou), **sans** ses dépendances optionnelles | `/opt/lab/chat/node_modules` |
 | … agent ACP de Vibe | `vibe-acp`, fourni par `mistral-vibe` | `/usr/local/bin/vibe-acp` |
+| Commande `lab-essai` | `bin/lab-essai` (Python de l'image, bibliothèque standard seule) | `/usr/local/bin/lab-essai` |
+| Tâches VS Code de l'essai | `vscode/lab-essai/` (extension `lab.lab-essai`, sans dépendance) | `/usr/lib/code-server/lib/vscode/extensions/lab-essai` |
 | git, openssh-client, curl, jq, tini, nano, less | paquets Debian 12 | — |
 
 Utilisateur `coder`, uid/gid 1000, seul groupe `coder`. **Ni `sudo`, ni Docker, ni compilateur.**
@@ -152,6 +154,57 @@ fonctionnent sans réglage, rien n'est stocké. Sans `GH_TOKEN`, repli sur la co
 s'il en a fait une (`gh auth login`, conservée dans sa maison). `GH_TOKEN` n'est jamais envoyé à un
 autre hôte que GitHub.
 
+## L'essai du développeur : `lab-essai` et ses tâches VS Code
+
+Chaque développeur a une adresse d'essai (`https://<DOMAIN>/dev-<uid>/`, contrat « essai-dev ») qui
+sert son dossier de travail tel qu'il est, non commité compris, sans tests, dans un schéma à part.
+Le moteur la construit ; l'espace n'apporte que **de quoi le demander** :
+
+```
+lab-essai            # construit l'essai de $LAB_APP, suit le job, affiche l'adresse
+lab-essai status     # ce que montre l'adresse, et jusqu'à quand
+lab-essai stop       # arrête l'essai (sa base est conservée)
+```
+
+- **Transport** : l'entrée MCP du moteur (`$LAB_MCP_URL`, jeton `$LAB_MCP_TOKEN`), un `POST`
+  JSON-RPC `tools/call` par appel, sans session ni `initialize` — c'est ce que sert le moteur
+  (`FastMCP`, `stateless_http=True, json_response=True`, vérifié sur le SDK `mcp==1.30.0` de son
+  image). Outils : `preview_deploy`, `preview_status`, `preview_stop`, `job_status`.
+- **Codes de sortie** : `0` réussi · `1` échec (la raison, et les `reasons` du job ou de l'erreur,
+  sont affichées) · `2` usage, ou variable de l'espace absente ou invalide (rien n'est appelé).
+  Une interruption rend `1` : l'issue du build n'est pas connue.
+- **Sortie** : le journal du job au fil de l'eau sur la sortie standard, chaque ligne une seule
+  fois (compte `log_lines_total` du moteur ; si le journal a avancé de plus de 1000 lignes entre
+  deux interrogations, l'écart est dit) ; à la fin, l'adresse **seule sur la dernière ligne**
+  (celle de l'interface, à défaut celle de l'API). Les messages d'échec vont sur la sortie d'erreur.
+- **`409 job_exists`** : la commande suit le job en cours au lieu d'échouer. Si c'est un build
+  d'essai, son résultat est le sien (et elle prévient qu'il a commencé avant elle) ; si c'est un
+  autre job du projet (déploiement, tests), elle l'attend puis lance l'essai.
+- **Ctrl-C** (ou l'arrêt de la tâche dans l'éditeur) n'arrête que le suivi : le build continue
+  côté lab, la commande le dit et nomme le job ; la relancer reprend le suivi.
+- **Le jeton** n'est ni affiché (il serait masqué même si le moteur le renvoyait dans un journal),
+  ni écrit, ni passé à un processus : la commande n'en lance aucun. Elle ne joint que
+  `LAB_MCP_URL` — variables `*_proxy` ignorées, aucune redirection suivie, `https://` exigé hors
+  boucle locale. Les caractères de commande du journal (séquences de terminal) sont retirés.
+- Moteur injoignable, jeton refusé, moteur sans les outils d'essai, réponse qui n'est pas du
+  moteur : une phrase en français, jamais une trace Python.
+- `LAB_ESSAI_POLL_S` règle le rythme d'interrogation (défaut 2 s) — **essais seulement**.
+
+**Tâches VS Code.** Trois tâches sont proposées dans tout espace : « Lab : construire l'essai »
+(tâche de build par défaut : `Ctrl+Maj+B`), « Lab : état de l'essai », « Lab : arrêter l'essai »
+(*Terminal → Run Task… → lab-essai*). Elles lancent `lab-essai` directement, sans shell.
+
+Elles viennent d'une **extension intégrée à code-server** (`vscode/lab-essai/`), et non d'un
+`.vscode/tasks.json` ni des réglages de l'éditeur, parce que :
+- le dépôt du projet (`/work/<app>`) ne doit rien recevoir du lab ;
+- la maison du dev est montée par-dessus l'image, ses réglages d'éditeur lui appartiennent
+  (l'entrée ne les touche jamais), et ses extensions n'y sont recopiées qu'**une fois** : une
+  extension de la maison n'arriverait jamais dans un espace déjà ouvert une fois, et ne suivrait
+  pas l'image.
+Le dossier des extensions intégrées est dans l'image, hors de la maison : l'extension est là dans
+tout espace et change avec l'image. Un projet qui définit sa propre tâche de build par défaut dans
+son `.vscode/tasks.json` garde la sienne (l'éditeur la préfère) ; les tâches du lab restent dans la liste.
+
 ## Ce que le proxy doit faire (préfixe `/ws/<uid>/`)
 
 **code-server n'a aucune option de préfixe.** Il sert à la racine et toutes ses URL sont
@@ -276,7 +329,7 @@ complet : état + éléments), `item` / `append` / `patch` (éléments du fil : 
 ## Vérifier
 
 ```bash
-bash workspace/verify.sh                    # ~11 min, navigateur réel compris (195 contrôles)
+bash workspace/verify.sh                    # ~13 min, navigateur réel compris (293 contrôles)
 bash workspace/verify.sh --sans-navigateur  # sans Chromium : curl et protocole seulement
 bash workspace/verify.sh --conversation     # ~5 min, section 10 seule (service de conversation)
 ```
@@ -288,6 +341,14 @@ navigateur est celui de l'image du runner du lab (`runner-runner:latest`, lancé
 jetable sur le réseau jetable — le service `lab-runner` n'est pas touché, il ne joint d'ailleurs que
 `sso-net`) ; c'est une charge Playwright : la section 10c attend que le runner du lab soit libre.
 `WS_VERIFY_CAPTURES=<dossier>` garde les captures d'écran de la conversation (390 px et 1280 px).
+
+Pour l'essai du développeur, les essais (`tests/`) sont :
+
+| Fichier | Rôle |
+|---|---|
+| `faux_mcp.py` | faux moteur : même transport que le vrai (relevé sur son SDK), jeton exigé, outils d'essai et `job_status` selon un **scénario** (succès, refus avec `reasons`, `job_exists`, job perdu, journal énorme, journal portant le jeton, redirection, passerelle en 502…). Sert aussi, depuis l'origine, à prouver que Claude Code et Vibe envoient le jeton |
+| `lab_essai_essais.py` | joue `lab-essai` dans chaque situation (section 3g de `verify.sh`), avec un « piège » : un port qui ne doit jamais recevoir de connexion (proxy d'environnement, cible de redirection). Se lance aussi seul : `LAB_ESSAI_CMD=… python3 workspace/tests/lab_essai_essais.py` |
+| `navigateur.js` | en plus de l'éditeur : relève les tâches que l'éditeur propose, lance « état » puis « Run Build Task » (section 7) |
 
 Pour le service de conversation, les essais (`tests/`) sont :
 
@@ -331,6 +392,21 @@ pour éditer et faire travailler une IA. Ce qui n'y tiendrait pas : un `ng build
 `npm install` lourd lancé **dans** l'espace — mais construire et déployer est le rôle du moteur.
 
 ## Pièges connus
+
+- **Une tâche fournie par une extension s'affiche « <source>: <nom> »** : la source de l'extension
+  est `Lab ` (avec l'espace) pour obtenir exactement « Lab : construire l'essai ».
+- **« Tâche de build par défaut » pour une tâche d'extension** : l'API publique ne permet pas de le
+  dire (`TaskGroup.isDefault` est en lecture seule dans `vscode.d.ts`) ; l'extension construit son
+  propre groupe `build` et y pose `isDefault` — lu par l'éditeur (code-server 4.141 / VS Code
+  1.141, vérifié en navigateur : `Run Build Task` part sans rien demander, même avec une tâche
+  `npm: build` concurrente). **À revérifier à chaque montée de code-server** (`verify.sh`,
+  section 7) : si cela cesse, `Ctrl+Maj+B` proposera un choix au lieu de lancer.
+- **Dans la palette, « Tasks: Run Task » est classé derrière « Tasks: Restart Running Task »** :
+  un essai qui tape le titre puis Entrée lance la mauvaise commande (`tests/navigateur.js` clique
+  la ligne exacte).
+- **Une tâche d'extension sans détecteur d'erreurs déclaré** fait proposer par l'éditeur d'en
+  associer un — ce qu'il écrirait dans `.vscode/tasks.json` du projet. L'extension passe un
+  tableau vide, ce qui supprime la question.
 
 - **`@agentclientprotocol/claude-agent-acp` déclare `engines: node >= 22`**, comme Claude Code :
   il fonctionne sous le Node 20 de l'image (`initialize`, sessions, MCP : vérifiés), npm avertit

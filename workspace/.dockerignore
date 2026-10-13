@@ -6,6 +6,10 @@
 !config/**
 !lib/
 !lib/**
+!bin/
+!bin/**
+!vscode/
+!vscode/**
 !chat/
 !chat/package.json
 !chat/package-lock.json
