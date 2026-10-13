@@ -7,6 +7,8 @@ développeur. Ces règles s'imposent à toute IA comme à tout humain. Les règl
 ## Méthode — lot par lot, feuille de route d'abord
 
 1. **Lis `FEUILLE_DE_ROUTE.md`** à la racine du projet avant toute chose.
+   S'il y a un `CAHIER_DES_CHARGES.md` (projet lancé depuis une spécification App Builder), lis-le
+   aussi : il dit ce que l'app doit faire, les lots en découlent.
 2. **Écris ou complète le lot avant de coder** : objectif, tâches, et les **tests nommés** à passer
    pour le clore. Pas de lot dans la feuille de route ⇒ pas de code.
 3. **Un seul lot à la fois.** Passe-le « en cours », termine-le, puis seulement le suivant.

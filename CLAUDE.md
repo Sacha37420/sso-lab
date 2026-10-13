@@ -210,6 +210,44 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
 - **Inactivité d'un espace** : trois signes — requête par la passerelle, battement de code-server,
   `last_activity_ms` du service de conversation (ignoré s'il est absent, en erreur ou dans le futur).
 
+### De la spécification au projet — `app-builder` → `lab-admin` → moteur (2026-10-13)
+
+`app-builder` sert à décrire une app (modèles, API, pages, pipelines, règles métier, groupes) et
+à en tirer un **cahier des charges** et les **lots** de sa feuille de route. Une spécification
+« prête » se construit depuis `lab-admin` → Projets → « Mes spécifications » → « Lancer la
+construction ». Contrat et rapports : `chantiers/app-builder-lab/`.
+
+- **Le contenu passe par le navigateur de l'utilisateur, avec son jeton** : lab-admin lit
+  `GET /app-builder-api/api/handoff/specs/…/kit/`, puis envoie au moteur `POST /projects` avec un
+  champ facultatif `seed` (`lots_md`, `cahier_des_charges_md` — `lab-mcp/API.md` §3.2). **Le
+  moteur n'appelle jamais App Builder** : le seul composant privilégié ne dépend d'aucune app.
+- **`/api/handoff/` d'App Builder est en lecture seule et n'est ouverte qu'à `lab-admin`**
+  (`KEYCLOAK_HANDOFF_CLIENTS` dans `app-builder/.env`). Cette clé n'ouvre que ce préfixe : un jeton
+  `lab-admin` reste refusé sur toute autre route. Chacun n'y voit que ses spécifications.
+- **La graine ne fournit ni l'en-tête, ni la commande de test, ni le Lot 1** : le moteur garde
+  ceux du gabarit et remplace ce qui suit `## Lot 2 — `. Dans `lots_md`, toute ligne commençant
+  par `#` doit être un titre de lot « à faire » — une graine ne peut donc pas poser la commande
+  que le lab exécute. Deux noms de fichier fixes (`FEUILLE_DE_ROUTE.md`, `CAHIER_DES_CHARGES.md`),
+  contenu jamais en argument ni au journal. Si `_templates/regles/FEUILLE_DE_ROUTE.md` perd sa
+  ligne `## Lot 2 — `, toute création avec graine échoue (étape `seed`, retour arrière complet).
+- **Les patchs IA d'App Builder sont appliqués par le serveur** (`backend/api/patching.py`,
+  historique et annulation) ; les générateurs de code de l'ancien « Aperçu » sont supprimés (ils
+  produisaient `FileField`, `AllowAny`, vues sans filtre de propriétaire). Ne pas les réintroduire.
+- **L'intercepteur de lab-admin ne joint le jeton qu'aux bases de `tokenBases()`**
+  (`frontend/src/app/core/env.ts`) : il le joignait à toute requête, quelle que soit l'origine.
+  Un appel vers un nouveau service demande d'y ajouter sa base, sinon il part sans jeton (401).
+  **Le même défaut est très probablement dans `_templates/` et les autres apps**, non corrigé.
+- Le catalogue admin de lab-admin lit toujours les tables d'App Builder directement
+  (`models_appbuilder.py`) : colonnes tenues par `test_tables_lues_par_lab_admin`.
+- Essais rejouables : `bash lab-mcp/tests/seed/run.sh` (graine, sans GitHub réel),
+  `bash chantiers/tests/essai.sh app-builder`, `npm run test:engine` dans `lab-admin/frontend`.
+- **Non éprouvé** : une création réelle menée à son terme avec graine (demande un compte GitHub
+  humain) — le vrai `new-app.sh` et le vrai `app-register.sh` n'ont pas été joués avec une graine.
+- Pièges vus : `app-builder/docker-compose.yml` montait `./backend:/app` (un redémarrage mettait
+  en service le dossier, hors des tests) — retiré ; un lien direct vers une page d'App Builder
+  retombe sur l'accueil (défaut `redirectUri` du gabarit, voir « Pièges constatés ») ;
+  `lab-runner` accumule des processus Chromium zombies (aucun `init` dans le conteneur).
+
 ### Règles de développement imposées à tout projet (IA comprises)
 
 Chaque projet scaffoldé porte `FEUILLE_DE_ROUTE.md` (lots, tests à passer par lot, « vérifié le »),

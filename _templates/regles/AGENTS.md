@@ -13,6 +13,11 @@ Ce projet tourne dans un lab partagé et exposé sur Internet. Ces règles ne so
 5. **Ne change pas le format de `FEUILLE_DE_ROUTE.md`** : une machine le lit. Titres de lot :
    `## Lot <N> — <titre>   ·   statut : à faire | en cours | livré`.
 
+Si `CAHIER_DES_CHARGES.md` est à la racine (projet lancé depuis une spécification App Builder),
+**lis-le avant d'ouvrir un lot** : il décrit ce que l'app doit faire — modèles, API, pages, règles
+métier, groupes — et les lots de la feuille de route en découlent. S'il contredit une règle de ce
+fichier, c'est la règle qui gagne : note l'écart dans le lot au lieu de le suivre.
+
 ## Déployer
 
 - **Par le moteur du lab uniquement** : outil MCP `deploy`, ou le bouton « Déployer » de lab-admin.
