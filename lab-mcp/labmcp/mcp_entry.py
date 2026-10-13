@@ -100,14 +100,18 @@ def build(cfg: Config, engine: Engine) -> FastMCP:
     @mcp.tool()
     async def create_app(name: str, type: Literal["django", "django-angular", "angular"],
                          required_groups: list[str], ctx: Context,
-                         visibility: Literal["private", "public"] = "private") -> dict:
+                         visibility: Literal["private", "public"] = "private",
+                         seed: dict | None = None) -> dict:
         """Crée un projet : dépôt GitHub sous VOTRE compte, scaffold, premier commit poussé, clé de déploiement.
 
         `required_groups` : groupe(s) du lab autorisés à utiliser l'app (obligatoire).
+        `seed` (facultatif) : `{"lots_md", "cahier_des_charges_md"}` — lots métier (numérotés à partir
+        de 2, statut « à faire ») ajoutés à FEUILLE_DE_ROUTE.md et cahier des charges écrit dans
+        CAHIER_DES_CHARGES.md, dans le premier commit. Refusé en bloc s'il n'a pas exactement cette forme.
         Asynchrone → `job_id`. En cas d'échec, tout ce qui a été créé est défait.
         """
         return await call(ctx, "create_project", name=name, type=type,
-                          required_groups=required_groups, visibility=visibility)
+                          required_groups=required_groups, visibility=visibility, seed=seed)
 
     @mcp.tool()
     async def deploy(app: str, ctx: Context, sha: str = "") -> dict:

@@ -1,4 +1,4 @@
-# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v11, I9 v7, I10 v9 ; espace-chat v1)
+# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v11, I9 v7, I10 v9 ; espace-chat v1 ; app-builder-lab v1)
 
 Écrite à partir de ce que le code rend réellement (`labmcp/engine.py`). Là où la table d'I5 et ce
 document divergent sur une **forme**, ce document l'emporte.
@@ -25,6 +25,11 @@ Ce qui reste `🟡`, et pourquoi (rien de tout cela ne change une forme) :
 **Ajout du chantier « espace-chat » (contrat v1, I3)** — compatible : `POST /projects/<app>/workspace`
 accepte un corps facultatif `{"target": "editor" | "chat-claude" | "chat-vibe"}` et rend `target` en
 plus. Sans corps, rien ne change pour un appelant existant (§3.6).
+
+**Ajout du chantier « app-builder-lab » (contrat v1, I2)** — compatible : `POST /projects` et l'outil
+MCP `create_app` acceptent un champ facultatif `seed` (lots métier et cahier des charges d'une
+spécification, posés dans le premier commit). Sans `seed`, rien ne change pour un appelant existant
+(§3.2). Le job `create` a alors une étape de plus, `seed` (§4).
 
 **Écarts avec la table d'I5** :
 - routes **en plus** : `GET /mcp/api/groups` (v6) ; `GET /mcp/api/me/database-password`,
@@ -71,7 +76,8 @@ contrôles, même objet rendu, même erreur. Correspondance :
 | `job` | `GET /jobs/<id>` | `job_status` |
 
 Conventions de l'entrée web :
-- corps de requête et de réponse en JSON (`Content-Type: application/json`) ; corps de requête ≤ 256 Ko ;
+- corps de requête et de réponse en JSON (`Content-Type: application/json`) ; corps de requête ≤ 256 Ko
+  (≤ 4 Mo pour `POST /projects`, qui peut porter une graine) ;
 - **tout succès est un `200`** avec un objet JSON (jamais `201`/`202`/`204`, jamais de tableau nu) ;
 - toute erreur a le format du §2 ; un chemin qui n'existe pas rend un `404` sans corps JSON ;
 - dates en ISO 8601 UTC (`2026-10-10T14:37:08Z`), sauf `deployed.at`, rendu tel que le lab
@@ -310,6 +316,60 @@ Toujours `200` : un nom refusé n'est pas une erreur. Utilisable à chaque frapp
 Réponse : `{"job_id", "kind": "create", "app", "state": "queued", "jobs_ahead": 0}` — suivre le job.
 Erreurs immédiates : `400 invalid`, `400 name_refused`, `409 github_not_linked`, `409 github_scope`,
 `502 upstream`, `409 job_exists`, `429 queue_full`.
+
+##### Champ facultatif `seed` ✅ — graine d'une spécification (chantier « app-builder-lab », I2)
+```json
+{"name": "gestion-stock", "type": "django-angular", "visibility": "private",
+ "required_groups": ["developers"],
+ "seed": {"lots_md": "## Lot 2 — Modèles de données   ·   statut : à faire\n**Objectif :** …\n",
+          "cahier_des_charges_md": "# Cahier des charges — Gestion de stock\n…"}}
+```
+Absent (ou `null`) : **comportement strictement inchangé**. Présent : après `new-app.sh` et avant
+`app-register.sh` — donc **dans le premier commit** — le moteur
+1. garde de `FEUILLE_DE_ROUTE.md` tout ce qui précède la première ligne commençant par
+   `## Lot 2 — ` (en-tête, « Commande de test », Lot 1 du gabarit du lab) et remplace le reste par
+   `lots_md`, tel quel ;
+2. écrit `CAHIER_DES_CHARGES.md` à la racine du projet avec `cahier_des_charges_md`, tel quel.
+
+Les deux noms de fichier sont fixes : aucun chemin ne vient de l'appelant. La réponse, le job et son
+résultat ont la même forme qu'une création sans graine ; seule l'étape `seed` s'ajoute au journal.
+
+**Validation** — refus immédiat `400 invalid` avec `reasons`, **avant toute création** (ni script, ni
+appel à oauth-hub ou GitHub, ni job) ; la chaîne la refait sous le verrou :
+
+| Règle | Exemple de `reasons[]` |
+|---|---|
+| `seed` est un objet ; seules clés admises : `lots_md`, `cahier_des_charges_md` | `seed : 1 clé(s) non admise(s) — seules « lots_md » et « cahier_des_charges_md » le sont` |
+| les deux clés sont obligatoires, chaînes non vides | `seed.lots_md : champ manquant` · `seed.cahier_des_charges_md : une chaîne non vide est attendue` |
+| ni octet nul, ni retour chariot (`\r`) | `seed.lots_md : retour chariot (\r) interdit — fins de ligne « \n » seulement` |
+| `lots_md` ≤ 100 000 caractères, `cahier_des_charges_md` ≤ 200 000 (points de code Unicode) | `seed.lots_md : 100001 caractères, 100000 au plus` |
+| texte encodable en UTF-8 (pas de demi-codet isolé `\ud800`…) — sans quoi le fichier ne s'écrit pas | `seed.cahier_des_charges_md : texte non encodable en UTF-8 (demi-codet isolé)` |
+| dans `lots_md`, **toute** ligne commençant par `#` est un titre de lot `^## Lot ([0-9]+) — .+·[[:space:]]*statut : à faire[[:space:]]*$` | `seed.lots_md, ligne 9 : une ligne commençant par « # » doit être un titre de lot « ## Lot <N> — <titre>   ·   statut : à faire » (aucun autre titre, aucun autre statut)` |
+| la première ligne non vide de `lots_md` est un titre de lot | `seed.lots_md, ligne 1 : la première ligne non vide doit être un titre de lot « ## Lot 2 — <titre>   ·   statut : à faire »` |
+| les numéros se suivent à partir de 2 | `seed.lots_md, ligne 9 : le lot attendu ici est le Lot 3 (numéros qui se suivent à partir de 2)` |
+| au moins un lot, au plus 40 | `seed.lots_md : aucun lot — …` · `seed.lots_md : 41 lots, 40 au plus` |
+| dans `cahier_des_charges_md`, aucune contrainte de structure | — |
+
+Précisions (toutes dans `labmcp/seed.py`) :
+- les lignes de `lots_md` se coupent sur `\n` **seul**, comme `grep` et `awk` dans
+  `validate-app.sh` et `app-test.sh` ; une ligne « vide » est une ligne sans autre caractère que
+  des espaces et tabulations ; un `#` qui n'ouvre pas la ligne (`voir le ticket #12`, titre en
+  retrait) n'est pas un titre ;
+- un numéro s'écrit en chiffres ASCII ; des zéros de tête sont admis (`Lot 02` vaut `Lot 2`) ;
+- `detail` vaut toujours « seed : graine refusée — rien n'a été créé. » ; `reasons` ne cite jamais le
+  contenu de la graine (champ, numéro de ligne, nombre seulement), au plus 20 raisons de ligne
+  suivies d'un décompte ;
+- le contenu de la graine n'est jamais dans un argument de ligne de commande, une variable
+  d'environnement, le journal d'un job ni le journal d'audit : il va du serveur à la chaîne par un
+  fichier temporaire `0600` du conteneur du moteur, supprimé dès sa lecture ;
+- le moteur n'appelle pas App Builder et ne garde aucun lien entre un projet et une spécification.
+
+Échecs en cours de job, propres à la graine (forme du §4, `create`) :
+
+| `result.step` | Sens | Retour arrière |
+|---|---|---|
+| `arguments` | graine illisible ou non recevable à la revalidation sous le verrou | rien n'avait été créé |
+| `seed` | `FEUILLE_DE_ROUTE.md` du projet scaffoldé n'a aucune ligne `## Lot 2 — ` (gabarit du lab modifié), ou un des deux fichiers n'est pas un fichier ordinaire | complet : dossier, registre, schéma, dépôt GitHub — comme tout autre échec de la chaîne |
 
 ### 3.3 Déploiement (G1, G6)
 
@@ -655,8 +715,8 @@ Un déploiement réussi avec `tests.cloisonnement = "ko"` reste un succès (I4) 
 | `tests_backend` | tests backend rouges — la version précédente reste en service | `tests: {"backend": "ko", "cloisonnement": "non-lancé"}` |
 | `setup` | autre échec du déploiement (voir `log`) | — |
 
-**`create`** — étapes : `check_name` → `repo_check` → `repo_create` → `scaffold` → `register` →
-`deploy_key` → `webhook` → `done`
+**`create`** — étapes : `check_name` → `repo_check` → `repo_create` → `scaffold` → [`seed`, seulement
+si la création porte une graine — §3.2] → `register` → `deploy_key` → `webhook` → `done`
 ```json
 {"ok": true, "step": "done", "app": "mon-app", "repo_url": "https://github.com/hassan-gh/mon-app.git",
  "sha": "…", "ports": {"backend": "8102", "frontend": "4216"}, "auto_deploy_available": true, "exit_code": 0}

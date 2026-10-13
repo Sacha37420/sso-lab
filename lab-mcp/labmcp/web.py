@@ -22,6 +22,10 @@ from .engine import Engine
 from .errors import LabError
 
 MAX_BODY = 256 * 1024
+# `POST /projects` peut porter une graine (seed.py) : 300 000 caractères au plus, soit jusqu'à
+# 12 octets chacun une fois échappés en JSON (« \\ud83d\\ude00 »). Sa taille réelle est contrôlée en
+# caractères par le moteur ; ceci n'est que le plafond du corps brut de cette route.
+MAX_BODY_CREATE = 4 * 1024 * 1024
 
 
 def error_response(exc: LabError) -> JSONResponse:
@@ -29,9 +33,9 @@ def error_response(exc: LabError) -> JSONResponse:
 
 
 def routes(engine: Engine) -> list[Route]:
-    async def body(request: Request) -> dict:
+    async def body(request: Request, limit: int = MAX_BODY) -> dict:
         raw = await request.body()
-        if len(raw) > MAX_BODY:
+        if len(raw) > limit:
             raise LabError("invalid", "Corps de requête trop volumineux.")
         if not raw:
             return {}
@@ -95,10 +99,10 @@ def routes(engine: Engine) -> list[Route]:
     async def projects(r, c): return await call("projects", c, as_uid=q(r, "as"), refresh=flag(r, "refresh"))
 
     async def create(r, c):
-        d = await body(r)
+        d = await body(r, MAX_BODY_CREATE)
         name, typ, groups_ = need(d, "name", "type", "required_groups")
         return await call("create_project", c, name=name, type=typ, required_groups=groups_,
-                          visibility=d.get("visibility", "private"))
+                          visibility=d.get("visibility", "private"), seed=d.get("seed"))
 
     async def check_name(r, c):
         (name,) = need(await body(r), "name")

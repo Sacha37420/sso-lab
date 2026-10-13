@@ -56,6 +56,8 @@ d'autorisation échoue (le realm a un chemin, `/auth/realms/ssolab`) :
 ### Outils MCP
 `whoami` · `list_apps` · `check_name` · `create_app` · `deploy` · `job_status` · `status` · `logs` ·
 `env_list` / `env_get` / `env_set` / `env_unset` · `sql` · `run_tests` · `smtp_status` · `open_ticket`.
+`create_app` accepte une graine facultative (`seed` : lots métier et cahier des charges d'une
+spécification, posés dans le premier commit — `API.md` §3.2).
 `create_app`, `deploy`, `run_tests` rendent un `job_id` : rappeler `job_status` jusqu'à
 `terminal: true`. Résultats et erreurs : ceux d'`API.md` (table de correspondance au §1).
 
@@ -302,7 +304,16 @@ Préalables : l'image `lab-workspace:latest` construite (`workspace/`), et `lab-
   bout en bout par une passerelle jetable vers de faux espaces (HTTP, WebSocket, refus, attente,
   fermeture après inactivité). Rejouable à tout moment : ne construit aucune image, ne touche ni au
   moteur ni à la passerelle en service (conteneurs `zz-chat-mcp-*`, réseau sans sortie) ;
-- `tests/pgadmin_check.py` — ce qu'un pgAdmin par dev contient et accepte, par son API.
+- `tests/pgadmin_check.py` — ce qu'un pgAdmin par dev contient et accepte, par son API ;
+- `tests/test_seed.py` et `tests/seed/` — graine de création (`seed` de `POST /projects` et de
+  `create_app`, `labmcp/seed.py`) : `bash lab-mcp/tests/seed/run.sh` joue chaque refus de validation
+  (fonction, route web, outil MCP), l'écriture dans le gabarit réel rendu (contrôlée par l'expression
+  de `validate-app.sh` et le programme awk d'`app-test.sh`, relus dans les vrais scripts), des
+  créations menées à leur terme par la vraie chaîne sous le vrai `lab-lock.sh`, le retour arrière
+  quand le gabarit n'a plus de `## Lot 2 — `, et l'absence du contenu de la graine dans les arguments
+  des processus et les journaux. Il compare enfin une création **sans** graine entre le moteur
+  d'avant (`SEED_BASELINE`) et le moteur courant. Rejouable à tout moment : aucune image construite,
+  aucun réseau, racine du lab factice, GitHub et quatre scripts en doubles (`tests/seed/scripts/`).
 
 ### Ce qui reste à vérifier en réel
 1. Un compte humain : première connexion (`me/init` qui inscrit réellement), parcours complet.

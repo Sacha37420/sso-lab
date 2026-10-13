@@ -35,7 +35,7 @@ from typing import Any
 import anyio
 import httpx
 
-from . import procs, smtp, sqlconsole
+from . import procs, seed as seed_rules, smtp, sqlconsole
 from .auth import Authenticator, Caller
 from .config import Config
 from .errors import LabError
@@ -319,14 +319,23 @@ class Engine:
             raise LabError("queue_full", "Trop de jobs en attente sur le lab — réessayez plus tard.") from None
         return {"job_id": job.id, "kind": kind, "app": app, "state": job.state, "jobs_ahead": self.jobs.position(job)}
 
-    def _chain(self, chain_args: list[str], token: str = ""):
-        """Travail d'un job : un enchaînement lancé PAR lab-lock.sh (chain.py)."""
+    def _chain(self, chain_args: list[str], token: str = "", seed: dict | None = None):
+        """Travail d'un job : un enchaînement lancé PAR lab-lock.sh (chain.py).
+
+        `seed` (création seulement) : comme le jeton, la graine vit dans la fermeture du job, de sa
+        mise en file à sa fin. Elle est remise à la chaîne par un FICHIER 0600 dont seul le chemin
+        passe (LAB_MCP_SEED_FILE) : jamais un argument (lisible par `ps`), jamais le journal."""
         cfg = self.cfg
 
         async def work(job: Job) -> dict:
             fd, result_path = tempfile.mkstemp(prefix="lab-mcp-", suffix=".json")
             os.close(fd)
             os.unlink(result_path)
+            seed_path = ""
+            if seed is not None:
+                fd, seed_path = tempfile.mkstemp(prefix="lab-mcp-seed-", suffix=".json")   # créé en 0600
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(seed, fh)
             env = procs.base_env(cfg, cfg.job_lock_timeout)
             env.update({
                 "LAB_ROOT": cfg.root,
@@ -337,8 +346,15 @@ class Engine:
             })
             if token:
                 env["LAB_GIT_TOKEN"] = token
+            if seed_path:
+                env["LAB_MCP_SEED_FILE"] = seed_path
             argv = procs.script(cfg, "lab-lock.sh") + [sys.executable, "-m", "labmcp.chain", *chain_args]
-            code, _, err = await procs.run(argv, env, cwd=cfg.root, timeout=3 * 3600, on_line=job.add_line)
+            try:
+                code, _, err = await procs.run(argv, env, cwd=cfg.root, timeout=3 * 3600, on_line=job.add_line)
+            finally:
+                if seed_path:       # la chaîne l'a déjà supprimé en le lisant ; ceci couvre « verrou occupé »
+                    with contextlib.suppress(OSError):
+                        os.unlink(seed_path)
             result: dict = {}
             try:
                 with open(result_path, encoding="utf-8") as fh:
@@ -876,7 +892,7 @@ class Engine:
         raise LabError("failed", f"check-app-name.sh a rendu {code} : {self._last(err)}")
 
     async def op_create_project(self, c: Caller, name: str, type: str, required_groups: list,
-                                visibility: str = "private") -> dict:
+                                visibility: str = "private", seed: Any = None) -> dict:
         uid = self._dev(c)
         token_kc = self._need_token(c)
         if not isinstance(name, str) or not NAME_RE.fullmatch(name) or "--" in name:
@@ -893,13 +909,20 @@ class Engine:
         unknown = [g for g in required_groups if known and g not in known]
         if unknown:
             raise LabError("invalid", "Groupe(s) inconnu(s) du lab.", reasons=[f"groupe inconnu : {g}" for g in unknown])
+        if seed is not None:
+            # Graine d'une spécification (seed.py). Refus AVANT toute création ; revalidée sous le verrou.
+            # Ni `detail` ni `reasons` ne citent son contenu (le journal d'audit garde `detail`).
+            seed_reasons = seed_rules.validate(seed)
+            if seed_reasons:
+                raise LabError("invalid", "seed : graine refusée — rien n'a été créé.", reasons=seed_reasons)
+            seed = {key: seed[key] for key in seed_rules.KEYS}
         # Réponse immédiate si le nom est refusé (le contrôle qui fait foi est refait sous le verrou).
         check = await self.op_check_name(c, name)
         if not check["ok"]:
             raise LabError("name_refused", f"Le nom « {name} » est refusé.", reasons=check["reasons"])
         token = await self.hub.github_token(token_kc, need_repo_scope=True)
         return self._submit("create", name, uid, self._chain(
-            ["create", uid, name, APP_TYPES[type], visibility, ",".join(required_groups)], token))
+            ["create", uid, name, APP_TYPES[type], visibility, ",".join(required_groups)], token, seed))
 
     # ── déploiement ─────────────────────────────────────────────────────────
     async def op_deploy(self, c: Caller, app: str, sha: str = "") -> dict:

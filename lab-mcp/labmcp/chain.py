@@ -15,7 +15,10 @@ création (vérification, création, suppression du dépôt) ont lieu ici, donc 
 le même verrou que le contrôle du nom et l'écriture du registre.
 
 Entrées : arguments déjà validés par le serveur (revalidés ici) ; pour `create`
-seulement, jeton GitHub de l'appelant dans LAB_GIT_TOKEN. Un DÉPLOIEMENT ne
+seulement, jeton GitHub de l'appelant dans LAB_GIT_TOKEN et, s'il y a une graine
+(seed.py), le chemin d'un fichier 0600 qui la porte dans LAB_MCP_SEED_FILE — son
+CONTENU ne passe jamais par un argument, une variable d'environnement ni le
+journal. Un DÉPLOIEMENT ne
 reçoit plus aucun jeton (v5) : app-sync.sh lit la clé de déploiement du projet,
 déposée ici à sa création. Sorties : journal lisible sur stdout (relayé au
 développeur), résultat structuré dans le fichier LAB_MCP_RESULT_FILE.
@@ -35,6 +38,7 @@ import secrets
 import subprocess
 import sys
 
+from . import seed as seed_rules
 from .github import Github, GithubError, LOGIN_RE
 from .registry import Registry, valid_app, valid_uid
 
@@ -45,6 +49,8 @@ TOKEN = os.environ.pop("LAB_GIT_TOKEN", "")
 GITHUB_API = os.environ.pop("GITHUB_API_URL", "https://api.github.com")
 GITHUB_WEB = os.environ.pop("GITHUB_WEB_URL", "https://github.com").rstrip("/")
 HOOK_BASE = os.environ.pop("LAB_HOOK_BASE", "").rstrip("/")
+# Retiré de l'environnement comme le jeton : aucun script lancé d'ici ne connaît ce chemin.
+SEED_FILE = os.environ.pop("LAB_MCP_SEED_FILE", "")
 
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
@@ -198,12 +204,34 @@ def deploy(app: str, sha: str) -> None:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # create = check-app-name.sh → dépôt absent ? → création du dépôt →
-#          new-app.sh --owner → app-register.sh        (retour arrière si échec)
+#          new-app.sh --owner → [graine] → app-register.sh   (retour arrière si échec)
 # ─────────────────────────────────────────────────────────────────────────────
+def read_seed() -> "dict | None":
+    """La graine déposée par le serveur, ou None s'il n'y en a pas. Le fichier est
+    supprimé dès qu'il est lu. Illisible ou non recevable : rien n'est créé."""
+    if not SEED_FILE:
+        return None
+    try:
+        with open(SEED_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        data = None
+    finally:
+        try:
+            os.unlink(SEED_FILE)
+        except OSError:
+            pass
+    if seed_rules.validate(data):
+        finish({"ok": False, "step": "arguments", "error": "graine (seed) illisible ou non recevable",
+                "rollback": "rien n'avait été créé"}, 2)
+    return data
+
+
 def create(uid: str, name: str, app_type: str, visibility: str, groups: str) -> None:
     if (not valid_uid(uid) or not NAME_RE.fullmatch(name) or app_type not in ("3", "4", "5")
             or visibility not in ("private", "public") or not GROUPS_RE.fullmatch(groups) or not TOKEN):
         finish({"ok": False, "step": "arguments", "error": "arguments invalides"}, 2)
+    seed = read_seed()
     registry = Registry(ROOT)
 
     step("check_name", f"règles de nommage (check-app-name.sh {name})")
@@ -297,6 +325,17 @@ def create(uid: str, name: str, app_type: str, visibility: str, groups: str) -> 
     code, _ = run_script("new-app.sh", ["--owner", uid], stdin="\n".join(answers) + "\n")
     if code != 0:
         rollback("scaffold", f"new-app.sh a échoué (code {code}) — voir le journal")
+
+    if seed is not None:
+        # Avant app-register.sh : les deux fichiers partent dans le PREMIER commit.
+        step("seed", f"lots et cahier des charges de la spécification ({seed_rules.ROADMAP_FILE}, "
+                     f"{seed_rules.CAHIER_FILE})")
+        try:
+            done = seed_rules.apply(registry.app_dir(name), seed)
+        except seed_rules.SeedError as exc:
+            rollback("seed", f"la graine n'a pas pu être posée : {exc}")
+        say(f"   ✓ {done['lots']} lot(s) métier dans {seed_rules.ROADMAP_FILE} (en-tête, commande de test et "
+            f"Lot 1 du gabarit gardés), {seed_rules.CAHIER_FILE} écrit")
 
     step("register", "premier commit, push, enregistrement comme sous-module (app-register.sh)")
     url = f"{GITHUB_WEB}/{login}/{name}.git"
