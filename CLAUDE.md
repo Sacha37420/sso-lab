@@ -239,6 +239,11 @@ tests) est inchangé et l'essai n'y écrit rien. Contrat et rapports : `chantier
   séparation de données, pas une barrière : le rôle `dev_<uid>` possède aussi ses autres schémas.
 - **Un essai n'a ni le compte de service de l'app** (donc pas ses fichiers dans `storage`) **ni son
   compte d'envoi d'email**, ne publie aucun port, et n'existe pas sans domaine (HTTP local).
+- **Les adresses du lab de l'essai (Keycloak, émetteur des jetons, serveur) sont recalculées**
+  comme `reset_url.sh` les calcule, jamais reprises du `.env` de service : un projet **jamais
+  déployé** garde dans ce `.env` les valeurs fictives du gabarit (`KEYCLOAK_PUBLIC_URL=
+  http://VOTRE_IP_WAN:8080`, `DOMAIN=CHANGE_ME`…), et la connexion de l'essai partait vers elles
+  (constaté sur `test-video`, 2026-10-15). Une valeur fictive restante fait refuser l'étape `env`.
 - **`dev` et tout nom en `dev-…` sont réservés** (`check-app-name.sh`, règle 8), pour tous.
 - **Règle `[image]` ajoutée à `validate_compose.py`, pour tous les déploiements** : un service
   construit ne nomme son image que `<app>-…` — sinon un dépôt pouvait poser son code sous

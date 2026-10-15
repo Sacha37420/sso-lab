@@ -325,6 +325,12 @@ mkdir -p "$PV/builds" && chmod 700 "$(registry_state_dir)/preview" "$PV" "$PV/bu
 NEW="$PV/builds/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -m 700 "$NEW" || fail arguments "dossier d'état de l'essai impossible à créer"
 
+# Valeur d'une clé dans un fichier KEY=valeur (comme _env_val de reset_url.sh) ;
+# vide si absent. Sert aux adresses du lab que l'essai recalcule (étape env).
+_kv() { [[ -f "$1" && ! -L "$1" ]] || return 0
+        sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1 | sed -e 's/[[:space:]]*#.*$//' -e 's/^["'"'"']//' -e 's/["'"'"']$//'; }
+# Realm : le même que reset_url.sh (REALM="ssolab", écrit en dur là-bas aussi).
+
 # ── source ────────────────────────────────────────────────────────────────────
 say "══ source — copie du dossier de travail (non commité compris)"
 # Un dépôt git VIDE, à nous : aucune configuration du développeur n'est lue.
@@ -382,7 +388,9 @@ ENV_ERR=""
 if [[ ! -f "$APP_DIR/.env" || -L "$APP_DIR/.env" ]]; then
   ENV_ERR="le projet n'a pas de .env de service (jamais déployé ?)"
 elif ! LABP_NAME="$NAME" LABP_SLUG="$SLUG" LABP_DOMAIN="$DOMAIN_VAL" LABP_OWNER="$OWNER" LABP_SUPERUSER="$IS_SU" \
-       LABP_GROUPS="$GROUPS_CSV" "${PY[@]}" env "$APP_DIR/.env" "$TMP/env" "$TMP/env.json" > "$TMP/env.reasons" 2>&1; then
+       LABP_GROUPS="$GROUPS_CSV" LABP_REALM="ssolab" LABP_SERVER_URL_LAN="$(_kv "$ROOT/bbox.env" SERVER_URL_LAN)" \
+       LABP_SERVER_URL_WAN="$(_kv "$ROOT/bbox.env" SERVER_URL_WAN)" LABP_PORT_KEYCLOAK="$(_kv "$ROOT/sso-lab/.env" PORT_KEYCLOAK)" \
+       "${PY[@]}" env "$APP_DIR/.env" "$TMP/env" "$TMP/env.json" > "$TMP/env.reasons" 2>&1; then
   ENV_ERR="le .env de l'essai ne peut pas être établi"
 fi
 [[ -z "$ENV_ERR" ]] || fail env "$ENV_ERR" "$TMP/env.reasons"

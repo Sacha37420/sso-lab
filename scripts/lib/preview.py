@@ -482,6 +482,25 @@ def cmd_env(service_env, out_file, info_file):
         "BACKEND_URL": f"https://{domain}",
         "FRONTEND_URL": f"https://{domain}",
     }
+    # Adresses du lab : recalculées ici comme reset_url.sh les calcule au
+    # déploiement, jamais reprises du .env de service. Un projet jamais déployé
+    # garde dans ce .env les valeurs fictives du gabarit (KEYCLOAK_PUBLIC_URL=
+    # http://VOTRE_IP_WAN:8080, DOMAIN=CHANGE_ME…) : la redirection de connexion
+    # de l'essai partait vers elles (constaté sur test-video, 2026-10-14).
+    realm = p.get("realm") or "ssolab"
+    forced.update({
+        "KEYCLOAK_REALM": realm,
+        "KEYCLOAK_PUBLIC_URL": f"https://{domain}/auth",
+        "KEYCLOAK_ISSUER_URI": f"https://{domain}/auth/realms/{realm}",
+    })
+    if "KEYCLOAK_HOSTNAME_URL" in values:
+        forced["KEYCLOAK_HOSTNAME_URL"] = f"https://{domain}/auth"
+    for key, val in (("SERVER_URL_LAN", p.get("server_url_lan", "")), ("SERVER_URL_WAN", p.get("server_url_wan", "")),
+                     ("PORT_KEYCLOAK", p.get("port_keycloak", ""))):
+        if val:
+            forced[key] = val
+    if p.get("server_url_wan") and p.get("port_keycloak"):
+        forced["KEYCLOAK_URL"] = f"{p['server_url_wan']}:{p['port_keycloak']}"
     if info["schema"]:
         forced["DB_SCHEMA"] = info["schema"]
     # Une API qui tient une liste blanche de clients (storage…) : l'essai
@@ -492,6 +511,21 @@ def cmd_env(service_env, out_file, info_file):
         if k not in values:
             order.append(k)
     values.update(forced)
+    # Adresses d'appoint (origines CORS du gabarit) restées fictives faute de
+    # bbox.env : retirées plutôt que servies — le gabarit s'en passe.
+    placeholder = re.compile(r"CHANGE_ME|VOTRE_|192\.168\.1\.X")
+    for k in ("SERVER_URL_LAN", "SERVER_URL_WAN", "KEYCLOAK_URL"):
+        if k in values and k not in forced and placeholder.search(env_value(values[k])):
+            values.pop(k)
+            order.remove(k)
+            info["dropped"].append(k)
+    # Ceinture : plus aucune valeur fictive du gabarit dans ce qui dit où est le lab.
+    leftover = [k for k in order
+                if re.match(r"^(KEYCLOAK_[A-Z_]*|DOMAIN|SERVER_URL_[A-Z]+|BACKEND_URL|FRONTEND_URL)$", k)
+                and placeholder.search(env_value(values[k]))]
+    if leftover:
+        return finish([f"[env] {k} garde une valeur fictive du gabarit — le lab n'est pas configuré (bbox.env, .env racine)"
+                       for k in leftover])
 
     if os.path.lexists(out_file):
         os.unlink(out_file)

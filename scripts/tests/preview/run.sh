@@ -85,6 +85,11 @@ DEFAULT_FROM_EMAIL=app@exemple.test
 LAB_SMTP_PROFILE=p1
 COMPOSE_FILE=/etc/passwd
 API_TIERCE_KEY=SENTINELLE_CLE_LIBRE_0123456789
+KEYCLOAK_PUBLIC_URL=http://VOTRE_IP_WAN:8080
+KEYCLOAK_ISSUER_URI=http://keycloak:8080/realms/ssolab
+KEYCLOAK_URL=http://192.168.1.X:8080
+SERVER_URL_LAN=http://192.168.1.X
+SERVER_URL_WAN=http://VOTRE_IP_WAN
 EOF
   cp "$svc/.env" "$svc/.env.orig"
   cat > "$svc/docker-compose.yml" <<EOF
@@ -196,6 +201,7 @@ check "le schéma de l'app en service n'est nulle part dans le .env de l'essai" 
 check "SECRET_KEY propre à l'essai" 'grep -q "^SECRET_KEY=" "$E" && ! grep -q SENTINELLE_CLE_DJANGO "$E"'
 check "compte de service, email, marqueur SMTP, COMPOSE_* retirés" '! grep -qE "^(KEYCLOAK_ADMIN_CLIENT_ID|KEYCLOAK_ADMIN_CLIENT_SECRET|EMAIL_|DEFAULT_FROM_EMAIL|LAB_SMTP_PROFILE|COMPOSE_)" "$E"'
 check "groupes requis de l'app dans le .env de l'essai" 'grep -qx "KEYCLOAK_REQUIRED_GROUPS=developers,amis" "$E"'
+check "projet jamais déployé : adresses Keycloak recalculées, aucune valeur fictive du gabarit" 'grep -qx "KEYCLOAK_PUBLIC_URL=https://essai.test/auth" "$E" && grep -qx "KEYCLOAK_ISSUER_URI=https://essai.test/auth/realms/ssolab" "$E" && grep -qx "KEYCLOAK_REALM=ssolab" "$E" && ! grep -qE "CHANGE_ME|VOTRE_|192[.]168[.]1[.]X" "$E"'
 check "une clé libre du développeur est gardée" 'grep -q "^API_TIERCE_KEY=SENTINELLE_CLE_LIBRE" "$E"'
 check "aucun secret ni contenu de .env sur stdout" '! grep -q SENTINELLE <<< "$OUT" && ! grep -qE "^[[:space:]]*(DB_PASSWORD|SECRET_KEY)=" <<< "$OUT"'
 check "rien d'écrit dans le dossier de travail" '[[ "$(tree_sum "$W")" == "$SUM_W" && "$(git -C "$W" status --porcelain | sha256sum)" == "$GIT_W" ]]'
