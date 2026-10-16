@@ -1,0 +1,26 @@
+# Surcouche de verify.sh, ajoutée au docker-compose.yml de PRODUCTION (jamais utilisée en service).
+# Elle ne fait que remplacer le matériel par le faux matériel de verify/fakehw.py :
+#   * lab-media-auth lit un faux sysfs (LAB_MEDIA_SYSFS=/fakesys, posé par le .env de test) ;
+#   * la capture lit le même faux sysfs, et ses montages /hostdev et /dev/snd sont REMPLACÉS
+#     (même cible ⇒ Compose remplace la source) par les faux nœuds : le /dev de l'hôte n'est
+#     pas monté du tout dans la pile de test, la vraie caméra ne peut pas être ouverte ;
+#   * mode testsrc : mire et bip à la place des périphériques.
+# Tout le reste (absence de `devices:`, règles cgroup, réseaux, identités) est celui de la
+# production : c'est lui qui est éprouvé.
+services:
+  auth:
+    volumes:
+      - fakesys:/fakesys:ro
+  capture:
+    environment:
+      MEDIA_CAPTURE_MODE: testsrc
+      MEDIA_CAPTURE_TEST_SIZE: 160x120
+      SYSFS_ROOT: /fakesys
+    volumes:
+      - fakesys:/fakesys:ro
+      - fakedev:/hostdev:ro
+      - fakesnd:/dev/snd
+volumes:
+  fakesys: {external: true, name: lmt-fakesys}
+  fakedev: {external: true, name: lmt-fakedev}
+  fakesnd: {external: true, name: lmt-fakesnd}

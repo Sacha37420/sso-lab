@@ -387,15 +387,217 @@ def p_reload():
           code == 200 and cam['ready'] and cam['readyTime'] == load().get('ready_a'), json.dumps(cam))
 
 
-def p_capture():
+# ── Webcams (chantier webcams) : verify.sh branche et débranche du faux matériel ─────────
+CAM1 = 'usb-1b3f-0001-ssn01abtouchtmppwned'   # numéro de série hostile, réduit ; avec micro
+CAM2 = 'usb-1b3f-0002-p9-2'                    # sans numéro de série, sans micro
+CAM3 = 'usb-1b3f-0003-p9-3'
+LEGACY = 'webcam-ancienne'
+FIELDS = {'id', 'kind', 'model', 'vendor_id', 'product_id', 'serial', 'usb_port', 'has_audio', 'connected',
+          'state', 'record', 'first_seen', 'last_seen', 'paths'}
+ISO = re.compile(r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$')
+
+
+def devs(creds=A):
+    code, data = js('GET', f'{AUTH}/v1/devices', basic=creds)
+    return code, data
+
+
+def dev(ident, creds=A):
+    return js('GET', f'{AUTH}/v1/devices/{ident}', basic=creds)
+
+
+def by_id():
+    return {d['id']: d for d in (devs()[1] or [])}
+
+
+def states():
+    return {k: v['state'] for k, v in by_id().items()}
+
+
+def p_m_start():
+    code, data = devs()
+    check('M0', 'avant tout branchement : seule l\'entrée héritée, état legacy, chemins actuels webcam/*',
+          code == 200 and isinstance(data, list) and len(data) == 1 and data[0]['id'] == LEGACY
+          and data[0]['state'] == 'legacy' and data[0]['connected'] is False and data[0]['record'] is False
+          and data[0]['paths'] == {'av': 'webcam/av', 'video': 'webcam/video', 'audio': 'webcam/audio'}
+          and set(data[0]) == FIELDS, f'HTTP {code} {json.dumps(data)[:300]}')
+    code_b, data_b = devs(B)
+    code_l, _ = dev(LEGACY, B)
+    check('M0b', 'appb (pas propriétaire du préfixe webcam) : liste vide, 404 sur un périphérique d\'appa',
+          code_b == 200 and data_b == [] and code_l == 404, f'liste {code_b} {data_b}, GET {code_l}')
+    code_u, data_u = dev('usb-0000-0000-p1-1')
+    code_x, _ = dev('..%2F..%2Fetc')
+    check('M0c', 'identifiant inconnu ou fabriqué : 404 unknown_device',
+          code_u == 404 and (data_u or {}).get('error') == 'unknown_device' and code_x == 404, f'{code_u} {data_u}, {code_x}')
+    code, _ = js('GET', f'{AUTH}/v1/devices')
+    check('M0d', '/v1/devices sans identifiants : 401', code == 401, f'HTTP {code}')
+
+
+def p_m_two():
+    ok = wait_for(lambda: (lambda st: st.get(CAM1) == 'live' and st.get(CAM2) == 'live' and st)(states()), 60)
+    check('M1', 'deux webcams branchées : découvertes, capturées et publiées (état live)', bool(ok), json.dumps(ok))
+    d = by_id()
+    c1, c2 = d.get(CAM1, {}), d.get(CAM2, {})
+    check('M2', 'webcam avec micro : forme I1 complète, identifiant dérivé du numéro de série réduit, 3 chemins',
+          set(c1) == FIELDS and c1['kind'] == 'webcam' and c1['vendor_id'] == '1b3f' and c1['product_id'] == '0001'
+          and c1['usb_port'] == '9-1' and c1['has_audio'] is True and c1['connected'] is True and c1['record'] is False
+          and ISO.match(c1['first_seen']) and ISO.match(c1['last_seen'])
+          and c1['paths'] == {'av': f'webcam/{CAM1}/av', 'video': f'webcam/{CAM1}/video', 'audio': f'webcam/{CAM1}/audio'},
+          json.dumps({k: c1.get(k) for k in ('id', 'serial', 'usb_port', 'has_audio', 'paths')}))
+    check('M3', 'webcam sans micro ni numéro de série : identifiant par port, pas de chemin audio',
+          c2.get('has_audio') is False and c2.get('paths') == {'av': f'webcam/{CAM2}/av', 'video': f'webcam/{CAM2}/video', 'audio': None}
+          and c2.get('serial') == '' and c2.get('usb_port') == '9-2', json.dumps(c2.get('paths')))
+    model = c1.get('model', '')
+    check('M4', 'nom de produit hostile : rendu en texte, sans caractère de contrôle, borné à 100',
+          isinstance(model, str) and 0 < len(model) <= 100 and not re.search(r'[\x00-\x1f\x7f\u202e]', model),
+          f'{len(model)} caractères : {model[:60]!r}')
+    order = [x['id'] for x in devs()[1]]
+    check('M5', 'liste par first_seen croissant (l\'héritée d\'abord)', order[:1] == [LEGACY] and set(order[1:]) == {CAM1, CAM2},
+          ' '.join(order))
+    _, p1 = path_of(A, f'webcam/{CAM1}/av')
+    _, p1v = path_of(A, f'webcam/{CAM1}/video')
+    _, p1a = path_of(A, f'webcam/{CAM1}/audio')
+    _, p2 = path_of(A, f'webcam/{CAM2}/av')
+    _, p2v = path_of(A, f'webcam/{CAM2}/video')
+    code_a, _ = path_of(A, f'webcam/{CAM2}/audio')
+    tracks = {'cam1/av': (p1 or {}).get('tracks'), 'cam1/video': (p1v or {}).get('tracks'), 'cam1/audio': (p1a or {}).get('tracks'),
+              'cam2/av': (p2 or {}).get('tracks'), 'cam2/video': (p2v or {}).get('tracks')}
+    check('M6', 'pistes : micro ⇒ av H264+Opus, video H264, audio Opus ; sans micro ⇒ vidéo seule, aucun chemin audio (404)',
+          tracks == {'cam1/av': ['H264', 'Opus'], 'cam1/video': ['H264'], 'cam1/audio': ['Opus'],
+                     'cam2/av': ['H264'], 'cam2/video': ['H264']} and code_a == 404, f'{json.dumps(tracks)} audio cam2 → {code_a}')
+    code_b, _ = dev(CAM1, B)
+    code_bp, _ = path_of(B, f'webcam/{CAM1}/av')
+    check('M7', 'appb ne voit ni la webcam ni ses chemins', code_b == 404 and code_bp == 404 and devs(B)[1] == [],
+          f'GET {code_b}, chemin {code_bp}')
+    save(cam2_ready=(p2 or {}).get('readyTime'))
+
+
+def p_m_wait():
+    st = wait_for(lambda: (lambda s: s.get(CAM3) and s)(states()), 15)
+    d = by_id().get(CAM3, {})
+    check('M8', 'troisième webcam au-delà du plafond (2) : branchée, état waiting',
+          (st or {}).get(CAM3) == 'waiting' and d.get('connected') is True and st.get(CAM1) == 'live' and st.get(CAM2) == 'live',
+          json.dumps(st))
+
+
+def p_m_restart():
+    before = load().get('cam2_ready')
+    item = wait_for(lambda: (lambda i: i.get('ready') and i.get('readyTime') != before and i)(path_of(A, f'webcam/{CAM2}/av')[1] or {}), 30)
+    check('M9', 'ffmpeg d\'une webcam tué : relancé par le superviseur, le chemin revient (nouvelle publication)',
+          bool(item) and states().get(CAM2) == 'live', f'readyTime {before} → {(item or {}).get("readyTime")}')
+    save(cam2_ready=(item or {}).get('readyTime'))
+
+
+def p_m_unplug():
+    st = wait_for(lambda: (lambda s: s.get(CAM1) == 'offline' and s)(states()), 10, 0.5)
+    c1 = by_id().get(CAM1, {})
+    check('M10', 'webcam débranchée : offline, connected false, toujours listée', bool(st) and c1.get('connected') is False,
+          json.dumps(st))
+    t0 = time.time()
+    p1 = wait_for(lambda: (lambda p: p and p['ready'] is False and p)(path_of(A, f'webcam/{CAM1}/av')[1]), 5, 0.2)
+    check('M11', '… aucun chemin « prêt » fantôme (le ffmpeg arrêté, MediaMTX le voit partir en moins de 5 s)',
+          bool(p1), f'{json.dumps(p1)} après {time.time() - t0:.1f} s')
+    st = wait_for(lambda: (lambda s: s.get(CAM3) == 'live' and s)(states()), 40)
+    check('M12', 'la place libérée va à la webcam en attente (live)', bool(st), json.dumps(states()))
+
+
+def p_m_record_on():
+    code, item = js('PATCH', f'{AUTH}/v1/devices/{CAM2}', basic=A, data=b'{"record": true}', ctype='application/json')
+    check('M13', 'PATCH {"record": true} : 200, objet à jour', code == 200 and (item or {}).get('record') is True
+          and (item or {}).get('id') == CAM2 and set(item or {}) == FIELDS, f'HTTP {code} record={(item or {}).get("record")}')
+    _, p2 = path_of(A, f'webcam/{CAM2}/av')
+    check('M14', '… le chemin av est enregistré', (p2 or {}).get('recorded') is True, json.dumps(p2))
+
+
+def p_m_record_check():
+    _, p2 = path_of(A, f'webcam/{CAM2}/av')
+    check('M15', 'enregistrement commencé SANS couper la publication (même readyTime)',
+          (p2 or {}).get('ready') and p2.get('readyTime') == load().get('cam2_ready'),
+          f'readyTime {load().get("cam2_ready")} → {(p2 or {}).get("readyTime")}')
+    code, items = js('GET', f'{AUTH}/v1/recordings?path=webcam/{CAM2}/av', basic=A)
+    check('M16', 'relecture : la webcam a une plage enregistrée', code == 200 and bool(items), f'HTTP {code} {items}')
+
+
+def p_m_record_off():
+    code, item = js('PATCH', f'{AUTH}/v1/devices/{CAM2}', basic=A, data=b'{"record": false}', ctype='application/json')
+    check('M17', 'PATCH {"record": false} : 200', code == 200 and (item or {}).get('record') is False, f'HTTP {code}')
+
+
+def p_m_errors():
+    patch = lambda ident, body, creds=A: js('PATCH', f'{AUTH}/v1/devices/{ident}', basic=creds, data=body, ctype='application/json')
+    codes = [patch(CAM2, body)[0] for body in (b'{"record": "yes"}', b'{"record": 1}', b'{"record": true, "x": 1}',
+                                                b'{}', b'pas du json', b'[true]', b'')]
+    check('M18', 'PATCH : corps invalide (non booléen, clé en plus, vide, pas du JSON) → 400', codes == [400] * 7, str(codes))
+    code, data = patch(LEGACY, b'{"record": true}')
+    check('M19', 'PATCH de webcam-ancienne → 409 legacy', code == 409 and (data or {}).get('error') == 'legacy', f'{code} {data}')
+    code_u, _ = patch('usb-0000-0000-p1-1', b'{"record": true}')
+    code_b, _ = patch(CAM2, b'{"record": true}', B)
+    check('M20', 'PATCH d\'un inconnu, ou d\'une webcam d\'appa par appb → 404 (indiscernables)',
+          code_u == 404 and code_b == 404 and by_id()[CAM2]['record'] is False, f'{code_u} {code_b}')
+    code, data = js('DELETE', f'{AUTH}/v1/devices/{CAM3}', basic=A)
+    check('M21', 'DELETE d\'une webcam branchée → 409 connected', code == 409 and (data or {}).get('error') == 'connected', f'{code} {data}')
+    code_b, _ = js('DELETE', f'{AUTH}/v1/devices/{CAM1}', basic=B)
+    code, _, body, _ = call('DELETE', f'{AUTH}/v1/devices/{CAM1}', basic=A)
+    code_g, _ = dev(CAM1)
+    check('M22', 'DELETE d\'une webcam débranchée → 204 ; elle disparaît (404, absente de la liste) ; appb → 404',
+          code_b == 404 and code == 204 and body == b'' and code_g == 404 and CAM1 not in by_id(),
+          f'appb {code_b}, appa {code}, GET ensuite {code_g}')
+    code_p, _ = path_of(A, f'webcam/{CAM1}/av')
+    clear_logs()
+    code_h, _, _, _ = hls(f'webcam/{CAM1}/av', TA)
+    check('M23', 'chemins d\'une webcam oubliée : inconnus de l\'API, lecture refusée sans même consulter l\'app',
+          code_p == 404 and code_h != 200 and not hook_log(APPA), f'chemin {code_p}, HLS {code_h}, appels au hook {len(hook_log(APPA))}')
+    clear_logs()
+    code_h, _, body, _ = hls(f'webcam/{CAM2}/av', TA)
+    seen = [x['body'].get('path') for x in hook_log(APPA)]
+    check('M24', 'lecture d\'une webcam : relayée au hook de l\'app propriétaire avec le chemin de `paths` (I2)',
+          code_h == 200 and f'webcam/{CAM2}/av' in seen, f'HTTP {code_h}, chemins reçus par le hook {seen}')
+
+
+def p_m_burst():
+    st = wait_for(lambda: (lambda s: sum(1 for k, v in s.items() if k.startswith('usb-1b3f-01')) == 10 and s)(states()), 20)
+    st = st or states()
+    active = sorted(k for k, v in st.items() if v in ('live', 'starting', 'error'))
+    waiting = [k for k, v in st.items() if v == 'waiting']
+    check('M25', 'dix webcams d\'un coup : le plafond tient (2 capturées, les nouvelles en attente)',
+          active == sorted([CAM2, CAM3]) and len(waiting) == 10, f'capturées {active}, en attente {len(waiting)}')
+
+
+def p_m_none():
+    st = wait_for(lambda: (lambda s: all(v in ('offline', 'legacy') for v in s.values()) and s)(states()), 10, 0.5)
+    check('M26', 'tout débranché : toutes offline', bool(st), json.dumps(states())[:200])
     def ready():
-        items = {i['path']: i for i in js('GET', f'{AUTH}/v1/paths', basic=A)[1]['items']}
-        return all(items[p]['ready'] for p in ('webcam/av', 'webcam/video', 'webcam/audio')) and items
-    items = wait_for(ready, 40)
-    tracks = {p: items[p]['tracks'] for p in ('webcam/av', 'webcam/video', 'webcam/audio')} if items else {}
-    check('S1', 'capture.sh (mire) : un encodage, trois chemins webcam/* prêts',
-          bool(items) and tracks == {'webcam/av': ['H264', 'Opus'], 'webcam/video': ['H264'], 'webcam/audio': ['Opus']},
-          json.dumps(tracks))
+        return [i['path'] for i in js('GET', f'{AUTH}/v1/paths', basic=A)[1]['items'] if i['ready'] and i['path'].startswith('webcam/')]
+    t0 = time.time()
+    left = wait_for(lambda: ready() == [] and ['vide'], 5, 0.2)
+    check('M27', '… aucun chemin webcam « prêt » (en moins de 5 s)', bool(left), f'{ready()} après {time.time() - t0:.1f} s')
+
+
+def p_m_back():
+    st = wait_for(lambda: (lambda s: s.get(CAM2) == 'live' and s)(states()), 40)
+    code, item = js('PATCH', f'{AUTH}/v1/devices/{CAM2}', basic=A, data=b'{"record": true}', ctype='application/json')
+    _, p2 = path_of(A, f'webcam/{CAM2}/av')
+    check('M28', 'webcam rebranchée : de nouveau live ; enregistrement réactivé', bool(st) and code == 200 and item['record'],
+          json.dumps(st))
+    save(cam2_ready=(p2 or {}).get('readyTime'))
+
+
+def p_m_legacy():
+    code, items = js('GET', f'{AUTH}/v1/recordings?path=webcam/av', basic=A)
+    check('M29', 'webcam-ancienne : ses enregistrements existants restent relisibles (webcam/av)', code == 200 and bool(items),
+          f'HTTP {code} {json.dumps(items)[:120]}')
+
+
+def p_m_persist():
+    """verify.sh a recréé lab-media-auth (nouveau conteneur, même volume d'état)."""
+    wait_for(lambda: js('GET', f'{AUTH}/healthz')[0] == 200, 20)
+    d = wait_for(lambda: (lambda x: CAM2 in x and x)(by_id()), 10) or {}
+    _, p2 = path_of(A, f'webcam/{CAM2}/av')
+    check('M30', 'lab-media-auth recréé : inventaire et réglage d\'enregistrement conservés, capture non coupée',
+          d.get(CAM2, {}).get('record') is True and CAM1 not in d and LEGACY in d and d[CAM2]['state'] == 'live'
+          and (p2 or {}).get('readyTime') == load().get('cam2_ready'),
+          f'record={d.get(CAM2, {}).get("record")}, oubliée absente : {CAM1 not in d}, readyTime inchangé : '
+          f'{(p2 or {}).get("readyTime") == load().get("cam2_ready")}')
 
 
 PHASES = {name[2:]: fn for name, fn in globals().items() if name.startswith('p_')}

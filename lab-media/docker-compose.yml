@@ -27,6 +27,10 @@ volumes:
   # mediamtx.yml dérivé du registre, écrit par lab-media-auth, lu par MediaMTX. Régénéré à
   # chaque démarrage de lab-media-auth : rien à sauvegarder.
   config:
+  # Inventaire des webcams déjà vues, leur réglage d'enregistrement, et plan de capture
+  # (chantier webcams). Écrit par lab-media-auth seul ; lu (lecture seule) par la capture.
+  # À SAUVEGARDER : le perdre oublie les webcams et remet tous les enregistrements à « coupé ».
+  state:
 
 networks:
   internal:
@@ -56,6 +60,9 @@ services:
     volumes:
       - ${LAB_MEDIA_REGISTRY:-${HOST_DEV_ROOT:?HOST_DEV_ROOT manquant dans lab-media/.env (propagé par reset_url.sh)}/lab-media/registry.json}:/etc/lab-media/registry.json:ro
       - config:/config
+      - state:/state
+    # Découverte des webcams : lab-media-auth lit /sys (celui que Docker monte en lecture seule
+    # dans tout conteneur). Il n'ouvre aucun périphérique et n'a aucune règle cgroup.
     networks:
       internal:
         aliases: [lab-media-hook]      # le hook n'écoute que sur cette adresse
@@ -115,11 +122,13 @@ services:
       - "${LAB_MEDIA_CADDY_LABEL:-caddy}.1_handle_path.reverse_proxy={{upstreams 8888}}"
       - "${LAB_MEDIA_CADDY_LABEL:-caddy}.1_handle_path.reverse_proxy.header_down=Location ^/ /lab-media-hls/"
 
-  # ── Source interne « périphérique de l'hôte » (webcam + micro) ─────────────
+  # ── Source interne « webcams de l'hôte » ────────────────────────────────────
   # Profil `capture` : la brique tourne sans aucun matériel ; ce service n'est lancé que si
-  # COMPOSE_PROFILES=capture est dans .env. SEUL conteneur du lab qui ouvre la webcam et le
-  # micro (un V4L2 ne s'ouvre qu'une fois). Réseau interne seulement : il ne joint ni les
-  # apps ni Caddy, il publie en RTSP vers MediaMTX avec ses propres identifiants.
+  # COMPOSE_PROFILES=capture est dans .env. SEUL conteneur du lab qui ouvre les webcams et
+  # leurs micros (un V4L2 ne s'ouvre qu'une fois). Il capture les webcams que lab-media-auth
+  # a mises au plan (/state/plan, au plus MEDIA_CAPTURE_MAX), un ffmpeg par webcam.
+  # Réseau interne seulement : il ne joint ni les apps ni Caddy, il publie en RTSP vers
+  # MediaMTX avec ses propres identifiants.
   capture:
     profiles: ["capture"]
     build: ./mediamtx
@@ -133,9 +142,10 @@ services:
     environment:
       LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER: "${LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER:-}"
       LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD: "${LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD:-}"
-      MEDIA_DEVICE_VIDEO: "${MEDIA_DEVICE_VIDEO:-}"
-      MEDIA_DEVICE_AUDIO: "${MEDIA_DEVICE_AUDIO:-}"
+      MEDIA_CAPTURE_MAX: "${MEDIA_CAPTURE_MAX:-2}"
       MEDIA_CAPTURE_MODE: "${MEDIA_CAPTURE_MODE:-device}"
+      # MEDIA_DEVICE_VIDEO / MEDIA_DEVICE_AUDIO ne sont plus lues (la découverte les remplace) :
+      # présentes dans .env, elles sont ignorées.
     # AUCUN `devices:` : il fige major:minor à la création du conteneur, et une ré-énumération
     # USB a déjà fait pointer la caméra sur son nœud métadonnées (« Not a tty »). Vue live de
     # /dev + autorisation par majeur. Le `:ro` ne protège PAS les nœuds caractère : seules ces
@@ -150,7 +160,8 @@ services:
     # éprouvées avec la vraie caméra : ce service n'a pas pu être lancé sur le matériel avant
     # la bascule. Ne durcir (cap_drop…) qu'après un essai réel.
     volumes:
-      - /dev:/hostdev:ro          # le lien by-id suit les ré-énumérations
+      - /dev:/hostdev:ro          # vue live : les nœuds suivent branchements et ré-énumérations
       - /dev/snd:/dev/snd         # ALSA ne cherche que /dev/snd ; bind = vue live
+      - state:/state:ro           # le plan de capture écrit par lab-media-auth
     networks:
       internal: {}

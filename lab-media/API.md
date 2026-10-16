@@ -1,4 +1,4 @@
-# lab-media — API des apps (contrat `chantiers/lab-media`, I3)
+# lab-media — API des apps (contrat `chantiers/lab-media`, I3 ; chantier `webcams`, I1 et I2)
 
 Ce document fait foi pour tout ce qu'une app échange avec `lab-media`. Il est écrit à partir de
 ce que le code rend (`auth/labmediaauth/server.py`) ; chaque forme de réponse ci-dessous est
@@ -8,7 +8,7 @@ Une app a quatre points de contact avec la brique, et seulement ceux-là :
 
 | # | Quoi | Où | Authentifié par |
 |---|---|---|---|
-| 1 | **API de contrôle** (état, sessions, expulsion, relecture) | `http://lab-media-auth:9100` — `dev-net` seulement | identifiants de contrôle de l'app (HTTP Basic) |
+| 1 | **API de contrôle** (état, sessions, expulsion, relecture, webcams) | `http://lab-media-auth:9100` — `dev-net` seulement | identifiants de contrôle de l'app (HTTP Basic) |
 | 2 | **Hook de lecture** : `lab-media` appelle l'app à chaque demande de lecture | URL de l'app, déclarée au registre | clé de hook de l'app (`?key=`) |
 | 3 | **Lecture par un navigateur** | `https://<DOMAIN>/lab-media-webrtc/<chemin>/whep` et `/lab-media-hls/<chemin>/index.m3u8` | ce que le hook de l'app accepte (un jeton `Bearer`) |
 | 4 | **RTSP** (publier un flux, ou le lire depuis un backend) | `rtsp://lab-media:8554/<chemin>` — `dev-net` | publication : identifiants de publication de l'app ; lecture : le hook de l'app |
@@ -32,8 +32,9 @@ pas (`404`), sans distinction possible.
 - Réponses : JSON (`Cache-Control: no-store`), sauf la lecture d'une plage (flux binaire) et
   l'expulsion réussie (`204`, sans corps).
 - Erreurs : `{"error": "<code>", "detail": "<phrase>"}`. Codes : `unauthorized` (401),
-  `unknown_path` (404), `unknown_session` (404), `no_recording` (404), `not_found` (404, route
-  inconnue), `bad_request` (400), `bad_protocol` (400), `not_a_reader` (409),
+  `unknown_path` (404), `unknown_session` (404), `unknown_device` (404), `no_recording` (404),
+  `not_found` (404, route inconnue), `bad_request` (400), `bad_protocol` (400),
+  `not_a_reader` (409), `legacy` (409), `connected` (409),
   `media_unavailable` (502 : MediaMTX injoignable ou réponse inattendue).
 - `GET /healthz` → `200 {"status": "ok"}`, sans authentification (sonde de vie du conteneur ;
   ne dit rien de MediaMTX).
@@ -128,6 +129,86 @@ le média de la plage, en flux (`Content-Type: video/mp4`, longueur inconnue, la
 `400 bad_request` si `start` ou `duration` est mal formé ; `404 unknown_path` hors de ses chemins.
 Le flux porte **toutes** les pistes du chemin : retirer une piste reste l'affaire de l'app.
 
+### 1.4 Webcams de l'hôte (chantier webcams, I1)
+
+`lab-media` découvre toute webcam USB branchée sur l'hôte, garde l'inventaire de celles qu'il a
+déjà vues, et capture celles qui sont branchées, au plus `MEDIA_CAPTURE_MAX` à la fois (2 par
+défaut). Un périphérique appartient à l'app qui possède le préfixe des webcams au registre
+(`devices.prefix`, aujourd'hui `webcam` → `peripheriques`). Pour toute autre app : liste vide, et
+`404 unknown_device` sur chaque identifiant, comme pour un identifiant inconnu.
+
+**Identifiant** (I0) — calculé par `lab-media`, stable pour un même appareil :
+`usb-<vid>-<pid>-s<série>` si l'appareil a un numéro de série (réduit à `[a-z0-9]`, tronqué à
+24 ; s'il n'en reste rien, la forme « port » s'applique), sinon `usb-<vid>-<pid>-p<port USB>`
+(`.` → `-`). Forme : `^usb-[0-9a-f]{4}-[0-9a-f]{4}-[sp][a-z0-9-]{1,40}$`. Une caméra sans numéro
+de série rebranchée sur un autre port est un nouveau périphérique. L'entrée héritée
+`webcam-ancienne` (la caméra d'avant la découverte) n'a pas cette forme.
+
+**`GET /v1/devices`** → `200`, tableau de tous les périphériques déjà vus (branchés ou non),
+`first_seen` croissant. Réponse réelle de `verify.sh` (extrait, faux matériel) :
+
+```json
+[
+ {"id": "webcam-ancienne", "kind": "webcam", "model": "USB PHY 2.0",
+  "vendor_id": "1224", "product_id": "2a25", "serial": "", "usb_port": "",
+  "has_audio": true, "connected": false, "state": "legacy", "record": false,
+  "first_seen": "2026-10-10T17:57:12+00:00", "last_seen": "2026-10-14T20:30:00+00:00",
+  "paths": {"av": "webcam/av", "video": "webcam/video", "audio": "webcam/audio"}},
+ {"id": "usb-1b3f-0002-p9-2", "kind": "webcam", "model": "Cam B",
+  "vendor_id": "1b3f", "product_id": "0002", "serial": "", "usb_port": "9-2",
+  "has_audio": false, "connected": true, "state": "live", "record": true,
+  "first_seen": "2026-10-16T23:12:29+00:00", "last_seen": "2026-10-16T23:14:16+00:00",
+  "paths": {"av": "webcam/usb-1b3f-0002-p9-2/av", "video": "webcam/usb-1b3f-0002-p9-2/video", "audio": null}},
+ {"id": "usb-1b3f-0003-p9-3", "kind": "webcam", "model": "Cam C",
+  "vendor_id": "1b3f", "product_id": "0003", "serial": "", "usb_port": "9-3",
+  "has_audio": false, "connected": false, "state": "offline", "record": false,
+  "first_seen": "2026-10-16T23:12:32+00:00", "last_seen": "2026-10-16T23:13:03+00:00",
+  "paths": {"av": "webcam/usb-1b3f-0003-p9-3/av", "video": "webcam/usb-1b3f-0003-p9-3/video", "audio": null}}
+]
+```
+
+| Champ | Sens |
+|---|---|
+| `id` | identifiant I0 (ou `webcam-ancienne`) |
+| `kind` | toujours `"webcam"` |
+| `model` | nom de produit USB, **texte fourni par l'appareil** : caractères de contrôle et de bidirectionnalité retirés, 100 caractères au plus, jamais interprété. À échapper à l'affichage comme toute donnée externe |
+| `vendor_id`, `product_id` | 4 hexadécimaux minuscules |
+| `serial` | numéro de série tel que lu (nettoyé comme `model`, 64 caractères au plus), `""` s'il n'y en a pas |
+| `usb_port` | port USB tel que sysfs le nomme (`3-4`, `1-1.2`) ; `""` pour l'héritée |
+| `has_audio` | un micro du **même appareil USB** a été trouvé. Une fois vrai, il le reste |
+| `connected` | branché maintenant |
+| `state` | `live` (publié) · `waiting` (branché, au-delà du plafond) · `starting` (capture lancée depuis moins de 20 s, pas encore publiée) · `error` (branché, mis en capture, mais aucun flux depuis plus de 20 s) · `offline` (débranché) · `legacy` (entrée héritée) |
+| `error_detail` | **seulement si `state` vaut `error`** : une phrase, sans secret (« Aucun flux publié depuis plus de 20 s : capture arrêtée ou en échec (voir le journal de lab-media-capture). » ou « Serveur média injoignable. ») |
+| `record` | enregistrement de `paths.av` (coupé par défaut ; toujours `false` pour l'héritée) |
+| `first_seen` | première découverte (RFC 3339 à la seconde, fuseau du conteneur) |
+| `last_seen` | dernier instant où il était branché ; l'instant présent s'il l'est |
+| `paths` | les chemins MediaMTX du périphérique. `audio` vaut `null` sans micro (rien n'est publié côté audio, le chemin n'existe pas). **Toujours les prendre ici, ne jamais les recomposer** : l'héritée a `webcam/{av,video,audio}` |
+
+**`GET /v1/devices/<id>`** → `200`, le même objet ; `404 unknown_device` sinon.
+
+**`PATCH /v1/devices/<id>`**, corps `{"record": true}` ou `{"record": false}` (seule clé admise,
+booléen JSON) → `200`, l'objet à jour. L'enregistrement de `paths.av` commence ou s'arrête sans
+redémarrer MediaMTX ni la capture (prouvé : même `readyTime`, même ffmpeg) ; le réglage est
+gardé dans le volume d'état de `lab-media` et survit à tout redémarrage. MediaMTX l'applique en
+2 à 5 s après la réponse.
+
+| Réponse | Cas |
+|---|---|
+| `400 bad_request` | corps absent, pas du JSON, autre clé, valeur non booléenne (`"oui"`, `1`) — pour un identifiant connu |
+| `404 unknown_device` | identifiant inconnu, ou périphérique d'une autre app |
+| `409 legacy` | `webcam-ancienne` ne s'enregistre plus |
+
+**`DELETE /v1/devices/<id>`** → `204` sans corps : oublie un périphérique **débranché**. Il
+disparaît de la liste ; ses chemins ne sont plus ni publiables ni lisibles (le hook n'est même
+pas consulté) ; ses enregistrements restent sur disque jusqu'à leur expiration (7 jours), puis
+MediaMTX les purge. `409 connected` s'il est branché ; `404 unknown_device` sinon.
+`webcam-ancienne` peut être oubliée. Rebranché plus tard, un périphérique oublié revient comme
+neuf (même identifiant, nouveau `first_seen`, enregistrement coupé).
+
+Les routes 1.1 à 1.3 acceptent les chemins de `paths` tels quels (`/v1/paths/webcam/<id>/av`,
+`/v1/sessions?path=…`, `/v1/recordings?path=…`). Un chemin `audio` absent (`null`) n'existe pas :
+`404 unknown_path`.
+
 ---
 
 ## 2. Hook de lecture de l'app
@@ -138,10 +219,15 @@ Chaque demande de lecture d'un chemin sous un préfixe de l'app lui est relayée
 POST <read_hook de l'app au registre>?key=<clé de hook de l'app>
 Content-Type: application/json
 {"ip": "192.168.48.3", "user": "", "password": "", "token": "<jeton>", "action": "read",
- "path": "webcam/av", "protocol": "hls", "id": "0c0c1eba-f412-4813-ac23-ac8d84a39164",
+ "path": "webcam/usb-32e4-9230-p3-4/av", "protocol": "hls", "id": "0c0c1eba-f412-4813-ac23-ac8d84a39164",
  "query": "", "userAgent": "Mozilla/5.0 …"}
 ```
 
+- `path` est un chemin de `paths` d'un périphérique (I2 du chantier webcams :
+  `webcam/<id>/<av|video|audio>`, ou `webcam/<av|video|audio>` pour `webcam-ancienne`). L'app
+  retrouve le périphérique **par ses chemins connus** (`GET /v1/devices`), jamais en découpant
+  la chaîne ; un chemin qu'elle ne connaît pas ⇒ refus. Un chemin d'un périphérique oublié
+  n'arrive jamais au hook.
 - Le corps est celui de MediaMTX, **octet pour octet**. `action` vaut toujours `read` : la
   publication, l'API, la relecture et les métriques de MediaMTX ne parviennent plus jamais à
   l'app (`lab-media-auth` les tranche lui-même).
@@ -206,7 +292,8 @@ Référence : `deploiement/peripheriques/backend/api/media_client.py`, `kick.py`
 | Volume `peripheriques-recordings` monté en lecture seule dans le backend | rien : aucun montage | aucun code de `backend/` ne lit `/recordings` (recherche dans les sources) ; le retirer |
 | Service `media` et volume dans le compose de l'app | services de `lab-media/` | retirés du compose de l'app à la bascule |
 
-Les chemins restent `webcam/av`, `webcam/video`, `webcam/audio`.
+Depuis le chantier webcams, ces trois chemins sont ceux de `webcam-ancienne` ; chaque webcam
+découverte a les siens (§1.4).
 
 ## 6. État de preuve
 
@@ -237,3 +324,14 @@ parenthèses), sur MediaMTX 1.21.1, avec deux apps fictives et des sources synth
 | Lecture RTSP par jeton en mot de passe | prouvé (L9, L10) |
 | Lecture WHEP : signalisation, ICE, média (octets émis en hausse), à travers Caddy | prouvé avec un client WHEP non navigateur (W1, W3) |
 | **Image vidéo H.264 dans un vrai navigateur** | **non prouvé** : à valider par l'utilisateur à la bascule |
+| `GET /v1/devices` : héritée seule au départ ; forme complète ; tri ; autre app → `[]` et 404 ; sans identifiants → 401 | prouvé (M0–M0d, M2, M5, M7) |
+| Découverte au branchement, capture, `live` ; vidéo seule sans micro (pas de chemin audio, `av` en H.264 seul) ; avec micro : `av` H.264 + Opus | prouvé (M1, M3, M6) sur faux matériel, mode mire |
+| Plafond : 3ᵉ webcam `waiting` ; dix d'un coup ⇒ toujours 2 ffmpeg ; pas de préemption | prouvé (M8, M25, M32, M37) |
+| ffmpeg tué ⇒ relancé ; débranchement ⇒ `offline`, ffmpeg arrêté, aucun chemin prêt fantôme (< 5 s), place reprise | prouvé (M9, M33, M10–M12, M34, M26, M27, M38) |
+| `PATCH record` à chaud, sans couper publication ni capture ; erreurs 400/404/409 | prouvé (M13–M20, M35, M36) |
+| `DELETE` : 409 branché, 204, chemins oubliés fermés (API, lecture, publication) | prouvé (M21–M23, M42) |
+| Inventaire et réglage conservés quand `lab-media-auth` est recréé ; capture non relancée ; capture continue pendant son arrêt | prouvé (M30, G4, X8) |
+| `webcam-ancienne` : jamais capturée, anciens enregistrements relisibles | prouvé (M41, M29) |
+| Nom de produit et numéro de série hostiles : rien d'exécuté, jamais au journal ; mot de passe de publication masqué dans le journal de ffmpeg | prouvé (M4, M39, J3, J4) ; tests unitaires |
+| `state: error` (capture absente ou en échec depuis plus de 20 s) | codé ; tests unitaires seulement |
+| Capture d'une vraie webcam (V4L2, MJPEG 1280x720, repli sur le format du pilote), micro USB réel (`plughw`) | **non prouvé** : essai réel à faire à l'intégration |

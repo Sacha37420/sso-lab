@@ -1,21 +1,24 @@
 #!/bin/sh
-# Source interne « périphérique de l'hôte » (contrat lab-media, I4) — reprise de
-# deploiement/peripheriques/media/publish.sh.
-# UN SEUL ffmpeg : ouvre caméra + micro, encode UNE fois, publie les 3 chemins via le muxer
-# tee (aucun ré-encodage par sortie).
-#   <préfixe>/video  H.264 seul   <préfixe>/audio  Opus seul   <préfixe>/av  H.264 + Opus
-# Caméra Jieli 1224:2a25 : MJPEG 1280x720 (25 i/s imposés par le pilote) ou YUYV 640x480 max,
-# aucun H.264 natif => décodage MJPEG + x264. Le passage à 15 i/s se fait par le filtre fps.
+# Source interne « webcams de l'hôte » (chantier webcams, contrat v1) — SUPERVISEUR.
 #
-# Boucle : attente des périphériques (sysfs seulement), ffmpeg, puis on recommence à la moindre
-# sortie de ffmpeg (ré-énumération USB, MediaMTX ou lab-media-auth redémarré, refus du hook).
+# lab-media-auth découvre les webcams (sysfs), tient l'inventaire et écrit le PLAN de capture
+# (/state/plan, une ligne par webcam à capturer, au plus MEDIA_CAPTURE_MAX) :
+#     <id> <port USB> <micro 0|1> <base des chemins>
+# Ce superviseur lit le plan chaque seconde et tient UN travailleur (capture-one.sh, donc un
+# ffmpeg) par ligne :
+#   * ligne apparue            → travailleur lancé ;
+#   * ligne disparue ou changée (débranchement, micro apparu, plafond) → travailleur arrêté,
+#     son ffmpeg tué et attendu (jamais d'orphelin), puis relancé s'il le faut ;
+#   * travailleur mort          → relancé au passage suivant.
+# Le plan est relu, jamais cru : chaque champ est revalidé ici, et le plafond est réappliqué
+# (au plus MEDIA_CAPTURE_MAX lignes prises, quoi que contienne le fichier).
 #
-# MEDIA_CAPTURE_MODE=testsrc : mire + bip synthétiques à la place des périphériques, même
-# encodage, même tee, mêmes identifiants. N'ouvre AUCUN périphérique : sert à prouver la
-# chaîne sans matériel (verify.sh) et à diagnostiquer la brique caméra débranchée.
+# Aucune chaîne venue du matériel (nom de produit, numéro de série) n'arrive jusqu'ici : le
+# plan n'en contient pas, par construction (labmediaauth/devices.py).
 set -u
 
-die() { echo "[capture] ERREUR : $*" >&2; exit 1; }
+log() { echo "[capture] $*" >&2; }
+die() { log "ERREUR : $*"; exit 1; }
 
 USER_="${LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER:-}"
 PASS_="${LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD:-}"
@@ -24,65 +27,96 @@ PASS_="${LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD:-}"
 for v in "$USER_" "$PASS_"; do
   case "$v" in *[!A-Za-z0-9_-]*) die "identifiants de capture hors [A-Za-z0-9_-]";; esac
 done
-PREFIX="${MEDIA_CAPTURE_PREFIX:-webcam}"
-case "$PREFIX" in *[!a-z0-9_/-]*|'') die "MEDIA_CAPTURE_PREFIX invalide";; esac
-MODE="${MEDIA_CAPTURE_MODE:-device}"
-# « lab-media-rtsp » : alias de MediaMTX sur le réseau interne de lab-media.
-BASE="rtsp://${USER_}:${PASS_}@${MEDIA_CAPTURE_RTSP_HOST:-lab-media-rtsp}:8554/${PREFIX}"
-RETRY="${MEDIA_CAPTURE_RETRY_S:-3}"
+case "${MEDIA_CAPTURE_MODE:-device}" in device|testsrc) ;; *) die "MEDIA_CAPTURE_MODE ∈ device, testsrc";; esac
+MAX="${MEDIA_CAPTURE_MAX:-2}"
+case "$MAX" in ''|*[!0-9]*) die "MEDIA_CAPTURE_MAX doit être un entier de 0 à 8";; esac
+[ "$MAX" -le 8 ] || die "MEDIA_CAPTURE_MAX doit être un entier de 0 à 8"
+PLAN="${MEDIA_CAPTURE_PLAN:-/state/plan}"
+RUN="${MEDIA_CAPTURE_RUN:-/tmp/lab-capture}"
+rm -rf "$RUN" && mkdir -p "$RUN" || die "dossier de travail $RUN"
 
-run_device() {
-  # Attendre caméra + carte son (sysfs seulement, rien n'est ouvert) — voir wait-devices.sh.
-  sh /opt/lab-media/wait-devices.sh || return 1
-  # Lien by-id de l'hôte relu sous /hostdev (montage live) : résolu à CHAQUE lancement, il
-  # suit les ré-énumérations USB. Jamais de /dev/video0 figé.
-  VIDEO_IN="/hostdev${MEDIA_DEVICE_VIDEO#/dev}"
-  ffmpeg -hide_banner -nostdin -loglevel warning \
-    -thread_queue_size 64 \
-    -f v4l2 -input_format mjpeg -video_size 1280x720 -timestamps mono2abs -i "${VIDEO_IN}" \
-    -thread_queue_size 1024 \
-    -f alsa -channels 1 -sample_rate 48000 -i "${MEDIA_DEVICE_AUDIO}" \
-    -map 0:v:0 -map 1:a:0 \
-    -vf "fps=15,format=yuv420p" \
-    -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level:v 3.1 \
-    -b:v 1000k -maxrate 1000k -bufsize 2000k -g 30 -keyint_min 30 -sc_threshold 0 -bf 0 \
-    -c:a libopus -b:a 32k -ar 48000 -ac 1 -application lowdelay \
-    -f tee \
-    "[f=rtsp:rtsp_transport=tcp:select=v]${BASE}/video|[f=rtsp:rtsp_transport=tcp:select=a]${BASE}/audio|[f=rtsp:rtsp_transport=tcp]${BASE}/av"
+# valid <id> <port> <micro> <base> [reste] : 0 si la ligne est bien formée.
+valid() {
+  [ $# -eq 4 ] || return 1
+  case "$1" in usb-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[sp]?*) ;; *) return 1;; esac
+  case "$1" in *[!a-z0-9-]*) return 1;; esac
+  [ "${#1}" -le 60 ] || return 1
+  case "$2" in ''|*[!0-9.-]*|[!0-9]*) return 1;; esac
+  [ "${#2}" -le 32 ] || return 1
+  case "$3" in 0|1) ;; *) return 1;; esac
+  case "$4" in ''|*[!a-z0-9/-]*|/*|*//*) return 1;; esac
+  case "$4" in */"$1") ;; *) return 1;; esac
+  return 0
 }
 
-run_testsrc() {
-  SIZE="${MEDIA_CAPTURE_TEST_SIZE:-320x240}"
-  case "$SIZE" in *[!0-9x]*) die "MEDIA_CAPTURE_TEST_SIZE invalide";; esac
-  ffmpeg -hide_banner -nostdin -loglevel warning \
-    -re -f lavfi -i "testsrc2=size=${SIZE}:rate=15" \
-    -re -f lavfi -i "sine=frequency=440:sample_rate=48000" \
-    -map 0:v:0 -map 1:a:0 \
-    -vf "format=yuv420p" \
-    -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level:v 3.1 \
-    -b:v 200k -maxrate 200k -bufsize 400k -g 30 -keyint_min 30 -sc_threshold 0 -bf 0 \
-    -c:a libopus -b:a 32k -ar 48000 -ac 1 -application lowdelay \
-    -f tee \
-    "[f=rtsp:rtsp_transport=tcp:select=v]${BASE}/video|[f=rtsp:rtsp_transport=tcp:select=a]${BASE}/audio|[f=rtsp:rtsp_transport=tcp]${BASE}/av"
+# Lignes voulues : celles du plan qui sont valides, les MAX premières.
+desired() {
+  n=0
+  [ -f "$PLAN" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    # shellcheck disable=SC2086
+    set -f; set -- $line; set +f
+    if ! valid "$@"; then log "ligne de plan ignorée (mal formée)"; continue; fi
+    [ "$n" -lt "$MAX" ] || { log "plafond de $MAX atteint : ligne de plan ignorée ($1)"; continue; }
+    n=$((n + 1))
+    echo "$1 $2 $3 $4"
+  done < "$PLAN"
 }
 
-case "$MODE" in
-  device)
-    case "${MEDIA_DEVICE_VIDEO:-}" in /dev/*) ;; *) die "MEDIA_DEVICE_VIDEO doit être un lien /dev/... de l'hôte (by-id)";; esac
-    [ -n "${MEDIA_DEVICE_AUDIO:-}" ] || die "MEDIA_DEVICE_AUDIO absent de .env"
-    ;;
-  testsrc) ;;
-  *) die "MEDIA_CAPTURE_MODE ∈ device, testsrc";;
-esac
+alive() {   # alive <pid> : vivant et pas zombie
+  [ -n "$1" ] && [ -r "/proc/$1/stat" ] || return 1
+  st="$(sed 's/^.*) \(.\).*/\1/' "/proc/$1/stat" 2>/dev/null)"
+  [ "$st" != "Z" ]
+}
 
-trap 'kill "$child" 2>/dev/null; exit 0' TERM INT
+is_worker() {  # is_worker <pid> <id> : ce pid est bien le travailleur vivant de cette webcam
+  alive "$1" && tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -q -F "capture-one.sh $2 "
+}
+
+stop_worker() {   # stop_worker <id>
+  id="$1"; pid="$(cat "$RUN/$id.pid" 2>/dev/null)"; ff="$(cat "$RUN/$id.ff" 2>/dev/null)"
+  if is_worker "$pid" "$id"; then
+    kill -TERM "$pid" 2>/dev/null
+    i=0; while alive "$pid" && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    alive "$pid" && kill -KILL "$pid" 2>/dev/null
+  fi
+  [ -n "$pid" ] && wait "$pid" 2>/dev/null
+  # Filet : si le travailleur n'a pas pu tuer son ffmpeg (tué net), on le fait — après avoir
+  # vérifié que ce pid est bien un ffmpeg qui publie sous CETTE webcam (pas un pid recyclé).
+  if [ -n "$ff" ] && alive "$ff" && tr '\0' ' ' < "/proc/$ff/cmdline" 2>/dev/null | grep -q -F "/$id/"; then
+    kill -TERM "$ff" 2>/dev/null; sleep 1; alive "$ff" && kill -KILL "$ff" 2>/dev/null
+  fi
+  rm -f "$RUN/$id.pid" "$RUN/$id.ff" "$RUN/$id.line"
+  log "$id : capture arrêtée"
+}
+
+stop_all() {
+  for f in "$RUN"/*.pid; do [ -e "$f" ] || continue; id="${f##*/}"; stop_worker "${id%.pid}"; done
+}
+trap 'stop_all; exit 0' TERM INT
+
+log "superviseur prêt (mode ${MEDIA_CAPTURE_MODE:-device}, plafond $MAX, plan $PLAN)"
 while :; do
-  echo "[capture] publication ${PREFIX}/{video,audio,av} (mode ${MODE})" >&2
-  "run_${MODE}" &
-  child=$!
-  wait "$child"
-  echo "[capture] ffmpeg terminé (code $?), nouvelle tentative dans ${RETRY}s" >&2
-  sleep "$RETRY" &
-  child=$!
-  wait "$child"
+  want="$(desired)"
+  # 1. arrêter ce qui n'est plus voulu tel quel
+  for f in "$RUN"/*.line; do
+    [ -e "$f" ] || continue
+    id="${f##*/}"; id="${id%.line}"
+    printf '%s\n' "$want" | grep -q -x -F "$(cat "$f")" || stop_worker "$id"
+  done
+  # 2. lancer (ou relancer) ce qui est voulu
+  while IFS=' ' read -r id port audio base; do
+    [ -n "$id" ] || continue
+    pid="$(cat "$RUN/$id.pid" 2>/dev/null)"
+    if is_worker "$pid" "$id"; then continue; fi
+    if [ -n "$pid" ]; then wait "$pid" 2>/dev/null; log "$id : travailleur mort, relance"; fi
+    sh /opt/lab-media/capture-one.sh "$id" "$port" "$audio" "$base" &
+    echo $! > "$RUN/$id.pid"
+    echo "$id $port $audio $base" > "$RUN/$id.line"
+    log "$id : capture lancée (port $port, micro $audio)"
+  done <<PLAN_EOF
+$want
+PLAN_EOF
+  sleep 1 &
+  wait $!
 done

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_doc": "Registre de lab-media (contrat I1/I4). Aucun secret ici : ils sont dans .env sous des noms dérivés (voir README.md). Lu au démarrage de lab-media-auth.",
+  "_doc": "Registre de lab-media (contrat lab-media I1/I4, chantier webcams I0/I1). Aucun secret ici : ils sont dans .env sous des noms dérivés (voir README.md). Lu au démarrage de lab-media-auth. Les chemins des webcams découvertes (webcam/<id>/…) ne sont pas écrits ici : lab-media-auth les calcule (section devices). L'entrée « webcam-ancienne » est la caméra Jieli d'avant la découverte : dates reprises des enregistrements (plus ancien segment encore présent) et du journal de lab-media-capture (débranchée le 2026-10-14 vers 20 h 30 UTC).",
   "apps": {
     "peripheriques": {
       "prefixes": ["webcam"],
@@ -8,13 +8,25 @@
     }
   },
   "sources": {
-    "capture": {
-      "paths": ["webcam/av", "webcam/video", "webcam/audio"]
+    "capture": {"devices": true}
+  },
+  "devices": {
+    "prefix": "webcam",
+    "source": "capture",
+    "segment": "1h",
+    "delete_after": "7d",
+    "legacy": {
+      "id": "webcam-ancienne",
+      "model": "USB PHY 2.0",
+      "vendor_id": "1224",
+      "product_id": "2a25",
+      "serial": "",
+      "usb_port": "",
+      "has_audio": true,
+      "first_seen": "2026-10-10T17:57:12+00:00",
+      "last_seen": "2026-10-14T20:30:00+00:00",
+      "paths": {"av": "webcam/av", "video": "webcam/video", "audio": "webcam/audio"}
     }
   },
-  "paths": {
-    "webcam/av": {"record": true, "segment": "1h", "delete_after": "7d"},
-    "webcam/video": {},
-    "webcam/audio": {}
-  }
+  "paths": {}
 }

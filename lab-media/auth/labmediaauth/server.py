@@ -3,7 +3,10 @@
   * HOOK (réseau interne de lab-media, port 9000) : cible de `authHTTPAddress` de MediaMTX.
     Décide lui-même publish / api / playback / metrics / pprof ; relaie `read` au hook de
     l'app propriétaire du préfixe, corps transmis tel quel, en échec fermé.
-  * CONTRÔLE (dev-net, port 9100) : l'API I3 des apps — voir lab-media/API.md.
+  * CONTRÔLE (dev-net, port 9100) : l'API I3 des apps — voir lab-media/API.md — et les
+    routes /v1/devices (webcams, chantier webcams I1).
+  * DÉCOUVERTE des webcams (devices.py) : un fil qui lit sysfs, tient l'inventaire et le plan
+    de capture, et réécrit la configuration de MediaMTX quand les chemins changent.
 
 Les identifiants internes de MediaMTX (API, relecture) sont tirés au hasard à chaque
 démarrage et ne quittent jamais la mémoire de ce processus : ils ne sont dans aucun fichier
@@ -29,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
+from . import devices as dev_mod
 from . import registry as reg_mod
 
 MAX_BODY = 128 * 1024
@@ -77,9 +81,21 @@ class State:
     """Tout ce que les deux serveurs partagent."""
 
     def __init__(self, env: dict):
+        self.env = env
         self.hook_key = reg_mod._secret(env, 'LAB_MEDIA_HOOK_KEY')
         with open(env.get('LAB_MEDIA_AUTH_REGISTRY_FILE', '/etc/lab-media/registry.json'), encoding='utf-8') as fh:
-            self.registry = reg_mod.load(fh.read(), env)
+            self.base_registry = reg_mod.load(fh.read(), env)
+        # `registry` = registre du fichier + chemins des webcams. Remplacé d'un bloc (jamais
+        # modifié en place) : un lecteur garde une vue cohérente le temps de sa requête.
+        self.registry = self.base_registry
+        self.retained: dict = {}
+        self.config_lock = threading.Lock()
+        self.config_wanted = threading.Event()
+        self.last_write = 0.0
+        self.devices = None
+        if self.base_registry.devices is not None:
+            self.devices = dev_mod.Manager(self.base_registry, env, on_change=self.rebuild)
+            self.rebuild(write=False)
         self.api = urlsplit(env.get('LAB_MEDIA_AUTH_MTX_API', 'http://lab-media-ctl:9997'))
         self.playback = urlsplit(env.get('LAB_MEDIA_AUTH_MTX_PLAYBACK', 'http://lab-media-ctl:9996'))
         self.read_timeout = float(env.get('LAB_MEDIA_READ_HOOK_TIMEOUT_S', '3'))
@@ -95,6 +111,22 @@ class State:
         self.relay_slots = {name: threading.BoundedSemaphore(RELAY_PER_APP) for name in apps}
         self.pool = ThreadPoolExecutor(max_workers=max(1, len(apps)) * RELAY_PER_APP,
                                        thread_name_prefix='read-relay')
+
+    def rebuild(self, write: bool = True) -> None:
+        """Recalcule les chemins des webcams ; réécrit mediamtx.yml (MediaMTX le recharge à
+        chaud : un changement d'enregistrement ne coupe ni la publication ni la capture)."""
+        extra, publishable, retained = self.devices.path_confs()
+        self.registry = reg_mod.with_paths(self.base_registry, extra, publishable)
+        self.retained = retained
+        if write:
+            self.config_wanted.set()      # écrit par _config_writer, espacé (voir CONFIG_SPACING_S)
+
+    def ready_paths(self) -> set | None:
+        """Chemins prêts selon MediaMTX ; None s'il est injoignable."""
+        try:
+            return {i.get('name') for i in self.mtx_list('paths') if i.get('ready', i.get('online'))}
+        except (OSError, http.client.HTTPException, ValueError):
+            return None
 
     # ── appels à MediaMTX (identifiants internes) ────────────────────────────
     def _mtx(self, base, method: str, path: str, timeout: float = 5):
@@ -345,6 +377,19 @@ class ControlHandler(_Base):
             return self.send_empty(400)
         self.route('POST')
 
+    def do_PATCH(self):
+        self.body = self.read_body()
+        if self.body is None:
+            self.close_connection = True
+            return self.send_empty(400)
+        self.route('PATCH')
+
+    def do_DELETE(self):
+        if self.read_body() is None:
+            self.close_connection = True
+            return self.send_empty(400)
+        self.route('DELETE')
+
     def done(self, app, status: int, **fields) -> bool:
         log('control', app=app.name, method=self.command, status=status, **fields)
         return True
@@ -366,10 +411,51 @@ class ControlHandler(_Base):
             return self.recordings_list(app, query)
         if method == 'GET' and rest == ['recordings', 'get']:
             return self.recordings_get(app, query)
+        if rest == ['devices'] and method == 'GET':
+            return self.devices_list(app)
+        if len(rest) == 2 and rest[0] == 'devices' and method in ('GET', 'PATCH', 'DELETE'):
+            return self.device_one(app, method, rest[1])
         return None
 
-    def _path_item(self, name: str, live: dict | None) -> dict:
-        conf = self.state.registry.paths[name]
+    # ── webcams (chantier webcams, I1) ───────────────────────────────────────
+    def devices_list(self, app):
+        manager = self.state.devices
+        if manager is None or not manager.owns(app):
+            self.send_json(200, [])
+            return self.done(app, 200, route='devices', count=0)
+        items = manager.list(self.state.ready_paths())
+        self.send_json(200, items)
+        return self.done(app, 200, route='devices', count=len(items))
+
+    def device_one(self, app, method, ident):
+        manager = self.state.devices
+        shown = ident if re.match(r'^[a-z0-9-]{1,64}$', ident) else None   # jamais une chaîne arbitraire au journal
+        try:
+            if manager is None or not manager.owns(app):
+                # Même réponse qu'un identifiant inconnu : rien ne distingue « à une autre app ».
+                raise dev_mod.DeviceError(404, 'unknown_device', 'Périphérique inconnu pour cette app.')
+            if method == 'PATCH':
+                try:
+                    body = json.loads(self.body or b'')
+                except (ValueError, UnicodeDecodeError):
+                    body = None
+                if not isinstance(body, dict) or set(body) != {'record'} or not isinstance(body['record'], bool):
+                    manager.get(ident, set())       # 404 d'abord pour un inconnu
+                    raise dev_mod.DeviceError(400, 'bad_request', 'Corps attendu : {"record": true|false}.')
+                manager.set_record(ident, body['record'])
+            elif method == 'DELETE':
+                manager.forget(ident)
+                self.send_empty(204)
+                return self.done(app, 204, route='devices', id=shown)
+            item = manager.get(ident, self.state.ready_paths())
+        except dev_mod.DeviceError as exc:
+            self.error(exc.status, exc.code, exc.detail)
+            return self.done(app, exc.status, route='devices', id=shown, reason=exc.code)
+        self.send_json(200, item)
+        return self.done(app, 200, route='devices', id=shown)
+
+    def _path_item(self, name: str, live: dict | None, reg=None) -> dict:
+        conf = (reg or self.state.registry).paths[name]
         live = live or {}
         return {
             'path': name,
@@ -384,7 +470,8 @@ class ControlHandler(_Base):
 
     def paths_list(self, app):
         live = {item.get('name'): item for item in self.state.mtx_list('paths')}
-        items = [self._path_item(name, live.get(name)) for name in self.state.registry.app_paths(app)]
+        reg = self.state.registry
+        items = [self._path_item(name, live.get(name), reg) for name in reg.app_paths(app)]
         self.send_json(200, {'items': items})
         return self.done(app, 200, route='paths')
 
@@ -398,10 +485,11 @@ class ControlHandler(_Base):
         return self.state.registry.owns(app, path) and path in self.state.registry.paths
 
     def path_get(self, app, path):
-        if not self._own_path(app, path):
+        reg = self.state.registry
+        if not (reg.owns(app, path) and path in reg.paths):
             return self._not_yours(app, 'paths/get', path)
         code, data = self.state.mtx_json('GET', '/v3/paths/get/' + quote(path))
-        self.send_json(200, self._path_item(path, data if code == 200 and isinstance(data, dict) else None))
+        self.send_json(200, self._path_item(path, data if code == 200 and isinstance(data, dict) else None, reg))
         return self.done(app, 200, route='paths/get', path=path)
 
     def _sessions(self, app, protocol: str) -> list[dict]:
@@ -529,17 +617,72 @@ class ControlHandler(_Base):
 
 # ═════════════════════════════════════════════════════════════════════════════
 
-def write_config(state: State, env: dict) -> None:
+# MediaMTX 1.21.1 IGNORE une modification de son fichier survenue moins d'environ 1 s après la
+# précédente (mesuré : deux écritures à 0,5 s ou 1,0 s d'écart ⇒ un seul rechargement, la
+# seconde est perdue ; à 1,5 s, deux rechargements). Les écritures à l'exécution sont donc
+# regroupées et espacées d'au moins CONFIG_SPACING_S, puis CONTRÔLÉES par l'API de MediaMTX.
+CONFIG_SPACING_S = 2.0
+CONFIG_CHECK_S = 3.0
+
+
+def write_config(state: State, env: dict, force: bool = False) -> str:
     """Écrit le mediamtx.yml dérivé du registre dans le volume partagé avec MediaMTX, qui le
-    recharge à chaud. Écriture atomique, et seulement si le contenu change."""
-    target = env.get('LAB_MEDIA_AUTH_CONFIG_OUT', '/config/mediamtx.yml')
+    recharge à chaud. Écriture atomique, et seulement si le contenu change (sauf `force`).
+    Rend le contenu voulu."""
     with open(env.get('LAB_MEDIA_AUTH_BASE_FILE', '/opt/lab-media/mediamtx.base.yml'), encoding='utf-8') as fh:
-        content = reg_mod.render_mediamtx(fh.read(), state.registry)
+        base = fh.read()
+    with state.config_lock:
+        content = reg_mod.render_mediamtx(base, state.registry, state.retained)
+        if _write_config(state, env, content, force):
+            state.last_write = time.monotonic()
+    return content
+
+
+def _expected_paths(state: State) -> dict:
+    every = {**state.retained, **state.registry.paths}
+    return {name: bool(conf.record) for name, conf in every.items()}
+
+
+def _config_applied(state: State) -> bool | None:
+    """MediaMTX a-t-il les chemins et réglages d'enregistrement voulus ? None s'il est injoignable."""
+    try:
+        items = state.mtx_list('config/paths')
+    except (OSError, http.client.HTTPException, ValueError):
+        return None
+    return {i.get('name'): bool(i.get('record')) for i in items} == _expected_paths(state)
+
+
+def _config_writer(state: State) -> None:
+    """Écrit les changements de chemins (webcams) en les regroupant, puis vérifie que MediaMTX
+    les a pris ; sinon réécrit le fichier (nouvel inode ⇒ nouvel événement) jusqu'à ce qu'il le fasse."""
+    pending_check = False
+    while True:
+        wanted = state.config_wanted.wait(timeout=CONFIG_CHECK_S if pending_check else None)
+        if wanted:
+            time.sleep(max(0.0, state.last_write + CONFIG_SPACING_S - time.monotonic()))
+            state.config_wanted.clear()
+            try:
+                write_config(state, state.env)
+            except OSError as exc:
+                log('config', written=False, reason=f'écriture impossible ({type(exc).__name__})')
+            pending_check = True
+            continue
+        applied = _config_applied(state)
+        if applied is False:
+            log('config', written=False, reason='MediaMTX n\'a pas rechargé : réécriture')
+            time.sleep(max(0.0, state.last_write + CONFIG_SPACING_S - time.monotonic()))
+            write_config(state, state.env, force=True)
+            continue
+        pending_check = False
+
+
+def _write_config(state: State, env: dict, content: str, force: bool = False) -> bool:
+    target = env.get('LAB_MEDIA_AUTH_CONFIG_OUT', '/config/mediamtx.yml')
     try:
         with open(target, encoding='utf-8') as fh:
-            if fh.read() == content:
+            if fh.read() == content and not force:
                 log('config', written=False, paths=len(state.registry.paths))
-                return
+                return False
     except FileNotFoundError:
         pass
     tmp = f'{target}.tmp'
@@ -548,6 +691,17 @@ def write_config(state: State, env: dict) -> None:
     os.chmod(tmp, 0o640)   # il peut porter l'URL (avec identifiants) d'une source tirée
     os.replace(tmp, target)
     log('config', written=True, paths=len(state.registry.paths))
+    return True
+
+
+def _scanner(state: State) -> None:
+    """Découverte en continu. Une erreur d'un passage est journalisée, jamais fatale."""
+    while True:
+        time.sleep(state.devices.scan_s)
+        try:
+            state.devices.tick()
+        except Exception as exc:  # noqa: BLE001
+            log('device', change='scan-error', reason=type(exc).__name__)
 
 
 def _serve(handler_cls, host: str, port: int, state: State, name: str) -> ThreadingHTTPServer:
@@ -560,8 +714,11 @@ def _serve(handler_cls, host: str, port: int, state: State, name: str) -> Thread
 
 def main() -> int:
     env = dict(os.environ)
+    dev_mod.log = log
     try:
         state = State(env)
+        if state.devices is not None:
+            state.devices.tick()          # avant de servir : plan et chemins à jour
         write_config(state, env)
         # Le hook n'écoute QUE sur l'adresse du réseau interne de lab-media : l'alias
         # « lab-media-hook » n'existe que là. Les apps (dev-net) ne peuvent pas l'atteindre.
@@ -571,10 +728,16 @@ def main() -> int:
         return 1
     _serve(HookHandler, hook_host, 9000, state, 'hook')
     _serve(ControlHandler, env.get('LAB_MEDIA_AUTH_CONTROL_BIND', '0.0.0.0'), 9100, state, 'control')
+    if state.devices is not None:
+        threading.Thread(target=_config_writer, args=(state,), name='config', daemon=True).start()
+        threading.Thread(target=_scanner, args=(state,), name='devices', daemon=True).start()
     log('started', hook=f'{hook_host}:9000', control=':9100',
         apps={a.name: list(a.prefixes) for a in state.registry.apps.values()},
         sources=sorted(state.registry.sources), paths=sorted(state.registry.paths),
-        read_timeout_s=state.read_timeout)
+        read_timeout_s=state.read_timeout,
+        devices=None if state.devices is None else {'prefix': state.devices.conf.prefix,
+                                                     'capture_max': state.devices.max,
+                                                     'scan_s': state.devices.scan_s})
     stop = threading.Event()
     import signal
     signal.signal(signal.SIGTERM, lambda *_: stop.set())

@@ -14,7 +14,11 @@
 # (mire, 320x240) est le seul autre encodage et tourne seul.
 #
 # Deux apps fictives, appa et appb, aux préfixes distincts : voir verify/registry.test.json.
-# Durée : environ 4 minutes. Code de sortie : 0 si tout est PASS.
+# Webcams (chantier webcams) : faux matériel (verify/fakehw.py : faux sysfs, faux nœuds sur des
+# mineurs inexistants) branché et débranché à chaud ; la capture tourne par le compose de
+# production + verify/compose.test.yml, qui remplace /dev de l'hôte par ces faux nœuds et passe
+# en mode testsrc. La vraie caméra n'est ni montée ni ouverte.
+# Durée : environ 7 minutes. Code de sortie : 0 si tout est PASS.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
@@ -28,7 +32,7 @@ MTX_IMG="bluenviron/mediamtx:1.21.1-ffmpeg@sha256:00ef3d1a243f3769ca36769b47df24
 NAME_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.mp4$'
 KEEP=false; FAILS=0; TOTAL=0
 
-compose() { docker compose -p lmt --env-file "$RUN/test.env" -f "$HERE/docker-compose.yml" "$@"; }
+compose() { docker compose -p lmt --env-file "$RUN/test.env" -f "$HERE/docker-compose.yml" -f "$HERE/verify/compose.test.yml" "$@"; }
 
 cleanup() {
   local ids
@@ -36,8 +40,8 @@ cleanup() {
   [[ -n "$ids" ]] && docker rm -f $ids >/dev/null 2>&1
   [[ -f "$RUN/test.env" ]] && compose down --volumes --remove-orphans >/dev/null 2>&1
   for n in lmt-dev lmt-sso lmt_internal; do docker network rm "$n" >/dev/null 2>&1; done
-  for v in lmt-recordings lmt-fixture lmt_config; do docker volume rm "$v" >/dev/null 2>&1; done
-  docker image rm lmt-auth lmt-media >/dev/null 2>&1
+  for v in lmt-recordings lmt-fixture lmt_config lmt_state lmt-fakesys lmt-fakedev lmt-fakesnd; do docker volume rm "$v" >/dev/null 2>&1; done
+  docker image rm lmt-auth lmt-media lmt-capture >/dev/null 2>&1
   rm -rf "$RUN"
 }
 
@@ -122,6 +126,9 @@ LAB_MEDIA_APP_APPB_PUBLISH_PASSWORD=$B_PUB
 LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER=capture
 LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD=$CAP
 LAB_MEDIA_PULL_TEST=rtsp://lmt-src:8554/ext
+LAB_MEDIA_SYSFS=/fakesys
+LAB_MEDIA_SCAN_S=1
+MEDIA_CAPTURE_MAX=2
 ENV
 chmod 600 "$RUN/test.env"
 cat > "$RUN/src.yml" <<YML
@@ -144,7 +151,7 @@ YML
 
 # ── 1. Images (sous le verrou du lab) et tests sans réseau ───────────────────
 note "Construction des images (verrou du lab)"
-bash "$ROOT/scripts/lab-lock.sh" docker compose -p lmt --env-file "$RUN/test.env" -f "$HERE/docker-compose.yml" build -q auth media
+bash "$ROOT/scripts/lab-lock.sh" docker compose -p lmt --env-file "$RUN/test.env" -f "$HERE/docker-compose.yml" --profile capture build -q auth media capture
 rc=$?
 [[ $rc -eq 75 ]] && { echo "Verrou du lab occupé (75) : réessayer plus tard." >&2; exit 75; }
 [[ $rc -eq 0 ]] || { echo "Construction en échec ($rc)." >&2; exit 1; }
@@ -159,6 +166,10 @@ docker network create --internal lmt-dev >/dev/null
 docker network create lmt-sso >/dev/null
 docker volume create lmt-recordings >/dev/null
 docker volume create lmt-fixture >/dev/null
+for v in lmt-fakesys lmt-fakedev lmt-fakesnd; do docker volume create "$v" >/dev/null; done
+# Faux matériel : seul conteneur qui écrit le faux sysfs et crée les faux nœuds (mknod).
+docker run -d --name lmt-hw --network none -v "$HERE/verify:/v:ro" -v lmt-fakesys:/fakesys -v lmt-fakedev:/fakedev \
+  -v lmt-fakesnd:/fakesnd "$PY_IMG" sleep 3600 >/dev/null
 # Le SEUL encodage de la source : 20 s de mire + bip, relus ensuite en copie de flux.
 docker run --rm --name lmt-encode --network none --cpus 1 -v lmt-fixture:/fixture --entrypoint ffmpeg lmt-media \
   -hide_banner -nostdin -loglevel error -f lavfi -i "testsrc2=size=320x240:rate=10" \
@@ -264,20 +275,88 @@ print(get("http://lab-media-ctl:9997/v3/paths/list"), get("http://lab-media-ctl:
 ' 2>&1)"
 [[ "$r" == "401 401 401 401 401" ]]; expect N4 "depuis le réseau interne même : API et relecture de MediaMTX refusées sans les identifiants internes (anonyme, identifiants d'app), hook refusé (mauvaise clé ; bonne clé + identifiants d'app)" "$r"
 
-# ── 6. Capture (mire) — le seul autre encodage, lancé seul ──────────────────
-note "Source interne : capture.sh"
+# ── 6. Webcams : découverte, plafond, capture supervisée ─────────────────────
+note "Webcams (chantier webcams) : capture.sh seul"
 r="$(docker run --rm --name lmt-capture-nodev --network none -e LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER=capture -e LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD="$CAP" \
-      -e MEDIA_DEVICE_VIDEO=/dev/v4l/by-id/inexistant -e MEDIA_DEVICE_AUDIO=hw:CARD=AUCUNE,DEV=0 -e MEDIA_DEVICE_WAIT_MAX_S=2 \
-      --entrypoint timeout lmt-media 6 sh /opt/lab-media/capture.sh 2>&1 | head -4 | tr '\n' '|')"
-[[ "$r" == *"attente"* ]]; expect S0 "capture.sh, mode device sans périphérique : attend et le dit, n'ouvre rien" "${r:0:170}"
-docker run -d --name lmt-capture --network lmt_internal --cpus 1 -e MEDIA_CAPTURE_MODE=testsrc \
-  -e LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER=capture -e LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD="$CAP" \
-  --entrypoint sh lmt-media /opt/lab-media/capture.sh >/dev/null
-phase capture
+      -e MEDIA_CAPTURE_PLAN=/inexistant --entrypoint timeout lmt-capture 4 sh /opt/lab-media/capture.sh 2>&1 | tr '\n' '|')"
+[[ "$r" == *"superviseur prêt"* && "$r" != *ffmpeg* ]]; expect S0 "capture.sh sans plan (aucune webcam) : attend, ne lance aucun ffmpeg, n'ouvre rien" "${r:0:150}"
+r="$(docker run --rm --name lmt-capture-max --network none -e LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER=capture -e LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD="$CAP" \
+      -e MEDIA_CAPTURE_MAX=9 --entrypoint timeout lmt-capture 4 sh /opt/lab-media/capture.sh 2>&1 | tr '\n' '|')"
+[[ "$r" == *"MEDIA_CAPTURE_MAX"* ]]; expect S1 "MEDIA_CAPTURE_MAX hors de 0 à 8 : la capture refuse de démarrer" "${r:0:120}"
+cfg="$(compose --profile capture config --format json 2>/dev/null)"
+r="$(python3 -c '
+import json, sys
+c = json.load(sys.stdin)["services"]["capture"]
+print(json.dumps({"devices": c.get("devices"), "privileged": c.get("privileged", False),
+                  "cgroup": c.get("device_cgroup_rules"), "cap_add": c.get("cap_add"),
+                  "hostdev": [v["source"] for v in c["volumes"] if v["target"] in ("/hostdev", "/dev/snd")]}))' <<<"$cfg")"
+[[ "$r" == '{"devices": null, "privileged": false, "cgroup": ["c 81:* rmw", "c 116:* rmw"], "cap_add": null, "hostdev": ["fakedev", "fakesnd"]}' ]]
+expect Z1 "capture (compose de production) : aucun devices:, pas privileged, aucune capacité ajoutée, cgroup 81 et 116 seulement ; en test /dev de l'hôte n'est pas monté" "$r"
+
+hw() { docker exec lmt-hw python /v/fakehw.py "$@" >/dev/null; }
+ffpids() {  # ffpids [motif] : pid des ffmpeg de la capture (dont la ligne de commande contient le motif)
+  docker exec lmt-media-capture sh -c 'for p in /proc/[0-9]*; do c=$(tr "\0" " " < $p/cmdline 2>/dev/null); case "$c" in ffmpeg*) echo "${p#/proc/} $c";; esac; done' 2>/dev/null \
+    | grep -F -- "${1:-ffmpeg}" | cut -d' ' -f1 | sort | tr '\n' ' '
+}
+ffcount() { local p; p="$(ffpids "$@")"; wc -w <<<"$p" | tr -d ' '; }
+CAM1=usb-1b3f-0001-ssn01abtouchtmppwned; CAM2=usb-1b3f-0002-p9-2; CAM3=usb-1b3f-0003-p9-3
+HOSTILE_PRODUCT=$'Cam"; touch /tmp/pwned; $(touch /tmp/pwned2) `id` \x1b[31m‮RTL\n<script>alert(1)</script> '"$(printf 'x%.0s' {1..150})"
+
+note "Webcams : branchements à chaud (faux matériel), capture par le compose de production"
+phase m_start
+compose --profile capture up -d --no-build capture >/dev/null 2>&1
+hw plug 9-1 --pid 0001 --serial 'SN-01:ab;$(touch /tmp/pwned)' --product "$HOSTILE_PRODUCT" --mic
+hw plug 9-2 --pid 0002 --product "Cam B"
+phase m_two
+[[ "$(ffcount)" == 2 ]]; expect M31 "un ffmpeg par webcam capturée" "$(ffcount) ffmpeg"
+hw plug 9-3 --pid 0003 --product "Cam C"
+phase m_wait
+sleep 2; [[ "$(ffcount)" == 2 ]]; expect M32 "au-delà du plafond, aucun ffmpeg de plus" "$(ffcount) ffmpeg"
+pid2="$(ffpids "$CAM2")"; docker exec lmt-media-capture kill ${pid2} 2>/dev/null
+phase m_restart
+new2="$(ffpids "$CAM2")"; [[ -n "$new2" && "$new2" != "$pid2" && "$(ffcount)" == 2 ]]
+expect M33 "ffmpeg tué : relancé (nouveau pid), toujours un seul par webcam" "pid ${pid2}→ ${new2}"
+hw unplug 9-1
+phase m_unplug
+r="$(ffpids "$CAM1")"; [[ -z "$r" && "$(ffcount)" == 2 ]]
+expect M34 "débranchement : le ffmpeg de la webcam est arrêté (aucun orphelin), la place est reprise" "ffmpeg de CAM1 : '${r}', total $(ffcount)"
+pid2="$(ffpids "$CAM2")"
+phase m_record_on
+n=0; while [[ $n -lt 15 ]] && ! docker exec lmt-media sh -c "ls /recordings/webcam/$CAM2/av/*.mp4" >/dev/null 2>&1; do sleep 1; n=$((n + 1)); done
 sleep 3
-r="$(docker exec lmt-media sh -c 'ls /recordings/webcam/av' | head -3 | tr '\n' ' ')"
-grep -q -E "$NAME_RE" <<<"${r%% *}"; expect S2 "webcam/av enregistré sous /recordings/webcam/av/<date>.mp4, même forme de nom que l'existant" "$r"
-docker rm -f lmt-capture >/dev/null
+r="$(docker exec lmt-media sh -c "ls /recordings/webcam/$CAM2/av" 2>&1 | head -2 | tr '\n' ' ')"
+grep -q -E "$NAME_RE" <<<"${r%% *}" && [[ "$(ffpids "$CAM2")" == "$pid2" ]]
+expect M35 "enregistrement à chaud : segments sous /recordings/webcam/<id>/av, capture non relancée (même pid ffmpeg)" "$r · pid ${pid2}→ $(ffpids "$CAM2")"
+phase m_record_check
+phase m_record_off
+sleep 3; a="$(rec_size "webcam/$CAM2/av")"; sleep 4; b="$(rec_size "webcam/$CAM2/av")"
+[[ "$a" == "$b" && "$(ffpids "$CAM2")" == "$pid2" ]]
+expect M36 "enregistrement coupé à chaud : plus rien n'est écrit, capture toujours la même" "${a} ko → ${b} ko, pid $(ffpids "$CAM2")"
+phase m_errors
+for k in $(seq 4 13); do hw plug "9-$k" --pid "$(printf '01%02x' "$k")" --product "Rafale $k"; done
+phase m_burst
+[[ "$(ffcount)" == 2 ]]; expect M37 "dix webcams d'un coup : toujours 2 ffmpeg (plafond), aucune préemption" "$(ffcount) ffmpeg"
+hw unplug-all
+phase m_none
+sleep 2
+r="$(docker exec lmt-media-capture sh -c 'for p in /proc/[0-9]*; do tr "\0" " " < $p/cmdline 2>/dev/null; echo; done' | grep -c -E '^(ffmpeg|sh /opt/lab-media/capture-one.sh)' || true)"
+[[ "$r" == 0 ]]; expect M38 "tout débranché : aucun ffmpeg ni travailleur restant dans la capture" "$r processus"
+r="$(for c in lmt-media-capture lmt-media-auth lmt-hw; do docker exec "$c" sh -c 'ls /tmp/pwned /tmp/pwned2 2>/dev/null'; done | wc -l)"
+logs="$(docker logs lmt-media-capture 2>&1; docker logs lmt-media-auth 2>&1)"
+[[ "$r" == 0 ]] && ! grep -q -F -e '$(touch' -e 'touch /tmp' -e '<script>' -e 'Rafale' -e 'Cam B' <<<"$logs"
+expect M39 "nom de produit et numéro de série hostiles : rien exécuté, jamais au journal (capture, auth)" "$r fichier(s) témoin, journaux propres"
+r="$(docker exec lmt-media-auth cat /state/plan)"
+[[ -z "$r" ]]; expect M40 "tout débranché : plan de capture vide" "plan='${r}'"
+hw plug 9-2 --pid 0002 --product "Cam B"
+phase m_back
+pid2="$(ffpids "$CAM2")"
+r="$(try_publish "capture:$CAP" webcam/av)"; [[ "$r" != accepté ]]
+expect M41 "webcam-ancienne jamais capturée : la source capture ne peut pas publier sur webcam/av" "$r"
+r="$(try_publish "capture:$CAP" "webcam/$CAM1/av")"; [[ "$r" != accepté ]]
+expect M42 "webcam oubliée : plus aucune publication sur ses chemins" "$r"
+# Anciens enregistrements de webcam-ancienne : un segment d'appa/cam recopié sous webcam/av.
+docker exec lmt-media sh -c 'mkdir -p /recordings/webcam/av && cp "$(ls -d /recordings/appa/cam/*.mp4 | head -1)" /recordings/webcam/av/'
+phase m_legacy
 
 # ── 7. Arrêt de lab-media-auth ───────────────────────────────────────────────
 note "lab-media-auth ARRÊTÉ (cycle de vie)"
@@ -291,6 +370,8 @@ sleep 3
 s1="$(rec_size appa/cam)"; alive="$(docker inspect -f '{{.State.Running}}' lmt-pub-a lmt-pub-b | tr '\n' ' ')"
 [[ "$s1" -gt "$s0" && "$alive" == "true true " ]]
 expect X4 "lab-media-auth arrêté : publications en cours et enregistrement CONTINUENT" "appa/cam ${s0} ko → ${s1} ko, ffmpeg en vie : $alive"
+[[ -n "$pid2" && "$(ffpids "$CAM2")" == "$pid2" ]]
+expect X8 "lab-media-auth arrêté : la capture des webcams continue (plan sur disque, même ffmpeg)" "pid ${pid2}→ $(ffpids "$CAM2")"
 docker start lmt-media-auth >/dev/null
 phase auth_back
 [[ "$(docker inspect -f '{{.State.StartedAt}}' lmt-media)" == "$started0" ]]
@@ -306,6 +387,9 @@ PY
 # lab-media-auth est RECRÉÉ (nouvelle adresse sur le réseau interne), pas MediaMTX.
 compose up -d --no-build --force-recreate --no-deps auth >/dev/null 2>&1
 phase reload
+phase m_persist
+[[ -n "$pid2" && "$(ffpids "$CAM2")" == "$pid2" ]]
+expect G4 "lab-media-auth recréé : le plan relu ne relance pas la capture (même ffmpeg)" "pid ${pid2}→ $(ffpids "$CAM2")"
 r="$(docker logs lmt-media 2>&1 | grep -c -i 'reloading configuration')"
 [[ "$r" -ge 1 && "$(docker inspect -f '{{.State.StartedAt}}' lmt-media)" == "$started0" ]]
 expect G3 "lab-media-auth recréé par compose : MediaMTX a rechargé sa configuration sans redémarrer" "$r rechargement(s) dans son journal"
@@ -315,7 +399,7 @@ note "Enregistrements : arborescence, noms, rétention"
 tree="$(docker exec lmt-media sh -c 'cd /recordings && find . -type f | sort')"
 bad="$(sed 's#.*/##' <<<"$tree" | grep -v -c -E "$NAME_RE" || true)"
 dirs="$(sed 's#/[^/]*$##' <<<"$tree" | sort -u | tr '\n' ' ')"
-[[ "$bad" == 0 && "$dirs" == *"./appa/cam"* && "$dirs" == *"./webcam/av"* ]]
+[[ "$bad" == 0 && "$dirs" == *"./appa/cam"* && "$dirs" == *"./webcam/av"* && "$dirs" == *"./webcam/$CAM2/av"* ]]
 expect V1 "arborescence /recordings/<chemin>/AAAA-MM-JJ_HH-MM-SS-µµµµµµ.mp4" "dossiers : $dirs · noms hors forme : $bad"
 elapsed=$(( $(date +%s) - T_START )); while [[ $elapsed -lt 75 ]]; do sleep 5; elapsed=$(( $(date +%s) - T_START )); done
 n="$(docker exec lmt-media sh -c 'ls /recordings/appa/short | wc -l')"
@@ -341,6 +425,20 @@ for s in "$A_CTL" "$B_CTL" "$A_PUB" "$B_PUB" "$CAP" "$TOKEN_A" "$TOKEN_B" "$KEY_
   grep -q -F -- "$s" <<<"$mlogs" && mleak=$((mleak + 1))
 done
 hookleak="$(grep -c -F -- "$HOOK" <<<"$mlogs" || true)"
+# ffmpeg cite l'URL de publication (donc le mot de passe) dans ses erreurs : on en provoque une.
+hw plug 9-20 --pid 0020 --product "Erreur"
+r="$(docker run --rm --name lmt-capture-err --network none -v lmt-fakesys:/fakesys:ro -v lmt-fakedev:/hostdev:ro -e SYSFS_ROOT=/fakesys \
+      -e MEDIA_CAPTURE_MODE=testsrc -e MEDIA_CAPTURE_RTSP_HOST=nulle-part -e MEDIA_CAPTURE_RUN=/tmp \
+      -e LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER=capture -e LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD="$CAP" \
+      --entrypoint timeout lmt-capture 8 sh /opt/lab-media/capture-one.sh usb-1b3f-0020-p9-20 9-20 0 webcam/usb-1b3f-0020-p9-20 2>&1)"
+hw unplug 9-20
+! grep -q -F -- "$CAP" <<<"$r" && grep -q -F 'capture:***@nulle-part' <<<"$r"
+expect J4 "erreur de publication provoquée : ffmpeg cite l'URL, le mot de passe y est masqué" "$(grep -m1 -o "Slave '[^']*'" <<<"$r" | cut -c1-110)"
+clogs="$(docker logs lmt-media-capture 2>&1)"
+cleak=0
+for s in "$CAP" "$A_CTL" "$TOKEN_A" "$HOOK"; do grep -q -F -- "$s" <<<"$clogs" && cleak=$((cleak + 1)); done
+[[ "$cleak" == 0 && -n "$clogs" ]]
+expect J3 "journal de la capture : jamais le mot de passe de publication (masqué dans les messages de ffmpeg)" "$(wc -l <<<"$clogs") lignes, $cleak secret(s) trouvé(s)"
 [[ "$mleak" == 0 ]]
 expect J2 "journal de MediaMTX : aucun identifiant d'app ni jeton" "$mleak secret(s) d'app ; LAB_MEDIA_HOOK_KEY y apparaît $hookleak fois (limite connue, voir README)"
 

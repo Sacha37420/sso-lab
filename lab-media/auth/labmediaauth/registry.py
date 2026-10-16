@@ -9,6 +9,11 @@ l'environnement (lab-media/.env), sous des noms DÉRIVÉS du nom de l'entrée :
     source « capture »   LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER / _PUBLISH_PASSWORD
     chemin tiré          la clé nommée par "source_env" (URL rtsp://… complète)
 
+Section "devices" (chantier webcams) : les webcams USB découvertes par lab-media-auth
+(devices.py) reçoivent leurs chemins `<prefix>/<id>/{av,video[,audio]}` à l'exécution ; ils
+ne sont PAS écrits ici. Le registre ne déclare que le préfixe, la durée des segments et la
+rétention, et l'entrée héritée (« webcam-ancienne ») avec ses chemins.
+
 Toute incohérence arrête le service au démarrage : jamais de défaut silencieux
 sur un secret, jamais de chemin sans propriétaire.
 """
@@ -19,7 +24,7 @@ import re
 from dataclasses import dataclass, field
 
 NAME_RE = re.compile(r'^[a-z][a-z0-9-]{0,39}$')
-SEGMENT = r'[a-z0-9][a-z0-9_-]{0,39}'
+SEGMENT = r'[a-z0-9][a-z0-9_-]{0,63}'
 PATH_RE = re.compile(rf'^{SEGMENT}(/{SEGMENT}){{0,5}}$')
 SECRET_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 DURATION_RE = re.compile(r'^[1-9][0-9]{0,5}(s|m|h|d)$')
@@ -54,6 +59,31 @@ class Source:
     name: str
     paths: frozenset[str]
     publish: Creds
+    devices: bool = False         # publie aussi sur les chemins des webcams découvertes
+
+
+@dataclass(frozen=True)
+class Legacy:
+    """Entrée héritée (contrat webcams, I0) : jamais capturée, jamais enregistrée."""
+    id: str
+    model: str
+    vendor_id: str
+    product_id: str
+    serial: str
+    usb_port: str
+    has_audio: bool
+    first_seen: float             # secondes epoch
+    last_seen: float
+    paths: dict                   # {"av": …, "video": …, "audio": … | None}
+
+
+@dataclass(frozen=True)
+class DevicesConf:
+    prefix: str
+    source: str                   # nom de la source qui publie leurs flux
+    segment: str
+    delete_after: str
+    legacy: Legacy | None
 
 
 @dataclass(frozen=True)
@@ -64,6 +94,9 @@ class PathConf:
     delete_after: str = '7d'
     pull_url: str | None = None   # None = « publisher »
     on_demand: bool = False
+    # Écrire les réglages d'enregistrement même quand `record` est faux : MediaMTX purge alors
+    # quand même les anciens segments au bout de `delete_after` (essai réel sur 1.21.1).
+    retain: bool = False
 
 
 @dataclass
@@ -71,6 +104,7 @@ class Registry:
     apps: dict[str, App] = field(default_factory=dict)
     sources: dict[str, Source] = field(default_factory=dict)
     paths: dict[str, PathConf] = field(default_factory=dict)
+    devices: DevicesConf | None = None
 
     # ── propriété ────────────────────────────────────────────────────────────
     def owner(self, path) -> App | None:
@@ -129,7 +163,7 @@ def load(text: str, env: dict) -> Registry:
         raise RegistryError(f'registre illisible : {exc}') from exc
     if not isinstance(raw, dict) or raw.get('version') != 1:
         raise RegistryError('registre : objet attendu avec "version": 1')
-    unknown = set(raw) - {'version', 'apps', 'sources', 'paths', '_doc'}
+    unknown = set(raw) - {'version', 'apps', 'sources', 'paths', 'devices', '_doc'}
     if unknown:
         raise RegistryError(f'registre : clés inconnues {sorted(unknown)}')
 
@@ -211,16 +245,23 @@ def load(text: str, env: dict) -> Registry:
     for name, conf in (raw.get('sources') or {}).items():
         if not NAME_RE.match(name):
             raise RegistryError(f'source « {name} » : nom invalide')
-        paths = conf.get('paths') if isinstance(conf, dict) else None
-        if not isinstance(paths, list) or not paths or set(conf) - {'paths'}:
-            raise RegistryError(f'source « {name} » : seule clé attendue "paths" (liste non vide)')
+        if not isinstance(conf, dict) or set(conf) - {'paths', 'devices'}:
+            raise RegistryError(f'source « {name} » : clés attendues "paths" et/ou "devices"')
+        devices = conf.get('devices', False)
+        if not isinstance(devices, bool):
+            raise RegistryError(f'source « {name} » : "devices" booléen attendu')
+        paths = conf.get('paths', [])
+        if not isinstance(paths, list) or (not paths and not devices):
+            raise RegistryError(f'source « {name} » : "paths" (liste non vide) requis sans "devices": true')
         for path in paths:
             if path not in reg.paths:
                 raise RegistryError(f'source « {name} » : chemin « {path} » non déclaré dans "paths"')
             if reg.paths[path].pull_url:
                 raise RegistryError(f'source « {name} » : « {path} » est un chemin tiré, personne n\'y publie')
         reg.sources[name] = Source(name=name, paths=frozenset(paths),
-                                   publish=_creds(env, 'SOURCE', name, 'PUBLISH'))
+                                   publish=_creds(env, 'SOURCE', name, 'PUBLISH'), devices=devices)
+
+    reg.devices = _load_devices(raw.get('devices'), reg)
 
     # Un nom d'utilisateur désigne une seule entrée : c'est par lui qu'on la retrouve.
     users: dict[str, str] = {}
@@ -240,8 +281,94 @@ def load(text: str, env: dict) -> Registry:
     return reg
 
 
-def render_mediamtx(base_yml: str, reg: Registry) -> str:
+LEGACY_ID_RE = re.compile(r'^[a-z][a-z0-9-]{0,39}$')
+HEX4_RE = re.compile(r'^[0-9a-f]{4}$')
+
+
+def _when(value, what: str) -> float:
+    from datetime import datetime
+    try:
+        moment = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        moment = None
+    if moment is None or moment.tzinfo is None:
+        raise RegistryError(f'devices.legacy : "{what}" horodatage ISO 8601 avec fuseau attendu')
+    return moment.timestamp()
+
+
+def _load_devices(conf, reg: Registry) -> DevicesConf | None:
+    if conf is None:
+        return None
+    if not isinstance(conf, dict) or set(conf) - {'prefix', 'source', 'segment', 'delete_after', 'legacy'}:
+        raise RegistryError('devices : clés attendues prefix, source, segment, delete_after, legacy')
+    prefix = conf.get('prefix')
+    if not isinstance(prefix, str) or not PATH_RE.match(prefix) or reg.owner(prefix) is None:
+        raise RegistryError('devices : "prefix" doit être un chemin possédé par une app')
+    if any(p == prefix or p.startswith(prefix + '/') for p in reg.paths):
+        raise RegistryError(f'devices : aucun chemin statique ne doit être sous « {prefix} »')
+    source = conf.get('source')
+    if source not in reg.sources or not reg.sources[source].devices:
+        raise RegistryError('devices : "source" doit nommer une source déclarée avec "devices": true')
+    for key in ('segment', 'delete_after'):
+        if not (isinstance(conf.get(key), str) and DURATION_RE.match(conf[key])):
+            raise RegistryError(f'devices : "{key}" de la forme 30s, 10m, 1h, 7d')
+    legacy = None
+    raw = conf.get('legacy')
+    if raw is not None:
+        fields = {'id', 'model', 'vendor_id', 'product_id', 'serial', 'usb_port', 'has_audio',
+                  'first_seen', 'last_seen', 'paths'}
+        if not isinstance(raw, dict) or set(raw) != fields:
+            raise RegistryError(f'devices.legacy : clés attendues {sorted(fields)}')
+        if not isinstance(raw['id'], str) or not LEGACY_ID_RE.match(raw['id']) or raw['id'].startswith('usb-'):
+            raise RegistryError('devices.legacy : "id" invalide (et jamais de la forme usb-…)')
+        for key in ('vendor_id', 'product_id'):
+            if not (isinstance(raw[key], str) and (HEX4_RE.match(raw[key]) or raw[key] == '')):
+                raise RegistryError(f'devices.legacy : "{key}" 4 hexadécimaux minuscules')
+        for key in ('model', 'serial', 'usb_port'):
+            if not isinstance(raw[key], str) or len(raw[key]) > 100:
+                raise RegistryError(f'devices.legacy : "{key}" texte attendu')
+        if not isinstance(raw['has_audio'], bool):
+            raise RegistryError('devices.legacy : "has_audio" booléen attendu')
+        paths = raw['paths']
+        if not isinstance(paths, dict) or set(paths) != {'av', 'video', 'audio'}:
+            raise RegistryError('devices.legacy : "paths" = {av, video, audio}')
+        for kind, path in paths.items():
+            if path is None and kind == 'audio' and not raw['has_audio']:
+                continue
+            if not isinstance(path, str) or not PATH_RE.match(path) or reg.owner(path) is not reg.owner(prefix):
+                raise RegistryError(f'devices.legacy : chemin {kind} invalide ou hors du préfixe des webcams')
+            if path in reg.paths:
+                raise RegistryError(f'devices.legacy : « {path} » est aussi déclaré dans "paths"')
+        legacy = Legacy(id=raw['id'], model=raw['model'], vendor_id=raw['vendor_id'],
+                        product_id=raw['product_id'], serial=raw['serial'], usb_port=raw['usb_port'],
+                        has_audio=raw['has_audio'], first_seen=_when(raw['first_seen'], 'first_seen'),
+                        last_seen=_when(raw['last_seen'], 'last_seen'), paths=dict(paths))
+    return DevicesConf(prefix=prefix, source=source, segment=conf['segment'],
+                       delete_after=conf['delete_after'], legacy=legacy)
+
+
+def with_paths(base: Registry, extra: dict[str, PathConf], source_paths: frozenset[str]) -> Registry:
+    """Nouveau registre = registre du fichier + chemins des webcams (calculés à l'exécution).
+    La source des webcams peut publier sur `source_paths` en plus de ses chemins statiques.
+    Le registre du fichier n'est jamais modifié : on remplace la référence entière."""
+    paths = dict(base.paths)
+    for name, conf in extra.items():
+        if not PATH_RE.match(name) or base.owner(name) is None or name in base.paths:
+            raise RegistryError(f'chemin de périphérique « {name} » refusé')
+        paths[name] = conf
+    sources = dict(base.sources)
+    if base.devices is not None:
+        src = sources[base.devices.source]
+        sources[src.name] = Source(name=src.name, paths=src.paths | source_paths,
+                                   publish=src.publish, devices=src.devices)
+    return Registry(apps=base.apps, sources=sources, paths=paths, devices=base.devices)
+
+
+def render_mediamtx(base_yml: str, reg: Registry, retained: dict[str, PathConf] | None = None) -> str:
     """mediamtx.yml complet : la base fixe + la section `paths:` dérivée du registre.
+
+    `retained` : chemins que plus personne ne peut ni publier ni lire (périphérique oublié),
+    gardés dans MediaMTX le seul temps que sa purge efface leurs enregistrements.
 
     Aucun chemin générique : tout chemin absent du registre est refusé par MediaMTX."""
     if re.search(r'^(paths|authHTTPExclude|authMethod|authInternalUsers)\s*:', base_yml, re.M):
@@ -251,10 +378,11 @@ def render_mediamtx(base_yml: str, reg: Registry) -> str:
            'authMethod: http',
            'authHTTPExclude: []',
            'paths:']
-    if not reg.paths:
+    every = {**(retained or {}), **reg.paths}
+    if not every:
         out[-1] = 'paths: {}'
-    for name in sorted(reg.paths):
-        conf = reg.paths[name]
+    for name in sorted(every):
+        conf = every[name]
         out.append(f'  {json.dumps(name)}:')
         if conf.pull_url:
             out.append(f'    source: {json.dumps(conf.pull_url)}')
@@ -262,8 +390,8 @@ def render_mediamtx(base_yml: str, reg: Registry) -> str:
             out.append(f'    sourceOnDemand: {"yes" if conf.on_demand else "no"}')
         else:
             out.append('    source: publisher')
-        if conf.record:
-            out += ['    record: yes',
+        if conf.record or conf.retain:
+            out += [f'    record: {"yes" if conf.record else "no"}',
                     '    recordFormat: fmp4',
                     f'    recordPath: {RECORD_PATH}',
                     f'    recordSegmentDuration: {conf.segment}',
