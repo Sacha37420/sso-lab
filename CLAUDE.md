@@ -1167,8 +1167,31 @@ conteneurs `lab-media` (MediaMTX), `lab-media-auth` (mini-service d'authentifica
 - Arrêter `lab-media-auth` ne coupe ni publication ni enregistrement, mais plus rien ne
   s'authentifie et les expulsions sont impossibles ; redémarrer `lab-media` coupe tout.
 - Port ICE **8189 udp/tcp** publié par `lab-media`, redirigé à la main sur la Bbox.
+- **Toutes les webcams USB sont découvertes** (chantier `chantiers/webcams/`, 2026-10-17) :
+  `lab-media-auth` lit `/sys` toutes les 2 s (sans ouvrir de nœud) et tient un inventaire
+  persistant (`lab-media_state`, `/state/inventory.json` — **dans la sauvegarde nocturne** : le
+  perdre oublie les webcams et coupe tous les enregistrements). Identifiant stable
+  `usb-<vid>-<pid>-s<série>`, ou `usb-<vid>-<pid>-p<port>` **sans numéro de série** : une telle
+  caméra rebranchée sur un autre port devient un nouveau périphérique (les HD USB Camera du lab
+  n'ont pas de série et partagent un seul lien `/dev/v4l/by-id`). Chemins `webcam/<id>/{av,video}`
+  (+ `audio` si le **même appareil USB** a un micro) — les consommateurs les prennent dans
+  `GET /v1/devices`, **jamais recomposés** ; l'ancienne Jieli est `webcam-ancienne` sur
+  `webcam/{av,video,audio}`. Un ffmpeg par webcam, au plus `MEDIA_CAPTURE_MAX` (2, `lab-media/.env`,
+  ≈ 0,45 cœur chacune) ; au-delà, « en attente ». Enregistrement **coupé par défaut**, réglé par
+  webcam (`PATCH /v1/devices/<id>`), à chaud, persistant. Description : `lab-media/API.md` §1.4.
+- **MediaMTX 1.21.1 ignore une modification de `mediamtx.yml` arrivant moins d'environ 1 s après la
+  précédente**, sans message : `lab-media-auth` espace ses écritures de 2 s et vérifie par l'API
+  qu'elles sont prises. **ffmpeg écrit l'URL de publication, mot de passe compris, dans ses
+  erreurs** : la capture les filtre.
+- **peripheriques** suit l'inventaire (`api/inventory.py`, cache 10 s) : tout périphérique déjà vu
+  apparaît dans les droits sans action ; page « Périphériques » (admins des droits) pour renommer,
+  enregistrer, oublier une webcam débranchée. **Noms d'affichage uniques** (casse et espaces de bord
+  ignorés, index `device_label_unique_ci`) : un même modèle arrive en « Modèle », « Modèle 2 »… Le
+  droit Micro est refusé (400) sur une webcam sans micro. Le hook retrouve le périphérique par ses
+  chemins exacts ; l'expulsion à la révocation compare des chemins exacts (un préfixe `webcam/`
+  aurait expulsé les lecteurs de toutes les webcams).
 - Vérification rejouable sans matériel : `bash lab-media/verify.sh` (sources synthétiques, deux
-  apps fictives, 99 contrôles). MediaMTX écrit l'URL du hook, donc sa clé, dans son journal quand
+  apps fictives, 149 contrôles dont multi-caméras sur faux matériel). MediaMTX écrit l'URL du hook, donc sa clé, dans son journal quand
   le hook est injoignable : limite connue.
 
 ---

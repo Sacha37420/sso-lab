@@ -55,7 +55,7 @@ PWFILE="$HOME/.lab-backup-nas"
 NAS_SUBDIR="lab"
 KEEP_DAYS=14; KEEP_MONTHS=6
 IMAGE="lab-backup:latest"
-VOLUMES=(infra_storage-media sso-lab_keycloak-data sso-lab_caddy-data lab-media_config)
+VOLUMES=(infra_storage-media sso-lab_keycloak-data sso-lab_caddy-data lab-media_config lab-media_state)
 
 MODE="full"
 case "${1:-}" in
