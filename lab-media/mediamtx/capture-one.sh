@@ -82,7 +82,14 @@ resolve() {
   return 0
 }
 
-ENC_V="-c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level:v 3.1 -g 30 -keyint_min 30 -sc_threshold 0 -bf 0"
+# Cadence publiée (MEDIA_CAPTURE_FPS, 1 à 30, défaut 15) : premier levier du coût d'encodage
+# (2 vCPU pour tout le lab). Une image clé toutes les 2 s quelle que soit la cadence : c'est
+# elle qu'un nouveau lecteur attend pour afficher la première image.
+FPS="${MEDIA_CAPTURE_FPS:-15}"
+case "$FPS" in ''|*[!0-9]*) echo "[capture] MEDIA_CAPTURE_FPS invalide (1 à 30) : 15 retenu" >&2; FPS=15;; esac
+if [ "$FPS" -lt 1 ] || [ "$FPS" -gt 30 ]; then echo "[capture] MEDIA_CAPTURE_FPS hors de 1 à 30 : 15 retenu" >&2; FPS=15; fi
+GOP=$((FPS * 2))
+ENC_V="-c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -level:v 3.1 -g $GOP -keyint_min $GOP -sc_threshold 0 -bf 0"
 ENC_A="-c:a libopus -b:a 32k -ar 48000 -ac 1 -application lowdelay"
 OUT_V="[f=rtsp:rtsp_transport=tcp:select=v]${URL}/video"
 OUT_A="[f=rtsp:rtsp_transport=tcp:select=a]${URL}/audio"
@@ -127,13 +134,13 @@ run_ffmpeg() {   # run_ffmpeg <essai> : en arrière-plan, pid dans $ff
       ffmpeg -hide_banner -nostdin -loglevel warning \
         -thread_queue_size 64 -f v4l2 $FMT -timestamps mono2abs -i "$VIDEO_IN" \
         -thread_queue_size 1024 -f alsa -channels 1 -sample_rate 48000 -i "$AUDIO_IN" \
-        -map 0:v:0 -map 1:a:0 -vf "fps=15,format=yuv420p" \
+        -map 0:v:0 -map 1:a:0 -vf "fps=${FPS},format=yuv420p" \
         $ENC_V -b:v 1000k -maxrate 1000k -bufsize 2000k $ENC_A \
         -f tee "${OUT_V}|${OUT_A}|${OUT_AV}" 2>"$FIFO" &
     else
       ffmpeg -hide_banner -nostdin -loglevel warning \
         -thread_queue_size 64 -f v4l2 $FMT -timestamps mono2abs -i "$VIDEO_IN" \
-        -map 0:v:0 -vf "fps=15,format=yuv420p" \
+        -map 0:v:0 -vf "fps=${FPS},format=yuv420p" \
         $ENC_V -b:v 1000k -maxrate 1000k -bufsize 2000k \
         -f tee "${OUT_V}|${OUT_AV}" 2>"$FIFO" &
     fi
