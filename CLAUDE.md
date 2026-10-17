@@ -1176,8 +1176,8 @@ conteneurs `lab-media` (MediaMTX), `lab-media-auth` (mini-service d'authentifica
   n'ont pas de série et partagent un seul lien `/dev/v4l/by-id`). Chemins `webcam/<id>/{av,video}`
   (+ `audio` si le **même appareil USB** a un micro) — les consommateurs les prennent dans
   `GET /v1/devices`, **jamais recomposés** ; l'ancienne Jieli est `webcam-ancienne` sur
-  `webcam/{av,video,audio}`. Un ffmpeg par webcam, au plus `MEDIA_CAPTURE_MAX` (2, `lab-media/.env`,
-  ≈ 0,45 cœur chacune) ; au-delà, « en attente ». Enregistrement **coupé par défaut**, réglé par
+  `webcam/{av,video,audio}`. Un ffmpeg par webcam, au plus `MEDIA_CAPTURE_MAX` (3 depuis le 2026-10-17, `lab-media/.env`,
+  ≈ 0,5 cœur chacune : 1,5 cœur sur 2 à trois webcams) ; au-delà, « en attente ». Enregistrement **coupé par défaut**, réglé par
   webcam (`PATCH /v1/devices/<id>`), à chaud, persistant. Description : `lab-media/API.md` §1.4.
 - **MediaMTX 1.21.1 ignore une modification de `mediamtx.yml` arrivant moins d'environ 1 s après la
   précédente**, sans message : `lab-media-auth` espace ses écritures de 2 s et vérifie par l'API
