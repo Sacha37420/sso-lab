@@ -542,22 +542,63 @@ echo -e "\033[0;36m══ Génération de ports.env (get-ports-list.sh)\033[0m"
 run_shared "get-ports-list.sh" bash "$SCRIPT_DIR/get-ports-list.sh"
 echo -e "\033[0;32m✓ ports.env généré.\033[0m"
 
-# ── 9. Ouverture des ports Bbox ──────────────────────────────────────
-# HTTPS (DOMAIN configuré) → seulement 80+443 ; HTTP → tous les PORT_*
-echo -e "\033[0;36m══ Ouverture des ports sur la Bbox (open-bbox-ports2.sh)\033[0m"
-BBOX_IP=$(grep -E '^BBOX_IP=' "$ROOT_DIR/bbox.env" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)
-BBOX_IP="${BBOX_IP:-192.168.1.254}"
-if curl -sk --max-time 3 "https://${BBOX_IP}/api/v1/device" > /dev/null 2>&1; then
-  if run_shared "open-bbox-ports2.sh" bash "$SCRIPT_DIR/open-bbox-ports2.sh"; then
-    echo -e "\033[0;32m✓ Ports ouverts sur la Bbox.\033[0m"
+# ── 9. Redirections de ports sur la box (Freebox ou Bbox) ───────────
+# HTTPS (DOMAIN configuré) → seulement 80+443 (+ 8189 pour lab-media sur
+# Freebox) ; HTTP → tous les PORT_*. La box est choisie d'après bbox.env :
+# FREEBOX_IP → open-freebox-ports.sh, BBOX_IP → open-bbox-ports2.sh. Si les
+# deux sont renseignées, la question n'est posée qu'à un terminal : lancé sans
+# (moteur lab-mcp, cron), setup2.sh ne touche à aucune box plutôt que d'attendre
+# une réponse que personne ne donnera. Les redirections survivent d'un
+# déploiement à l'autre : sauter l'étape ne ferme rien.
+_box_val() { grep -E "^$1=" "$ROOT_DIR/bbox.env" 2>/dev/null | tail -1 | cut -d= -f2 | sed 's/[[:space:]]*#.*//' | tr -d '[:space:]' || true; }
+FREEBOX_IP="$(_box_val FREEBOX_IP)"
+BBOX_IP="$(_box_val BBOX_IP)"
+BOX=""
+if [[ -n "$FREEBOX_IP" && -n "$BBOX_IP" ]]; then
+  if [[ -t 0 ]]; then
+    echo -e "\033[0;36m══ bbox.env décrit une Freebox ($FREEBOX_IP) et une Bbox ($BBOX_IP).\033[0m"
+    while [[ -z "$BOX" ]]; do
+      read -r -p "   Ouvrir les ports sur quelle box ? [f]reebox / [b]box / [n]i l'une ni l'autre : " _rep || _rep=n
+      case "${_rep,,}" in
+        f|freebox) BOX=freebox ;;
+        b|bbox)    BOX=bbox ;;
+        n|non|"")  BOX=none ;;
+      esac
+    done
   else
-    echo -e "\033[1;33m⚠ Ouverture des ports sur la Bbox en échec — le déploiement n'en dépend pas.\033[0m"
+    echo -e "\033[1;33m⚠ bbox.env décrit une Freebox et une Bbox, et aucun terminal ne peut trancher :\033[0m"
+    echo -e "\033[1;33m⚠ redirections de ports non touchées. Retirer les lignes de la box inutilisée.\033[0m"
+    BOX=none
   fi
+elif [[ -n "$FREEBOX_IP" ]]; then BOX=freebox
+elif [[ -n "$BBOX_IP" ]];    then BOX=bbox
 else
-  echo -e "\033[1;33m⚠ Bbox non détectée sur ${BBOX_IP} — ouvrez les ports manuellement.\033[0m"
-  echo -e "\033[1;33m⚠ Relancez manuellement : bash open-bbox-ports2.sh\033[0m"
-  echo -e "\033[1;33m⚠ Ou configurez la redirection de port dans l'interface de votre routeur.\033[0m"
+  echo -e "\033[1;33m⚠ Ni FREEBOX_IP ni BBOX_IP dans bbox.env — redirections de ports à faire dans l'interface du routeur.\033[0m"
+  BOX=none
 fi
+
+case "$BOX" in
+  freebox)
+    echo -e "\033[0;36m══ Ouverture des ports sur la Freebox (open-freebox-ports.sh)\033[0m"
+    if run_shared "open-freebox-ports.sh" bash "$SCRIPT_DIR/open-freebox-ports.sh" apply; then
+      echo -e "\033[0;32m✓ Ports ouverts sur la Freebox.\033[0m"
+    else
+      echo -e "\033[1;33m⚠ Ouverture des ports sur la Freebox en échec — le déploiement n'en dépend pas.\033[0m"
+      echo -e "\033[1;33m⚠ Diagnostic : bash scripts/open-freebox-ports.sh status\033[0m"
+    fi ;;
+  bbox)
+    echo -e "\033[0;36m══ Ouverture des ports sur la Bbox (open-bbox-ports2.sh)\033[0m"
+    if curl -sk --max-time 3 "https://${BBOX_IP}/api/v1/device" > /dev/null 2>&1; then
+      if run_shared "open-bbox-ports2.sh" bash "$SCRIPT_DIR/open-bbox-ports2.sh"; then
+        echo -e "\033[0;32m✓ Ports ouverts sur la Bbox.\033[0m"
+      else
+        echo -e "\033[1;33m⚠ Ouverture des ports sur la Bbox en échec — le déploiement n'en dépend pas.\033[0m"
+      fi
+    else
+      echo -e "\033[1;33m⚠ Bbox non détectée sur ${BBOX_IP} — ouvrez les ports manuellement.\033[0m"
+      echo -e "\033[1;33m⚠ Relancez manuellement : bash scripts/open-bbox-ports2.sh\033[0m"
+    fi ;;
+esac
 
 echo ""
 echo "════════════════════════════════════════════════════════════════════"

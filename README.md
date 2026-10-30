@@ -93,8 +93,8 @@ pour le détail) :
 **Explicitement hors de ce dépôt, non versionné, à la charge de l'opérateur** :
 - **Le nom de domaine et le DDNS** (No-IP, DuckDNS, client du routeur…) — voir
   [1.4](#14-https-via-caddy--nom-de-domaine-ddns).
-- **Le routeur physique** (Bbox Bouygues) et son interface d'administration — les scripts ne
-  font qu'appeler son API REST pour ouvrir des ports, jamais configurer le WAN/DDNS lui-même.
+- **Le routeur physique** (Freebox ou Bbox) et son interface d'administration — les scripts ne
+  font qu'appeler son API pour ouvrir des ports, jamais configurer le WAN/DDNS lui-même.
 - **`~/edge-router/`** — le répartiteur partagé entre plusieurs cadriciels (`dev/`, `dev2/`).
   Il vit en dehors de tout dépôt git, sur l'hôte. Voir [1.5](#15-plusieurs-cadriciels-sur-une-même-ip-wan--le-répartiteur).
   ⚠️ Il n'est donc reconstructible depuis aucun `git clone` — sa config (`docker-compose.yml`
@@ -221,8 +221,8 @@ correspondent à la réalité.
 # 1. Renseigner l'IP WAN publique dans bbox.env
 nano bbox.env    # SERVER_URL_WAN=http://<IP_WAN>
 
-# 2. Renseigner les identifiants d'administration du routeur (Bbox Bouygues)
-nano bbox.env    # BBOX_ADMIN_PASSWORD, BBOX_URL, BBOX_IP
+# 2. Décrire le routeur : Freebox (FREEBOX_IP) ou Bbox (BBOX_ADMIN_PASSWORD, BBOX_URL, BBOX_IP)
+nano bbox.env
 
 # 3. Propager + valider
 bash scripts/reset_url.sh
@@ -240,17 +240,35 @@ manquant/mal ciblé — `reset_url.sh` explique la piste la plus probable dans s
 
 ```bash
 # 4. Ouvrir les ports sur le routeur
-bash scripts/open-bbox-ports2.sh
+bash scripts/open-freebox-ports.sh authorize   # Freebox, une seule fois (voir plus bas)
+bash scripts/open-freebox-ports.sh apply       # Freebox
+bash scripts/open-bbox-ports2.sh               # Bbox
 ```
 
-Ce script parle directement l'API REST de la Bbox Bouygues (`mabbox.bytel.fr`) : authentification
+`setup2.sh` fait cette étape lui-même d'après `bbox.env` : `FREEBOX_IP` → Freebox, `BBOX_IP` →
+Bbox. Si les deux sont renseignées, il demande laquelle au terminal ; lancé sans terminal (par
+le moteur `lab-mcp`), il ne touche à aucune box. Retirer les lignes de la box qu'on n'a plus
+évite la question.
+
+**Freebox** — l'API Freebox OS n'accepte pas le mot de passe administrateur. `authorize` demande
+un jeton d'application : la demande s'affiche sur l'écran du Freebox Server et se valide avec ses
+boutons. Il faut ensuite cocher, dans Freebox OS → Paramètres → Gestion des accès → Applications
+→ « Lab dev », le droit **« Modification des réglages de la Freebox »**. Le jeton est gardé dans
+`.lab-state/freebox-app-token`. `status` affiche l'IP publique, la plage de ports et les
+redirections : une plage autre que `0-65535` signifie une **IPv4 partagée**, où 80 et 443 sont
+impossibles — demander l'« adresse IP fixe V4 full-stack » dans l'espace abonné Free (onglet
+« Ma Freebox »), puis redémarrer la box. En HTTPS le script ouvre 80 et 443 en TCP et 8189 en
+TCP+UDP (ICE de `lab-media`) ; une redirection existante vers une autre machine n'est jamais
+modifiée.
+
+**Bbox** — `open-bbox-ports2.sh` parle directement l'API REST de la Bbox Bouygues (`mabbox.bytel.fr`) : authentification
 par mot de passe admin, obtention d'un `device token`, puis création d'une règle NAT par port —
 idempotent (une règle déjà existante n'est pas recréée). **Tant que `DOMAIN=CHANGE_ME`**, il ouvre
 un port par service/app (`ports.env`) : chaque app reste joignable directement par son port, en
 HTTP, sur Internet. Voir 1.4 pour le comportement une fois HTTPS activé (surface radicalement
 réduite).
 
-> Ce script est spécifique à l'API Bbox Bouygues. Avec un autre routeur, ouvrir les mêmes ports
+> Ces deux scripts sont propres à leur box. Avec un autre routeur, ouvrir les mêmes ports
 > manuellement dans son interface d'administration (ou son propre outil d'automatisation) — rien
 > d'autre dans le lab ne dépend de la marque du routeur.
 
@@ -308,12 +326,12 @@ spécifique) capte tout ce qu'aucun préfixe n'a matché.
 Les certificats Let's Encrypt sont obtenus automatiquement par Caddy via challenge HTTP-01 : le
 port 80 doit être joignable depuis Internet.
 
-**Effet sur l'ouverture des ports** — `open-bbox-ports2.sh` regarde `DOMAIN` :
+**Effet sur l'ouverture des ports** — `open-freebox-ports.sh` et `open-bbox-ports2.sh` regardent `DOMAIN` :
 
 | Mode | Ports ouverts sur le routeur |
 |---|---|
 | HTTP (`DOMAIN=CHANGE_ME`) | Tous les `PORT_*` de `ports.env` — un par service/app, accès direct |
-| HTTPS (`DOMAIN` configuré) | Seulement **80** (ACME + redirect) et **443** — Caddy route en interne par chemin, les ports individuels ne sont plus exposés sur Internet |
+| HTTPS (`DOMAIN` configuré) | Seulement **80** (ACME + redirect) et **443** (plus 8189 pour `lab-media` sur Freebox) — Caddy route en interne par chemin, les ports individuels ne sont plus exposés sur Internet |
 
 C'est une réduction volontaire de la surface exposée : en HTTPS, `https://DOMAIN/lab-admin/`
 passe entièrement par Caddy sur le port 443 ; le port du container reste interne au réseau
@@ -445,7 +463,7 @@ services:
    chaque Caddy ; chaque domaine doit rester joignable en 80/443 exactement comme avant.
 
 **Côté routeur** : un seul jeu de règles NAT, 80→80 et 443→443, vers l'hôte qui fait tourner
-`edge-router` — plus besoin de forwarder un port par cadriciel. `open-bbox-ports2.sh` de chaque
+`edge-router` — plus besoin de forwarder un port par cadriciel. Le script de box de chaque
 cadriciel continue d'ouvrir `PORT_HTTP`/`PORT_HTTPS` sans effet sur le routage applicatif
 (`edge-router` écoute déjà ces ports) — inoffensif à relancer.
 
@@ -1017,7 +1035,8 @@ Tous lancés avec `bash scripts/<nom>` depuis la racine `dev/` (résolvent eux-m
 | `recompose_docker.sh --app <app>` | Rebuilder et redémarrer les containers |
 | `clean2.sh <app>` | Arrêter et supprimer les containers d'une app |
 | `reset_url.sh` | Propager LAN/WAN/Keycloak dans tous les `.env`, valider la config réseau |
-| `open-bbox-ports2.sh` | Ouvrir les ports adaptés (HTTP/HTTPS) sur le routeur Bbox |
+| `open-freebox-ports.sh` | Redirections de ports (HTTP/HTTPS) sur une Freebox : `authorize`, `status`, `apply` |
+| `open-bbox-ports2.sh` | Ouvrir les ports adaptés (HTTP/HTTPS) sur une Bbox |
 | `get-ports-list.sh` | Régénérer `ports.env` depuis `.ports` |
 | `complete_404.sh` | Régénérer `sso-lab/fallback/html/404.html` depuis `.app-descriptions` |
 | `init-secrets.sh` | Générer des mots de passe forts |

@@ -447,10 +447,29 @@ complète, schéma et fichiers de config : `README.md` section 1.5.
   doit redevenir directement joignable en 80/443 (rollback), réajouter le bloc `ports:` et
   relancer `docker compose up -d` — ne pas toucher à `~/edge-router/` pour ça.
 - `PORT_HTTP`/`PORT_HTTPS` subsistent dans `sso-lab/.env.example` et sont toujours utilisés par
-  `open-bbox-ports2.sh` (ouverture NAT côté routeur) — sans effet sur le routage applicatif de
+  `open-bbox-ports2.sh` / `open-freebox-ports.sh` (ouverture NAT côté routeur) — sans effet sur le routage applicatif de
   Caddy désormais, mais toujours corrects pour cet usage-là, ne pas les supprimer.
 - Toute modification de `edge-net` ou des `ports:` de `caddy`/`caddy2` affecte **les deux**
   cadriciels à la fois : à faire uniquement en présence de l'utilisateur, jamais en autonomie.
+
+---
+
+## Routeur — Freebox depuis le 2026-10-30
+
+La box est une **Freebox Pop** (avant : Bbox), avec une **IPv4 full-stack**
+obtenue depuis l'espace abonné Free : une IPv4 partagée (défaut des nouveaux abonnés) n'offre
+qu'une plage de ports (16384-32767 constaté), donc ni 80 ni 443 — `open-freebox-ports.sh status`
+le dit. Redirections posées par `scripts/open-freebox-ports.sh apply` (80/443 TCP, 8189 TCP+UDP
+en HTTPS) :
+- **L'API Freebox n'accepte pas le mot de passe administrateur** : un jeton d'application,
+  obtenu une fois par `authorize` et validé sur l'écran du Freebox Server, puis le droit
+  « Modification des réglages » coché dans Freebox OS (Gestion des accès → Applications →
+  « Lab dev »). Jeton dans `.lab-state/freebox-app-token` (600, dans la sauvegarde) ; le perdre
+  oblige à refaire `authorize` devant la box.
+- Une redirection existante vers une autre machine est signalée, jamais modifiée.
+- Changer d'IP publique : `SERVER_URL_WAN` dans `bbox.env` **et** `~/dev2/bbox.env`, puis
+  `reset_url.sh` des deux côtés, `MEDIA_WEBRTC_HOSTS` à la main, et le DNS chez No-IP pour le
+  domaine de **chaque** cadriciel (aucun client DDNS sur l'hôte ni dans la Freebox).
 
 ---
 
@@ -635,7 +654,9 @@ bash scripts/setup2.sh mon-app --yes
 5. **`create-app-client.sh <app>`** — crée ou met à jour le client Keycloak (secret, redirect URIs, claim `groups`)
 6. `recompose_docker.sh --app <app> --force` — build et démarre les containers
 7. `get-ports-list.sh` — régénère `ports.env`
-8. `open-bbox-ports2.sh` — ouvre les ports sur le routeur Bbox si accessible
+8. Redirections de ports sur la box d'après `bbox.env` : `open-freebox-ports.sh` si `FREEBOX_IP`,
+   `open-bbox-ports2.sh` si `BBOX_IP` ; les deux renseignées → question posée au terminal, et
+   sans terminal (moteur) l'étape est sautée — les redirections existantes restent en place
 
 > **C'est `setup2.sh` qui crée le client Keycloak**, via `create-app-client.sh` à l'étape 5.  
 > `create-app-client.sh` peut aussi être appelé seul pour recréer/mettre à jour un client sans tout redéployer :
@@ -1166,7 +1187,10 @@ conteneurs `lab-media` (MediaMTX), `lab-media-auth` (mini-service d'authentifica
 - **Aucune app n'ouvre un périphérique ni ne monte le volume d'enregistrements.**
 - Arrêter `lab-media-auth` ne coupe ni publication ni enregistrement, mais plus rien ne
   s'authentifie et les expulsions sont impossibles ; redémarrer `lab-media` coupe tout.
-- Port ICE **8189 udp/tcp** publié par `lab-media`, redirigé à la main sur la Bbox.
+- Port ICE **8189 udp/tcp** publié par `lab-media`, redirigé sur la box par
+  `open-freebox-ports.sh` (à la main avec une Bbox). `MEDIA_WEBRTC_HOSTS` (`lab-media/.env`)
+  porte l'IP publique **en dur** et `reset_url.sh` ne la met pas à jour : à corriger à la main
+  à tout changement d'IP, puis `up -d --no-build`, sinon la vidéo ne passe plus hors du LAN.
 - **Toutes les webcams USB sont découvertes** (chantier `chantiers/webcams/`, 2026-10-17) :
   `lab-media-auth` lit `/sys` toutes les 2 s (sans ouvrir de nœud) et tient un inventaire
   persistant (`lab-media_state`, `/state/inventory.json` — **dans la sauvegarde nocturne** : le
@@ -1389,7 +1413,8 @@ ci-dessous, lancé avec `bash sso-lab/…`).
 | `clean2.sh <app>` | Arrêter et supprimer les containers d'une app |
 | `recompose_docker.sh --app <app>` | Rebuilder et redémarrer les containers d'une app |
 | `get-ports-list.sh` | Régénérer `ports.env` depuis `.ports` |
-| `open-bbox-ports2.sh` | Ouvrir les ports sur le routeur Bbox |
+| `open-freebox-ports.sh authorize\|status\|apply` | Redirections de ports sur une Freebox (API Freebox OS) |
+| `open-bbox-ports2.sh` | Ouvrir les ports sur une Bbox |
 | `rotate-secrets-full.sh --yes` | Rotation complète de tous les secrets automatisables + redémarrage (voir « Rotation des secrets ») |
 | `rotate-ldap-user-passwords.sh --yes` | Rotation à chaud du mot de passe de chaque compte LDAP, avec email au titulaire |
 | `rotate-secrets.sh --yes` | Rotation à chaud des secrets admin sso-lab |

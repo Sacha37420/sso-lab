@@ -214,7 +214,7 @@ if [[ "$HTTP_CODE" =~ ^[23] ]]; then
   echo "  ✅  Keycloak répond (HTTP $HTTP_CODE) — port-forwarding OK."
 elif [[ "$HTTP_CODE" == "000" ]]; then
   echo "  ⚠️  AVERTISSEMENT : Keycloak injoignable sur ${_wan_host}:${PORT_KEYCLOAK}"
-  echo "      Vérifier : port-forwarding Bbox (${PORT_KEYCLOAK} → 192.168.1.50:${PORT_KEYCLOAK})"
+  echo "      Vérifier : redirection de port sur la box (${PORT_KEYCLOAK} → 192.168.1.50:${PORT_KEYCLOAK})"
   echo "               + Keycloak en cours d'exécution"
   echo "               + hairpin NAT supporté par la box"
   WARNINGS=$(( WARNINGS + 1 ))
