@@ -2,11 +2,13 @@ version: "3.9"
 
 # Service partagé du lab (comme infra/ et sso-lab/ — pas une app, pas de
 # sous-module). Porte Playwright + Chromium une seule fois pour tout le lab :
-# voir CLAUDE.md, section "Tests end-to-end (Playwright)".
+# voir README.md et CLAUDE.md, section "Tests end-to-end (Playwright)".
 #
 # Jamais exposé : ni port publié, ni label Caddy. Atteint uniquement depuis le
-# réseau sso-net, par nom de conteneur (lab-runner) — lab-admin (worker) et
-# setup_unit.sh (via `docker exec lab-runner`) sont les deux seuls appelants.
+# réseau sso-net, par nom de conteneur (lab-runner). Appelant : le moteur
+# lab-mcp (POST /run). Un déploiement d'app « à portes » par setup2.sh passe
+# aussi par setup_unit.sh (`docker exec lab-runner curl … /run`) ; le script
+# storage/frontend/e2e/jouer-gestes.sh l'utilise à la main par `docker exec`.
 
 networks:
   sso-net:
@@ -19,15 +21,23 @@ services:
     build: .
     container_name: lab-runner
     restart: unless-stopped
+    # Un init (tini) en PID 1 : sans lui, les processus Chromium orphelins
+    # restent zombies dans le conteneur (constaté, CLAUDE.md « Pièges »).
+    init: true
     env_file: .env
     networks:
       - sso-net
     volumes:
-      # Lecture seule de tout le dépôt : chaque app expose son
-      # frontend/e2e/*.spec.ts, son docker-compose.yml (labels Caddy) et son
-      # .env (DOMAIN) ; sso-lab/.env fournit les mots de passe courants de
-      # e2e_member/e2e_outsider. ${HOST_DEV_ROOT} et non un chemin relatif :
-      # voir le commentaire de HOST_DEV_ROOT dans le .env.example racine —
-      # un chemin relatif se résoudrait différemment selon l'endroit d'où
-      # `docker compose` est invoqué et casserait ce montage en silence.
+      # Lecture seule de tout le dépôt. Le runner y lit : le spec du gabarit
+      # (_templates/django-angular/frontend/e2e/cloisonnement.spec.ts, seul
+      # fichier joué) ; dans chaque app, la seule PRÉSENCE de
+      # frontend/e2e/cloisonnement.spec.ts et les labels Caddy de son
+      # docker-compose.yml ; le DOMAIN du .env racine ; sso-lab/.env pour les
+      # mots de passe courants de e2e_member/e2e_outsider. Aucun code d'une app
+      # n'est chargé. Réduire ce montage au strict nécessaire reste à faire
+      # (to_do_global.md, R1).
+      # ${HOST_DEV_ROOT} et non un chemin relatif : voir le commentaire de
+      # HOST_DEV_ROOT dans le .env.example racine — un chemin relatif se
+      # résoudrait différemment selon l'endroit d'où `docker compose` est
+      # invoqué et casserait ce montage en silence.
       - ${HOST_DEV_ROOT}:/mnt/dev:ro

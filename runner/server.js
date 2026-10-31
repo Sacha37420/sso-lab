@@ -1,41 +1,63 @@
 import express from 'express';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import fs from 'node:fs';
-import { e2eDirFor, resolveApp } from './lib/resolve-app.js';
+import { hasAppSpec, resolveApp } from './lib/resolve-app.js';
+import { isValidAppName, prepareRunDir, removeRunDir } from './lib/spec.js';
+
+// API (contrat « urgences » v1, interface I2) — appelant : le moteur lab-mcp
+// (labmcp/engine.py, POST /run). Voir README.md.
+//   GET  /healthz            {ok, busy}
+//   GET  /list?app=<app>     [{file, title}]        — sans navigateur
+//   POST /run {"app": ...}   [{file, title, status, message, durationMs}]
+// 400 si le nom d'app est absent ou mal formé ; 409 si un run tourne déjà ;
+// [] si l'app n'a pas de frontend/e2e/cloisonnement.spec.ts (« aucun test »,
+// jamais « tout va bien »).
+//
+// Le fichier joué est TOUJOURS le spec du gabarit, copié dans un dossier
+// temporaire propre à chaque appel (lib/spec.js) : aucun fichier du dépôt de
+// l'app n'est chargé.
 
 const execFileAsync = promisify(execFile);
 const PORT = 4300;
 const CONFIG = '/app/playwright.config.ts';
-// Les fichiers e2e/*.spec.ts de chaque app vivent hors de /app (sous
-// /mnt/dev/<app>/...) : leur `import ... from '@playwright/test'` ne
-// résoudrait pas sans indiquer explicitement où se trouve node_modules
-// (celui du runner — les apps n'ont jamais @playwright/test elles-mêmes,
-// cf. CLAUDE.md). Vérifié : sans ça, "Cannot find module '@playwright/test'".
+// Le spec copié vit hors de /app (dossier temporaire) : son
+// `import ... from '@playwright/test'` ne résoudrait pas sans indiquer où se
+// trouve node_modules (celui du runner). Vérifié : sans ça,
+// "Cannot find module '@playwright/test'".
 const NODE_PATH = '/app/node_modules';
 
 const app = express();
 app.use(express.json());
 
-// Un seul run à la fois — filet de sécurité local en plus du
-// --concurrency=1 du worker Celery de lab-admin (cf. CLAUDE.md, contrainte
-// 2 vCPU/16 Go du serveur).
+// Un seul run à la fois sur tout le lab (2 vCPU / 16 Go) ; le moteur attend
+// son tour sur le 409.
 let busy = false;
+
+/** Rend le nom d'app validé, ou répond 400 et rend null. */
+function appNameOr400(value, res, label) {
+  if (!value || typeof value !== 'string') {
+    res.status(400).json({ error: `${label} manquant` });
+    return null;
+  }
+  if (!isValidAppName(value)) {
+    res.status(400).json({ error: `${label} invalide (attendu : ^[a-z][a-z0-9-]{0,62}$)` });
+    return null;
+  }
+  return value;
+}
 
 app.get('/healthz', (_req, res) => res.json({ ok: true, busy }));
 
-// Catalogue : liste les tests d'une app, sans navigateur (--list). Utilisé
-// par setup_unit.sh à chaque déploiement.
+// Catalogue : liste les tests d'une app, sans navigateur (--list).
 app.get('/list', async (req, res) => {
-  const appName = req.query.app;
-  if (!appName || typeof appName !== 'string') {
-    return res.status(400).json({ error: 'paramètre "app" manquant' });
+  const appName = appNameOr400(req.query.app, res, 'paramètre "app"');
+  if (!appName) return;
+  if (!hasAppSpec(appName)) {
+    return res.json([]); // app sans test de cloisonnement — pas une erreur
   }
-  const dir = e2eDirFor(appName);
-  if (!fs.existsSync(dir)) {
-    return res.json([]); // app sans frontend/e2e/ pour l'instant — pas une erreur
-  }
+  let dir;
   try {
+    dir = prepareRunDir();
     let stdout = '';
     try {
       ({ stdout } = await execFileAsync(
@@ -56,19 +78,20 @@ app.get('/list', async (req, res) => {
     res.json(extractTests(JSON.parse(stdout)));
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  } finally {
+    removeRunDir(dir);
   }
 });
 
 // Exécution réelle (navigateur) d'une app. Un seul en cours à la fois (409 sinon).
 app.post('/run', async (req, res) => {
-  const appName = req.body?.app;
-  if (!appName || typeof appName !== 'string') {
-    return res.status(400).json({ error: 'champ "app" manquant' });
-  }
+  const appName = appNameOr400(req.body?.app, res, 'champ "app"');
+  if (!appName) return;
   if (busy) {
     return res.status(409).json({ error: 'un run est déjà en cours sur ce runner' });
   }
   busy = true;
+  let dir;
   try {
     let resolved;
     try {
@@ -76,10 +99,11 @@ app.post('/run', async (req, res) => {
     } catch (err) {
       return res.status(422).json({ error: String(err.message ?? err) });
     }
-    if (!fs.existsSync(resolved.e2eDir)) {
+    if (!resolved.hasSpec) {
       return res.json([]);
     }
 
+    dir = prepareRunDir();
     let stdout = '';
     try {
       ({ stdout } = await execFileAsync(
@@ -87,7 +111,7 @@ app.post('/run', async (req, res) => {
         ['playwright', 'test', '--config', CONFIG, '--reporter=json'],
         {
           cwd: '/app',
-          env: { ...process.env, NODE_PATH, ...resolved.env, E2E_TEST_DIR: resolved.e2eDir },
+          env: { ...process.env, NODE_PATH, ...resolved.env, E2E_TEST_DIR: dir },
           maxBuffer: 20 * 1024 * 1024,
         },
       ));
@@ -102,6 +126,7 @@ app.post('/run', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: String(err) });
   } finally {
+    removeRunDir(dir);
     busy = false;
   }
 });

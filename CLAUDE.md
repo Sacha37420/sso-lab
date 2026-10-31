@@ -49,14 +49,19 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
 
 ### Feuilles de route en cours
 
-- **`to_do_storage.md`** — `storage` est un service du cadriciel dont l'interface n'a presque aucun
+- **`to_do_global.md`** (analyse du 2026-10-31) — reste à faire de tout le lab : urgences,
+  bloquants avant l'ouverture à un autre développeur, chantiers transverses (T1 à T10), et un
+  pointeur vers la `FEUILLE_DE_ROUTE.md` de chaque app. Les anciens `to_do_*.md` de la racine sont
+  dans leur app (`storage/to_do_storage.md`, `deploiement/bilan-thermique/`, `craft-lab/`,
+  `atelier-3d/`). Plusieurs phrases de ce fichier sont périmées : la liste est au § T6.
+- **`storage/to_do_storage.md`** — `storage` est un service du cadriciel dont l'interface n'a presque aucun
   geste usuel de gestionnaire de fichiers (analyse du 2026-10-11 : 1 geste présent sur 27). Plan
   par lots ; décisions du propriétaire du 2026-10-11 dans le fichier. **Lots 0, 1 et 2 en
   service** : contenu actif neutralisé (`api/content_safety.py`), sélection, clavier, menu
   contextuel, suppression annulable, glisser-déposer, file d'envoi, conflits de nom. Tests :
   `python manage.py test --settings=config.settings_test api` (backend) et
   `LAB_ROOT=$PWD bash storage/frontend/e2e/jouer-gestes.sh --deploye` (25 gestes en navigateur
-  réel, compte `e2edev`). Reste connu : `?token=` en paramètre d'URL (trois frontends s'en servent).
+  réel, compte `e2edev`). `?token=` en paramètre d'URL n'est plus accepté qu'en GET/HEAD sur `…/content/…` (2026-10-31) ; trois frontends s'en servent encore pour leurs images.
   **Neuf apps consomment son API** (les six listées plus bas, plus `code-route`, `craft-lab` et
   son propre frontend) : aucune route existante ne doit changer.
 - **Sauvegardes : chiffrement à faire.** Elles tournent chaque nuit (voir « Sauvegardes ») mais
@@ -160,6 +165,12 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
 - **Le jeton GitHub est toujours celui de l'appelant** (via `oauth-hub`), jamais le `gh` de l'hôte
   (il porte `delete_repo`). Pas de portée `delete_repo` : une création ratée après la création du
   dépôt nomme le dépôt vide à supprimer à la main.
+- **Conteneurs auxiliaires sans `.env`** (2026-10-31) : `robot-lab-engine` et `craft-lab-relay`
+  ne reçoivent que leurs variables (`environment:`). Le navigateur piloté de robot-lab passe par un
+  proxy de sortie interne à l'engine (`engine/egress-proxy.js`) qui refuse toute adresse privée :
+  `page.route` seul ne voit ni les redirections, ni les WebSocket, ni les Workers, ni le rebinding DNS.
+  Les ports de `lab-admin` sont liés à `127.0.0.1` ; sa réponse de création d'utilisateur ne porte
+  `password` que si l'email n'est pas parti.
 - **`lab-admin` a deux niveaux** : la porte (`admins,developers`) et l'administration (`admins`,
   permission DRF par défaut `IsLabAdmin`). Toute nouvelle vue est d'admin tant qu'elle ne déclare
   rien ; toute nouvelle route Angular porte `adminGuard`. Ne jamais recréer `lab-admin-backend`
@@ -298,7 +309,7 @@ construction ». Contrat et rapports : `chantiers/app-builder-lab/`.
 - Pièges vus : `app-builder/docker-compose.yml` montait `./backend:/app` (un redémarrage mettait
   en service le dossier, hors des tests) — retiré ; un lien direct vers une page d'App Builder
   retombe sur l'accueil (défaut `redirectUri` du gabarit, voir « Pièges constatés ») ;
-  `lab-runner` accumule des processus Chromium zombies (aucun `init` dans le conteneur).
+  `lab-runner` accumulait des processus Chromium zombies (corrigé le 2026-10-31 : `init: true`).
 
 ### Règles de développement imposées à tout projet (IA comprises)
 
@@ -1274,6 +1285,11 @@ ci-dessous) suppose un seul fichier, ce nom précis.
   L'ancien dispositif (catalogue synchronisé par `setup_unit.sh`, page « Debug », table
   `DebugTest`, worker Celery et Redis de `lab-admin`, `CatalogSyncView`, `SETUP_CATALOG_KEY`)
   est supprimé : ne pas le réintroduire.
+- **Le runner joue toujours le spec du gabarit** (2026-10-31, chantier « urgences ») : la présence de
+  `<app>/frontend/e2e/cloisonnement.spec.ts` n'est qu'un signal, son contenu n'est jamais lu ni
+  chargé — un dépôt de développeur ne fait donc exécuter aucun code au runner. Nom d'app hors
+  `^[a-z][a-z0-9-]{0,62}$` → 400. Changer le test = changer le gabarit. `runner/playwright.config.ts`
+  sert aussi à `storage/frontend/e2e/jouer-gestes.sh` (variable `E2E_GESTES`). Voir `runner/README.md`.
 - Un seul run à la fois, lab-wide : mutex en mémoire côté runner (409 si déjà occupé) ; le moteur
   attend son tour au lieu d'échouer. Tout script ou agent qui lance un navigateur dans
   `lab-runner` doit d'abord vérifier qu'aucun autre n'y tourne.

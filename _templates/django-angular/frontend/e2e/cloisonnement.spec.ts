@@ -5,10 +5,10 @@
  * (section "Sécurité — cloisonnement des applications") : après tout
  * changement de cloisonnement, tester dans les deux sens.
  *
- * Ce fichier est le SEUL fichier de test Playwright de cette app — un
- * répertoire e2e/ avec plusieurs specs n'est pas le format attendu par le
- * runner partagé (runner/lib/resolve-app.js pointe sur ce dossier entier,
- * mais scripts/setup_unit.sh catalogue un fichier par test, pas un dossier).
+ * Ce fichier est le SEUL fichier de test Playwright de cette app. Le runner
+ * partagé ne joue jamais la copie de l'app : il joue toujours CE gabarit ; la
+ * présence du fichier dans l'app sert seulement à dire « cette app a un test »
+ * (runner/README.md). Changer le test = changer ce gabarit.
  *
  * Entièrement piloté par variables d'environnement, injectées par le runner
  * au moment du run réel — jamais de credentials en dur ici :

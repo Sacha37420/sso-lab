@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { DEV_ROOT, SPEC_NAME } from './spec.js';
 
-// Tout le dépôt est monté ici (docker-compose.yml : ${HOST_DEV_ROOT}:/mnt/dev:ro).
-const DEV_ROOT = '/mnt/dev';
+// Tout le dépôt est monté sous DEV_ROOT (docker-compose.yml : ${HOST_DEV_ROOT}:/mnt/dev:ro).
+// Les fonctions exportées supposent un nom déjà validé (isValidAppName, lib/spec.js).
 
 // Même règle que lab-admin/backend/api/infra_info.py (_HANDLE_PATH_RE) : les
 // labels caddy.handle_path du docker-compose.yml d'une app sont la seule
@@ -23,31 +24,31 @@ function envVal(file, key) {
 /** Dossier d'une app : `deploiement/<app>` s'il existe (emplacement cible, voir
  * CLAUDE.md), sinon `<app>` à la racine (apps pas encore déménagées). Même règle
  * que registry_app_dir dans scripts/lib/registry.sh. */
-function appDir(app) {
-  const deployed = path.join(DEV_ROOT, 'deploiement', app);
-  return fs.existsSync(deployed) ? deployed : path.join(DEV_ROOT, app);
+function appDir(app, root = DEV_ROOT) {
+  const deployed = path.join(root, 'deploiement', app);
+  return fs.existsSync(deployed) ? deployed : path.join(root, app);
 }
 
-function frontendPath(app) {
-  const composeFile = path.join(appDir(app), 'docker-compose.yml');
+function frontendPath(app, root = DEV_ROOT) {
+  const composeFile = path.join(appDir(app, root), 'docker-compose.yml');
   if (!fs.existsSync(composeFile)) return null;
   const content = fs.readFileSync(composeFile, 'utf8');
   const paths = [...content.matchAll(HANDLE_PATH_RE)].map((m) => m[1]);
   return paths.find((p) => !p.endsWith('-api')) ?? null;
 }
 
-/** Chemin du dossier e2e/ d'une app — seule chose nécessaire pour cataloguer
- * (--list, pas de navigateur, pas besoin de DOMAIN ni de secrets). */
-export function e2eDirFor(app) {
-  return path.join(appDir(app), 'frontend', 'e2e');
+/** Vrai si l'app porte frontend/e2e/cloisonnement.spec.ts. Seul signal « cette
+ * app a un test » : le fichier n'est jamais lu ni chargé (contrat urgences v1, I2). */
+export function hasAppSpec(app, root = DEV_ROOT) {
+  return fs.existsSync(path.join(appDir(app, root), 'frontend', 'e2e', SPEC_NAME));
 }
 
 /** Résolution complète pour un run réel : URL publique de l'app + identifiants
  * e2e_member/e2e_outsider lus depuis sso-lab/.env (jamais mis en cache — donc
  * une rotation LDAP ne casse jamais le runner, cf. rotate-ldap-user-passwords.sh). */
-export function resolveApp(app) {
-  const domain = envVal(path.join(DEV_ROOT, '.env'), 'DOMAIN');
-  const fPath = frontendPath(app);
+export function resolveApp(app, root = DEV_ROOT) {
+  const domain = envVal(path.join(root, '.env'), 'DOMAIN');
+  const fPath = frontendPath(app, root);
   if (!domain || domain === 'CHANGE_ME' || !fPath) {
     throw new Error(
       `Impossible de résoudre l'URL de "${app}" (DOMAIN="${domain}", chemin frontend="${fPath}").`,
@@ -55,7 +56,7 @@ export function resolveApp(app) {
   }
   const appUrl = `https://${domain}${fPath}/`;
 
-  const ssoEnv = path.join(DEV_ROOT, 'sso-lab', '.env');
+  const ssoEnv = path.join(root, 'sso-lab', '.env');
   const memberPassword = envVal(ssoEnv, 'E2E_MEMBER_PASSWORD');
   const outsiderPassword = envVal(ssoEnv, 'E2E_OUTSIDER_PASSWORD');
   if (!memberPassword || !outsiderPassword) {
@@ -69,7 +70,7 @@ export function resolveApp(app) {
   return {
     appUrl,
     domain,
-    e2eDir: e2eDirFor(app),
+    hasSpec: hasAppSpec(app, root),
     env: {
       E2E_APP_URL: appUrl,
       E2E_DOMAIN: domain,
