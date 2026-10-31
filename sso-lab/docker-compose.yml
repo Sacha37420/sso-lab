@@ -13,6 +13,13 @@ networks:
   # Keycloak/openldap/oauth2-proxy/code-server.
   edge-net:
     external: true
+  # Réseau de code-server, partagé avec oauth2-proxy-code SEULEMENT (2026-10-31).
+  # code-server tourne en --auth=none et monte docker.sock : sur sso-net, tout
+  # conteneur du lab (dont le navigateur piloté de robot-lab) le joignait sans
+  # passer par oauth2-proxy — un accès root à l'hôte. Pas `internal` : code-server
+  # garde sa sortie Internet (extensions, Claude Code). Ne jamais y relier autre chose.
+  code-net:
+    driver: bridge
 
 # ─────────────────────────────────────────────
 # Volumes nommés : les données survivent à
@@ -214,7 +221,8 @@ services:
       - oauth2-proxy
       - --upstream=http://code-server:8091/
     networks:
-      - sso-net
+      - sso-net    # Caddy et Keycloak
+      - code-net   # seul chemin vers code-server
     depends_on:
       - keycloak
       - code-server
@@ -264,7 +272,7 @@ services:
       - --auth=none
       - /home/coder/dev
     networks:
-      - sso-net
+      - code-net   # jamais sso-net : voir la définition du réseau
 
   # ──────────────────────────────────────────
   # Spring Boot App (construite à l'étape 3)
