@@ -478,6 +478,9 @@ en HTTPS) :
   « Lab dev »). Jeton dans `.lab-state/freebox-app-token` (600, dans la sauvegarde) ; le perdre
   oblige à refaire `authorize` devant la box.
 - Une redirection existante vers une autre machine est signalée, jamais modifiée.
+- **Le NAS des sauvegardes a un bail DHCP fixe** (`truenas`, `192.168.1.136`, posé par l'API le
+  2026-10-31) : il avait changé d'adresse au passage à la Freebox et la copie NAS échouait en silence
+  depuis deux nuits. `LAB_BACKUP_NAS` doit suivre toute modification de ce bail.
 - Changer d'IP publique : `SERVER_URL_WAN` dans `bbox.env` **et** `~/dev2/bbox.env`, puis
   `reset_url.sh` des deux côtés, `MEDIA_WEBRTC_HOSTS` à la main, et le DNS chez No-IP pour le
   domaine de **chaque** cadriciel (aucun client DDNS sur l'hôte ni dans la Freebox).
