@@ -16,7 +16,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 ARG PYTHON_IMAGE=python:3.12.15-slim-bookworm
-ARG NODE_IMAGE=node:20.20.2-bookworm-slim
+ARG NODE_IMAGE=node:22.23.4-bookworm-slim
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.0
 
 FROM ${NODE_IMAGE} AS node
@@ -49,7 +49,7 @@ RUN apt-get update -q \
       less nano procps jq unzip xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
-# Node 20 (+ npm) : copié depuis l'image officielle, pas de `curl | bash`.
+# Node 22 LTS (+ npm) : copié depuis l'image officielle, pas de `curl | bash`.
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \

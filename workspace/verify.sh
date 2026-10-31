@@ -216,7 +216,7 @@ for o in code-server claude vibe git gh python node uv; do
   v="$(val "$o")"; [[ -n "$v" && "$v" != *"not found"* && "$v" != *rror* ]] && ok "$o répond : $v" || ko "$o ne répond pas : $v"
 done
 contient "$(val python)" "Python 3.12." && ok "Python est bien 3.12" || ko "Python n'est pas 3.12"
-contient "$(val node)" "v20." && ok "Node est bien 20" || ko "Node n'est pas 20"
+contient "$(val node)" "v22." && ok "Node est bien 22" || ko "Node n'est pas 22"
 grep -q '^present=' <<<"$SORTIE" && ko "présent dans l'image alors qu'interdit : $(grep '^present=' <<<"$SORTIE" | cut -d= -f2 | tr '\n' ' ')" || ok "ni sudo, ni docker, ni groupe docker, ni docker.sock dans l'image"
 [[ "$(val capeff)" == "0000000000000000" ]] && ok "aucune capacité effective (cap_drop ALL)" || ko "capacités effectives : $(val capeff)"
 [[ "$(val nonewprivs)" == "1" ]] && ok "no-new-privileges actif" || ko "no-new-privileges inactif"

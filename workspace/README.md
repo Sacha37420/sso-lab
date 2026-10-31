@@ -17,7 +17,7 @@ pensée pour le téléphone où l'on ne voit que la conversation avec Claude Cod
 | Base | `python:3.12.15-slim-bookworm` (Debian 12) | — |
 | code-server | 4.141.0 (`.deb`, sha256 vérifié) | `/usr/lib/code-server` |
 | GitHub CLI `gh` | 2.102.0 (`.deb`, sha256 vérifié) | `/usr/bin/gh` |
-| Node | 20.20.2 (copié de `node:20.20.2-bookworm-slim`) | `/usr/local/bin/node` |
+| Node | 22.23.4 LTS (copié de `node:22.23.4-bookworm-slim`) | `/usr/local/bin/node` |
 | Claude Code | `@anthropic-ai/claude-code@2.1.296` (npm global) | `/usr/local/bin/claude` |
 | Mistral Vibe | `mistral-vibe==2.26.1` (`uv tool`) | `/opt/uv-tools`, commande `/usr/local/bin/vibe` |
 | uv | 0.13.0 (copié de `ghcr.io/astral-sh/uv:0.13.0`) | `/usr/local/bin/uv` |
@@ -409,8 +409,8 @@ pour éditer et faire travailler une IA. Ce qui n'y tiendrait pas : un `ng build
   tableau vide, ce qui supprime la question.
 
 - **`@agentclientprotocol/claude-agent-acp` déclare `engines: node >= 22`**, comme Claude Code :
-  il fonctionne sous le Node 20 de l'image (`initialize`, sessions, MCP : vérifiés), npm avertit
-  au build. Même dette que ci-dessous, à solder avec la montée de Node.
+  satisfait depuis le passage à Node 22 (chantier « failles », F14, 2026-10-31) ; le build ne doit
+  plus afficher aucun `EBADENGINE`.
 - **Le SDK de l'agent ACP (0.3.280) a été écrit pour `claude` 2.1.280** ; il pilote ici le 2.1.296
   de l'image. Vérifié : démarrage, session, modes, MCP. Monter l'un sans l'autre : rejouer
   `verify.sh` (section 3f).
@@ -432,10 +432,11 @@ pour éditer et faire travailler une IA. Ce qui n'y tiendrait pas : un `ng build
   dépendance transitive ne soit plus récente : `npm install --package-lock-only --before=<date>`
   dans `chat/`, depuis un conteneur de l'image.
 
-- **Node 20 est en fin de vie** (avril 2026) et `@anthropic-ai/claude-code@2.1.296` déclare
-  `engines: node >= 22` : npm avertit (`EBADENGINE`) au build, sans conséquence — la commande
-  `claude` est un binaire natif qui n'utilise pas le Node de l'image. À revoir avec le contrat
-  (I7 dit « Node 20 ») à la prochaine montée de version.
+- **Node 22 LTS depuis le 2026-10-31** (Node 20 en fin de vie depuis avril 2026). Claude Code et
+  l'agent ACP déclarent `engines: node >= 22` : sous Node 20, npm avertissait (`EBADENGINE`) au
+  build. Node lui-même n'est pas soumis à la règle des deux semaines (ce n'est pas une dépendance
+  npm) : on prend le dernier correctif LTS de l'image officielle. Le verrou de `chat/` a été
+  régénéré à cette occasion (`--before=2026-10-17`).
 - **Mise à jour automatique de Claude Code coupée** (`DISABLE_AUTOUPDATER=1`) : `coder` ne peut pas
   écrire dans `/usr/local`, et l'image doit rester celle qui a été vérifiée.
 - **Mode restreint de l'éditeur désactivé** (`disable-workspace-trust`) : l'espace n'ouvre que le
