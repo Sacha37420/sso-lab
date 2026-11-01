@@ -198,6 +198,19 @@ en service ».
   - [ ] chemin Caddy `/carto-ogc` de carto-lab — Ⓟ décision : passer à `/carto-lab-api/ogc` ou ajouter une exception déclarée ;
   - [ ] `.keycloak-client-opts` suivi par git dans conciergerie ;
   - [ ] fichier de rôles non vide dans restauration.
+- [ ] **Inventaire du 2026-11-01** (`validate-app.sh <app>`, lecture seule) — ce qui refuse encore chaque app au chemin à portes :
+  - `[service]` (nom DNS) : `worker` d'atelier-3d, bilan-thermique, code-route, carto-lab ; `relay` de craft-lab ;
+    `engine` de robot-lab ; `oauth2-proxy-ogc` et `pgfeatureserv` de carto-lab ;
+  - `[caddy]` + `[ports]` : `/craft-lab-relay` (8098), `/robot-lab-engine` (8095), `/carto-ogc` — chemins hors
+    `/<app>` et `/<app>-api`, ports hors `.ports` ;
+  - analyse-lora : chemin Caddy `/lora` ≠ nom de l'app (Ⓟ : renommer change l'URL publique et le client Keycloak) ;
+  - arbre-genealogique : pas de `--require-group` (à dessein, l'app n'exige aucun groupe) — exemption à prévoir
+    comme pour le cloisonnement ;
+  - `[tracked]` `.keycloak-client-opts` suivi par git : analyse-lora, arbre, conciergerie, restauration, tdfc,
+    lab-admin. Ⓟ : le sortir de git retire aussi ce fichier d'une installation neuve (T2) ;
+  - `[service-account]` : restauration (vrais rôles, U4), et peripheriques et lab-admin ;
+  - storage `[volume]` (volume `external` d'`infra`, à dessein) ; lab-admin `[bind]` (dépôt monté, à dessein).
+  Sans refus : app-builder, oauth-hub.
 - [ ] Ligne `.owners` `<app>:sacha` pour les 12 apps historiques, une fois chacune conforme. Elles
       passent alors au chemin à portes : build pendant que l'ancienne version tourne, tests, puis
       `up -d --no-build`.
