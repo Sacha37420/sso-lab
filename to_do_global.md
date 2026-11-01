@@ -21,6 +21,44 @@ commande de test.
 
 ---
 
+## État au 2026-11-01, après le chantier « failles » (`chantiers/failles/`)
+
+Les 16 failles F1 à F16 du contrat sont corrigées et **en service** ; tout est commité et poussé.
+
+**Fait**
+- [x] **§ 1.3 (F1)** : tout port publié est lié à `127.0.0.1`, apps, Keycloak, LDAP, pgAdmin et phpLDAPadmin compris.
+      `validate_compose.py` refuse le reste dès qu'un domaine est configuré.
+- [x] **T3 (F2 à F4)** : gabarits et 16 apps — `tokenBases()`, `redirectUri` borné, PKCE S256, polices relatives,
+      `.dockerignore`. Chaque client est en PKCE exigé, avec ses seules URI (`--prune-uris`).
+- [x] **§ 1.4 (F12)** : plus aucun joker `*` sur un client actif ; `front-cadriciel` et `infra` sont désactivés.
+- [x] **T4 (F5)** : plus de `?token=` nulle part, storage compris.
+- [x] **F6, F7** : clés d'API dans un coffre serveur (`VAULT_ENCRYPTION_KEY`), plus rien en `localStorage`.
+      `SECRET_KEY` peut tourner sans rien détruire (fait pour craft-lab).
+- [x] **F8** conciergerie, **F9** craft-lab, **F10** lab-admin : voir leurs feuilles de route.
+- [x] **F11** : Keycloak 26.8.1 en `start --optimized` sur PostgreSQL. La console et le realm `master` ne sont plus servis.
+      Retour arrière possible jusqu'au 2026-11-08, et **gel** jusque-là (CLAUDE.md, « Keycloak 26 »).
+- [x] **F13, en partie** : `e2e_member` n'est plus dans `admins`. Le runner monte toujours tout le dépôt (R1 ouvert).
+- [x] **F14 / W1** : `lab-workspace:latest` en Node 22 (`workspace/verify.sh` 293/293). Un espace déjà ouvert garde l'ancienne image.
+- [x] **F15** : bail fixe `192.168.1.50` pour le serveur sur la Freebox.
+- [x] **F16** : secret du compte de service d'arbre-genealogique régénéré.
+
+**Reste**
+- [ ] À vérifier en navigateur réel :
+  - images d'atelier-3d, d'arbre-genealogique et de craft-lab, textures Phaser ;
+  - pages des coffres, où il faut ressaisir chaque clé ;
+  - un appel OCR réel, un appel Météo-France et un appel IA.
+- [ ] Ouverts, hors de ce chantier :
+  - le runner monte tout le dépôt (R1) ;
+  - restauration rend les 4 derniers caractères d'un secret ;
+  - le frontend de tdfc s'installe par `npm install` ;
+  - GitHub App pour oauth-hub ;
+  - `manage-users` de restauration à restreindre par les permissions fines de Keycloak 26 ;
+  - `create-app-client.sh` affiche les secrets en clair ;
+  - la carte « console Keycloak » de lab-admin ne mène plus nulle part ;
+  - `code-server`, `carto-ogc` : clients confidentiels, joker retiré, mais aucun PKCE ;
+  - `dev2/`.
+- [ ] Le 2026-11-08 : fin de la fenêtre de retour arrière de Keycloak (PROCEDURE.md § 6).
+
 ## État au 2026-10-31, après le chantier « urgences » (`chantiers/urgences/`)
 
 Huit secteurs ont rendu `OK` sur le contrat v1. Les correctifs sont **en service**, commités et poussés dans
@@ -320,7 +358,7 @@ sont ici.
 
 État : README de 454 lignes, `verify.sh` à 293 contrôles ; l'image en service peut précéder le dernier commit [D].
 
-- [ ] **W1 · P1** : **Node 22**. L'image est en Node 20.20.2 (`Dockerfile:19`), en fin de vie, alors que Claude Code et `claude-agent-acp` demandent Node ≥ 22. Régénérer le verrou `chat/` avec `--before`. Test : `WS_IMAGE=… bash workspace/verify.sh` vert, aucun `EBADENGINE`.
+- [x] **W1 · P1** (fait le 2026-11-01) : **Node 22**. L'image est en Node 20.20.2 (`Dockerfile:19`), en fin de vie, alors que Claude Code et `claude-agent-acp` demandent Node ≥ 22. Régénérer le verrou `chat/` avec `--before`. Test : `WS_IMAGE=… bash workspace/verify.sh` vert, aucun `EBADENGINE`.
 - [ ] **W2 · Ⓟ** : parcours réel (T10).
 - [ ] **W3 · Ⓟ** : décider si une demande d'autorisation sans réponse garde l'espace ouvert indéfiniment (`espace-chat/rapports/workspace.md:198-206`).
 - [ ] P3 : dépendances transitives de Vibe non verrouillées. Le marqueur `isDefault` des tâches est hors API publique : à revérifier à chaque montée de code-server.

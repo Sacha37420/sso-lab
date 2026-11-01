@@ -19,6 +19,7 @@
 # Usage :
 #   bash scripts/dev-db.sh ensure <uid> [--gis]     provisionnement idempotent
 #   bash scripts/dev-db.sh ensure-lab                    rôle et base `lab` du cadriciel (LAB_PG_PASSWORD)
+#   bash scripts/dev-db.sh ensure-keycloak               rôle et base `keycloak` de Keycloak 26 (KEYCLOAK_PG_PASSWORD)
 #   bash scripts/dev-db.sh status lab|<uid> [--gis]      lecture seule : ce qui existe (code 0 = complet)
 #   bash scripts/dev-db.sh rotate lab|<uid>              rotation à chaud du mot de passe du rôle
 #   bash scripts/dev-db.sh ensure-all               rejoue `ensure` pour tout ce que dev-roles.env
@@ -274,6 +275,19 @@ cmd_ensure_lab() {
   echo "── PostgreSQL du cadriciel (base lab)"
   _ensure_on "$PG_CONTAINER" "lab" "lab" "LAB_PG_PASSWORD"
   ok "lab prêt"
+}
+
+# Base de Keycloak (chantier failles, F11) : même règle que `lab` — rôle non
+# superutilisateur, propriétaire de sa seule base, CONNECT retiré à PUBLIC.
+# Le mot de passe vit dans infra/dev-roles.env ; reset_url.sh le recopie dans
+# sso-lab/.env (KEYCLOAK_DB_PASSWORD), seul fichier que lit le compose de sso-lab.
+cmd_ensure_keycloak() {
+  [[ $# -eq 0 ]] || die "ensure-keycloak ne prend pas d'argument"
+  [[ -f "$INFRA_ENV" ]] || die "$INFRA_ENV introuvable."
+  _assert_infra_env_clean
+  echo "── PostgreSQL de Keycloak (base keycloak)"
+  _ensure_on "$PG_CONTAINER" "keycloak" "keycloak" "KEYCLOAK_PG_PASSWORD"
+  ok "keycloak prêt"
 }
 
 # Rotation À CHAUD du mot de passe d'un rôle applicatif : `lab`, ou dev_<uid>
@@ -554,6 +568,7 @@ case "$CMD" in
   ensure)            cmd_ensure "$@" ;;
   ensure-all)        cmd_ensure_all "$@" ;;
   ensure-lab)        cmd_ensure_lab "$@" ;;
+  ensure-keycloak)   cmd_ensure_keycloak "$@" ;;
   status)            cmd_status "$@" ;;
   rotate)            cmd_rotate "$@" ;;
   exists)            cmd_exists "$@" ;;

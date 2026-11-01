@@ -52,7 +52,11 @@ if [[ -n "$DOMAIN" && "$DOMAIN" != "CHANGE_ME" ]]; then
 else
   WAN_HOST="$(env_val SERVER_URL_WAN | sed -E 's#^https?://##')"
   KC_PORT="$(env_val PORT_KEYCLOAK)"; KC_PORT="${KC_PORT:-8080}"
-  LOGIN_URL="http://${WAN_HOST}:${KC_PORT}/realms/ssolab/account"
+  # 8080 n'est plus publié que sur 127.0.0.1 (chantier failles, F1) : le lien
+  # passe par Caddy dès qu'un domaine est posé.
+  _dom="$(grep -E '^DOMAIN=' "$SSO_ENV" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'")"
+  if [[ -n "$_dom" && "$_dom" != "CHANGE_ME" ]]; then LOGIN_URL="https://${_dom}/auth/realms/ssolab/account"
+  else LOGIN_URL="http://${WAN_HOST}:${KC_PORT}/realms/ssolab/account"; fi
 fi
 
 if SMTP_HOST="$SMTP_HOST" SMTP_PORT="$SMTP_PORT" SMTP_USER="$SMTP_USER" SMTP_PASSWORD="$SMTP_PASSWORD" \

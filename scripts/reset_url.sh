@@ -280,6 +280,12 @@ while IFS= read -r envfile; do
   upsert_env "$envfile" KEYCLOAK_ISSUER_URI  "$KC_ISSUER_URI"
   upsert_env "$envfile" KEYCLOAK_HOSTNAME_URL "$KC_HOSTNAME_URL"
   upsert_env "$envfile" PORT_KEYCLOAK        "$PORT_KEYCLOAK"
+  # Mot de passe du rôle `keycloak` (base de Keycloak 26, chantier failles F11) :
+  # source infra/dev-roles.env, destination sso-lab/.env SEULEMENT.
+  if [[ "$rel" == "sso-lab/.env" ]]; then
+    _kc_db_pw="$(_env_val "$SCRIPT_DIR/infra/dev-roles.env" "KEYCLOAK_PG_PASSWORD")"
+    [[ -n "$_kc_db_pw" ]] && upsert_env "$envfile" KEYCLOAK_DB_PASSWORD "$_kc_db_pw"
+  fi
   upsert_env "$envfile" HPORT_POSTGRES       "$HPORT_POSTGRES"
   upsert_env "$envfile" HPORT_DB             "$HPORT_POSTGRES"   # alias spring-app
   # ── Mot de passe PostgreSQL ────────────────────────────────────────────────

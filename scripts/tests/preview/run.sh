@@ -457,13 +457,14 @@ check "down sans essai : {ok:true, uid, stopped:false}" '[[ $RC -eq 0 && "$RES" 
 section "7. validate_compose.py — règle [image] (ajoutée) et non-régression"
 vc() { python3 -B "$REAL/scripts/lib/validate_compose.py" appli "$T/vc" exemple.test "8000,4000" /dev/null <<< "$1" || true; }
 mkdir -p "$T/vc/backend"
-BASE='{"name":"appli","networks":{"dev-net":{"external":true,"name":"dev-net"}},"services":{"backend":{"build":{"context":"'"$T"'/vc/backend","dockerfile":"Dockerfile"},"container_name":"appli-backend","networks":{"dev-net":null},"ports":[{"mode":"ingress","target":8000,"published":"8000","protocol":"tcp"}],"labels":{"caddy":"exemple.test","caddy.handle_path":"/appli-api/*","caddy.handle_path.reverse_proxy":"{{upstreams 8000}}"}}}}'
+BASE='{"name":"appli","networks":{"dev-net":{"external":true,"name":"dev-net"}},"services":{"backend":{"build":{"context":"'"$T"'/vc/backend","dockerfile":"Dockerfile"},"container_name":"appli-backend","networks":{"dev-net":null},"ports":[{"mode":"ingress","host_ip":"127.0.0.1","target":8000,"published":"8000","protocol":"tcp"}],"labels":{"caddy":"exemple.test","caddy.handle_path":"/appli-api/*","caddy.handle_path.reverse_proxy":"{{upstreams 8000}}"}}}}'
 check "modèle du gabarit toujours accepté (aucune raison)" '[[ -z "$(vc "$BASE")" ]]' "$(vc "$BASE")"
 check "image: storage-backend + build → [image]" 'vc "$(jq -c ".services.backend.image = \"storage-backend\"" <<< "$BASE")" | grep -q "^\[image\]"'
 check "build.tags: lab-mcp-lab-mcp:latest → [image]" 'vc "$(jq -c ".services.backend.build.tags = [\"lab-mcp-lab-mcp:latest\"]" <<< "$BASE")" | grep -q "^\[image\]"'
 check "image: appli-backend:v2 + build → accepté" '[[ -z "$(vc "$(jq -c ".services.backend.image = \"appli-backend:v2\"" <<< "$BASE")")" ]]'
 check "image tierce SANS build (redis:7-alpine) → accepté, comme avant" '[[ -z "$(vc "$(jq -c ".services[\"appli-cache\"] = {image: \"redis:7-alpine\"}" <<< "$BASE")")" ]]'
 check "port hors .ports toujours refusé [ports]" 'vc "$(jq -c ".services.backend.ports[0].published = \"9\"" <<< "$BASE")" | grep -q "^\[ports\]"'
+check "port lié à toutes les interfaces, avec un domaine → [ports]" 'vc "$(jq -c "del(.services.backend.ports[0].host_ip)" <<< "$BASE")" | grep -q "^\[ports\].*127.0.0.1"'
 
 section "8. Réservation du préfixe « dev- » (scripts/check-app-name.sh du dépôt)"
 for n in dev-quelquechose "dev-$U" dev-api dev; do

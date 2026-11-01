@@ -61,7 +61,8 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
   contextuel, suppression annulable, glisser-déposer, file d'envoi, conflits de nom. Tests :
   `python manage.py test --settings=config.settings_test api` (backend) et
   `LAB_ROOT=$PWD bash storage/frontend/e2e/jouer-gestes.sh --deploye` (25 gestes en navigateur
-  réel, compte `e2edev`). `?token=` en paramètre d'URL n'est plus accepté qu'en GET/HEAD sur `…/content/…` (2026-10-31) ; trois frontends s'en servent encore pour leurs images.
+  réel, compte `e2edev`). `?token=` en paramètre d'URL n'est plus accepté nulle part (2026-11-01,
+  chantier « failles ») : Bearer seulement, les images passent par `fetch` + `URL.createObjectURL`.
   **Neuf apps consomment son API** (les six listées plus bas, plus `code-route`, `craft-lab` et
   son propre frontend) : aucune route existante ne doit changer.
 - **Sauvegardes : chiffrement à faire.** Elles tournent chaque nuit (voir « Sauvegardes ») mais
@@ -120,7 +121,7 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
 ### Qui est quoi
 
 - **Superutilisateur** : `LAB_SUPERUSER` dans le `.env` racine (`sacha`). **Jamais un groupe LDAP** :
-  `e2e_member` est dans `admins` *et* `developers`.
+  un compte synthétique peut être dans `admins` comme dans `developers`.
 - **Développeur** : membre du groupe `developers` dont l'uid a la forme `^[a-z][a-z0-9]{1,30}$`.
   Il est inscrit (`.devs`) **automatiquement à sa première connexion à `lab-admin`** : rôle et base
   PostgreSQL `dev_<uid>`, dossier de travail. Mettre un compte dans `developers` (`add-user.sh`)
@@ -169,8 +170,13 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
   ne reçoivent que leurs variables (`environment:`). Le navigateur piloté de robot-lab passe par un
   proxy de sortie interne à l'engine (`engine/egress-proxy.js`) qui refuse toute adresse privée :
   `page.route` seul ne voit ni les redirections, ni les WebSocket, ni les Workers, ni le rebinding DNS.
-  Les ports de `lab-admin` sont liés à `127.0.0.1` ; sa réponse de création d'utilisateur ne porte
-  `password` que si l'email n'est pas parti.
+  La réponse de création d'utilisateur de `lab-admin` ne porte `password` que si l'email n'est pas parti.
+- **Tout port publié sur l'hôte est lié à `127.0.0.1`** (2026-11-01) : `"${LAB_BIND_ADDR:-127.0.0.1}:<hôte>:<conteneur>"`
+  dans chaque compose (apps, `sso-lab`, `infra`, gabarits). `reset_url.sh` pose `LAB_BIND_ADDR=0.0.0.0`
+  dans le `.env` d'une app **seulement en HTTP local sans domaine** ; avec un domaine,
+  `validate_compose.py` refuse tout autre `host_ip`. Seuls restent ouverts `edge-router` (80/443) et
+  l'ICE de `lab-media` (8189). Keycloak (8080), LDAP (389), pgAdmin (5050), phpLDAPadmin (8081) ne
+  se joignent plus que par tunnel SSH (`ssh -L 8080:localhost:8080 …`).
 - **`lab-admin` a deux niveaux** : la porte (`admins,developers`) et l'administration (`admins`,
   permission DRF par défaut `IsLabAdmin`). Toute nouvelle vue est d'admin tant qu'elle ne déclare
   rien ; toute nouvelle route Angular porte `adminGuard`. Ne jamais recréer `lab-admin-backend`
@@ -178,9 +184,10 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
 - **`code-server` (`/code`) est réservé au groupe `admins`** (`OAUTH2_PROXY_ALLOWED_GROUPS`,
   `sso-lab/docker-compose.yml`) : il monte tout le dépôt, le socket Docker, `~/.ssh` et
   `~/.claude` — y entrer vaut un accès root à l'hôte. Il était ouvert à `developers` jusqu'au
-  2026-10-11 (constaté par audit, refermé). **Ne jamais y remettre `developers`.** `e2e_member`,
-  membre d'`admins`, y entre : c'est un compte synthétique à mot de passe long, mais c'est un
-  second chemin vers l'hôte à garder en tête.
+  2026-10-11 (constaté par audit, refermé). **Ne jamais y remettre `developers`.** `e2e_member`
+  n'est plus dans `admins` depuis le 2026-11-01 (il y entrait, et le runner lit son mot de passe) :
+  ne pas l'y remettre. Après un changement de groupe dans l'annuaire, le mapper LDAP de Keycloak
+  (`LDAP_ONLY`) garde l'ancien état en cache : `POST /admin/realms/ssolab/clear-user-cache`.
 - **Comptes d'envoi d'email (SMTP)** : mot de passe en écriture seule (jamais rendu, jamais
   journalisé) ; identifiant et mot de passe en ASCII seulement (`smtplib` échoue sur un accent) ;
   l'email d'essai ne part que vers l'adresse du compte de l'appelant et que vers Internet (jamais
@@ -299,7 +306,8 @@ construction ». Contrat et rapports : `chantiers/app-builder-lab/`.
 - **L'intercepteur de lab-admin ne joint le jeton qu'aux bases de `tokenBases()`**
   (`frontend/src/app/core/env.ts`) : il le joignait à toute requête, quelle que soit l'origine.
   Un appel vers un nouveau service demande d'y ajouter sa base, sinon il part sans jeton (401).
-  **Le même défaut est très probablement dans `_templates/` et les autres apps**, non corrigé.
+  Même garde (`core/token-scope.ts`, `carriesToken`) dans `_templates/` et toutes les apps depuis le
+  2026-11-01.
 - Le catalogue admin de lab-admin lit toujours les tables d'App Builder directement
   (`models_appbuilder.py`) : colonnes tenues par `test_tables_lues_par_lab_admin`.
 - Essais rejouables : `bash lab-mcp/tests/seed/run.sh` (graine, sans GitHub réel),
@@ -396,8 +404,15 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
   Vibe pose des dossiers en lecture seule dans `~/.vibe` (`chmod -R u+rwX` avant tout `rm -rf`).
 - **Le lien direct vers une page retombait sur l'accueil** après le passage par Keycloak
   (`redirectUri = env.appUrl`) : corrigé dans `lab-admin` (`core/redirect-uri.ts` — la page
-  courante, jamais un paramètre, seulement sous l'origine et le préfixe de l'app). **Le même
-  défaut est dans `_templates/` et dans toutes les autres apps**, non corrigé.
+  courante, jamais un paramètre, seulement sous l'origine et le préfixe de l'app). Repris dans
+  `_templates/` et toutes les apps le 2026-11-01.
+- **Une exception `requests` porte l'URL demandée** : journaliser ou renvoyer `str(exc)` livre un
+  lien secret (iCal Airbnb de `conciergerie`) ou une clé passée en paramètre. Rendre un message fixe.
+- **Un sérialiseur appelé sans `request` dans son contexte** (tâche, commande, autre vue) ne sait pas
+  qui lit : un champ masqué « sauf pour le propriétaire » doit être masqué par défaut quand
+  `request` manque, jamais montré.
+- **Sans `.dockerignore`, le `node_modules` de l'hôte écrase celui de l'image** (`COPY . .` après
+  `npm ci`) : build qui passe avec d'autres versions que le verrou. Chaque frontend en a un.
 - **Le noyau rend le commentaire d'une règle iptables entre guillemets** : un script qui cherche
   ses propres règles par leur commentaire sans en tenir compte les pose en double et ne sait plus
   les retirer (constaté sur des règles de test).
@@ -537,8 +552,9 @@ fait rien et dit ce qui serait sauvegardé ; `--list` montre les copies ; `--loc
   élargir les droits du partage de sauvegarde.
 - Restauration éprouvée le 2026-10-12 depuis la copie du NAS : empreintes identiques, les six
   bases restaurées dans des PostgreSQL jetables avec le même nombre de tables et de lignes qu'en
-  service. **Non éprouvé** : restaurer Keycloak depuis son volume (copie à chaud d'une base H2),
-  et remonter un lab entier sur une machine neuve.
+  service. **Non éprouvé** : remonter un lab entier sur une machine neuve. Depuis
+  Keycloak 26 (2026-11-01), le realm est dans la base `keycloak` de `dev-postgres`, sauvegardée avec
+  les autres bases ; le volume `sso-lab_keycloak-data` n'est plus que la copie de retour arrière de 22.
 - Piège : un conteneur lancé avec `--cap-drop ALL` ne lit pas un fichier `600` d'un autre
   utilisateur, même en root — le lancer sous l'identité de l'appelant (`--user`).
 
@@ -1109,29 +1125,52 @@ L'écriture dans le coffre (déposer/modifier un `client_secret`) est réservée
 > seule clé du script qui chiffre des données **au repos qui survivent** : la remplacer rend le
 > coffre entier illisible, sans reprise possible.
 
-### PKCE et clients publics — pourquoi ce n'est pas activé partout
+### PKCE, URI de retour, coffres de clés (chantier « failles », 2026-11-01)
 
-`create-app-client.sh` accepte `--native-redirect <uri>` (répétable) et `--pkce` / `--no-pkce`.
-PKCE S256 est posé **automatiquement** sur tout client ayant une URI native, et disponible en opt-in
-ailleurs. Il n'est **pas** posé par défaut sur les clients publics, malgré la règle générale, pour
-une raison vérifiée : **keycloak-js 22.0.5 n'envoie `code_challenge` que si `pkceMethod` est passé
-explicitement à `init()`** (`node_modules/keycloak-js/dist/keycloak.js:811`), et **aucun des 14
-frontends Angular du lab ne le fait**. Poser l'attribut sur les clients publics existants les
-casserait tous d'un coup (`Missing parameter: code_challenge`).
+- **PKCE S256 exigé sur tous les clients publics des apps** : chaque frontend passe
+  `pkceMethod: 'S256'` à `kc.init()` (gabarits compris), et chaque client a été relancé avec
+  `create-app-client.sh <app> $(cat .keycloak-client-opts) --pkce --prune-uris`.
+- **Plus de joker `*` en URI de retour** : un nouveau client naît avec `redirectUris: []`, et
+  `--prune-uris` remplace la liste d'un client existant par celle que le script calcule (refus si
+  elle serait vide). Avec un domaine, plus aucune URI en IP LAN/WAN. Les clients `front-cadriciel`
+  et `infra`, plus utilisés, sont **désactivés** (pas supprimés) ; `dev-<uid>` (essai) est créé
+  avec `--prune-uris` par `app-preview.sh`.
+- **Clés d'API des utilisateurs : coffre serveur** (`VAULT_ENCRYPTION_KEY`, Fernet, dans le `.env`
+  de l'app, générée par `install.sh`) — plus rien en `localStorage`. Les `EncryptedTextField`
+  (`code-route`, `craft-lab`, `restauration`, `robot-lab`) lisent encore l'ancienne clé dérivée de
+  `SECRET_KEY` (`MultiFernet`, lecture seule) et une migration a tout rechiffré : faire tourner
+  `SECRET_KEY` ne détruit plus rien. Une réponse d'API ne rend que `…_configured`, jamais la clé.
+  **Ne jamais régénérer `VAULT_ENCRYPTION_KEY`** : comme `OAUTH_HUB_ENCRYPTION_KEY`, la perdre rend
+  les clés enregistrées illisibles.
 
-Pour généraliser : ajouter `pkceMethod: 'S256'` dans `<app>/frontend/src/app/core/keycloak.service.ts`
-**et** dans `_templates/django-angular/`, app par app, puis relancer avec `--pkce`. Chantier ouvert,
-non fait.
+### Keycloak 26 (depuis le 2026-11-01)
 
-> ⚠ Trou préexistant repéré au passage, **non corrigé lab-wide** : le bloc de création de
-> `create-app-client.sh` pose `redirectUris: ["*"]` et `webOrigins: ["*"]`. Un joker de redirection
-> sur un client public autorise le renvoi du code d'autorisation vers n'importe quelle URL — ce qui
-> annule le bénéfice de PKCE. Le joker n'est purgé que sur les clients à URI native
-> (`--native-redirect`), parce que les clients web du lab s'appuient aujourd'hui dessus pour les
-> accès LAN/WAN non calculés : les purger tous couperait des accès en service sans prévenir. À
-> reprendre en même temps que le chantier PKCE ci-dessus.
+`sso-lab-keycloak:26.8.1` (`sso-lab/keycloak/Dockerfile`, `kc.sh build`), `start --optimized`,
+base PostgreSQL `keycloak` / rôle `keycloak` de `dev-postgres` (`dev-db.sh ensure-keycloak`, mot de
+passe `KEYCLOAK_PG_PASSWORD` dans `infra/dev-roles.env`, recopié dans `sso-lab/.env` par
+`reset_url.sh`). Le conteneur n'a plus d'`env_file`. Bascule faite par export 22 → import 26, sans
+perte (comptes, secrets, clé de signature identiques). Procédure et essais :
+`chantiers/failles/keycloak/PROCEDURE.md`.
 
-`--no-env` (nouveau) crée un client **sans écrire de `<app>/.env`** : pour un client dont
+- **Scope `nonce-keycloak-js-22` obligatoire** (`scripts/keycloak-nonce-compat.sh`, idempotent) :
+  keycloak-js 22 vérifie `nonce` dans l'access_token, que Keycloak ≥ 25 n'y met plus ⇒ **boucle de
+  connexion infinie dans toutes les apps**. Le scope est par défaut du realm (clients futurs
+  compris). À retirer quand les frontends passeront à keycloak-js ≥ 25. Au premier passage juste
+  après le démarrage, le script n'a rien fait et n'a rien dit : relancer jusqu'à lire
+  « ✓ … client(s) public(s) portent nonce-keycloak-js-22 ».
+- **La console d'administration et le realm `master` ne sont plus servis par Caddy** (404).
+  L'API REST `/auth/admin/realms/*` l'est encore (restauration et peripheriques l'appellent par
+  l'URL publique). Console : tunnel SSH vers `localhost:8080`.
+- Hostname v2 : `KC_HOSTNAME=${KEYCLOAK_HOSTNAME_URL}` (URL complète, `/auth` compris),
+  `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`, `KC_PROXY_HEADERS=xforwarded`. `KC_HOSTNAME_URL`,
+  `KC_PROXY`, `KC_HOSTNAME_STRICT*` n'existent plus.
+- **Retour arrière possible jusqu'au 2026-11-08** : le volume H2 `sso-lab_keycloak-data` de 22
+  est intact (PROCEDURE.md § 6). Jusque-là, **gel** : ni `create-app-client.sh`, ni `add-user.sh`,
+  ni création de projet, ni rotation de secret — tout ce qui est écrit dans 26 serait perdu par un
+  retour. Ensuite : retirer ce volume du compose et de `backup.sh`, supprimer les images
+  `keycloak-export22:bascule` et `quay.io/keycloak/keycloak:22.0`.
+
+`create-app-client.sh --no-env` crée un client **sans écrire de `<app>/.env`** : pour un client dont
 l'application vit hors de `dev/` (application de bureau, autre dépôt). Sans lui, le script créait un
 dossier vide avec un `.env` orphelin que rien ne déployait. Utilisé par `storage-analysis`.
 
@@ -1261,7 +1300,7 @@ ci-dessous) suppose un seul fichier, ce nom précis.
   Son Chromium **ne décode pas le H.264** (pas de Chrome dans le runner, décision actée) : une
   lecture vidéo H.264 (`peripheriques`) ne se vérifie que dans un vrai navigateur, à la main.
 - **Deux comptes LDAP synthétiques** (`sso-lab/ldap/init.ldif`) : `e2e_member`, membre de **tous**
-  les groupes existants (toujours le cas « membre » positif, quelle que soit l'app testée), et
+  les groupes existants **sauf `admins`** (depuis le 2026-11-01 : `admins` ouvre `/code`, donc l'hôte) (toujours le cas « membre » positif, quelle que soit l'app testée), et
   `e2e_outsider`, membre d'**aucun** groupe (toujours le cas « non-membre » négatif — aucune
   maintenance requise). Leurs mots de passe rotent normalement avec `rotate-ldap-user-passwords.sh`
   — le runner relit toujours la valeur courante dans `sso-lab/.env`, jamais de cache.

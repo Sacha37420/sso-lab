@@ -489,7 +489,7 @@ if has_containers && [[ "$PREV_GROUPS" != "$GROUPS_JSON" ]]; then
   note "les groupes requis changent — arrêt de l'essai précédent avant la mise à jour du client"
   ( cd "$TMP" && "${CLEAN[@]}" docker compose -p "$NAME" stop 2>&1 ) | _strip || true
 fi
-CLIENT_ARGS=("$NAME" --public --no-env --no-wan --no-rotate --caddy-path "$NAME" --exact-groups)
+CLIENT_ARGS=("$NAME" --public --no-env --no-wan --no-rotate --caddy-path "$NAME" --exact-groups --prune-uris)
 [[ -z "$GROUPS_CSV" ]] || CLIENT_ARGS+=(--require-group "$GROUPS_CSV")
 LAB_JOURNAL_REDACT=1 bash "$SCRIPT_DIR/create-app-client.sh" "${CLIENT_ARGS[@]}" < /dev/null 2>&1 \
   | grep -vE '^[[:space:]]*$' | "${REDACT[@]}" | _strip
