@@ -68,15 +68,15 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
 - **Sauvegardes : chiffrement à faire.** Elles tournent chaque nuit (voir « Sauvegardes ») mais
   **en clair**, par décision du propriétaire du 2026-10-12 : à brancher dans `seal()` de
   `scripts/backup.sh` (clé publique sur le serveur, clé privée chez lui).
-- **Constats de relecture laissés au propriétaire** : `chantiers/multi-dev/rapports/` (`relecture-lab-admin.md`,
-  `audit-installation.md`) — documentation d'API publique et `.env` complet dans le conteneur
-  nginx du frontend (défauts du gabarit, donc de toutes les apps), deux lanceurs de tests de
-  cloisonnement, page « Apps du lab » redondante avec « Projets ».
+- **Constats de relecture** (`chantiers/multi-dev/rapports/`) : tous réglés — documentation d'API
+  et `.env` du conteneur nginx (gabarit, 2026-10-11), un seul lanceur de tests (le moteur), « Apps du
+  lab » redirigée vers « Projets ».
 
 ### Tests : état au 2026-10-12
 
 - **Tests backend** : toutes les apps en ont (≈ 1 500 au total), joués par `scripts/app-test.sh`
-  avant chaque mise en service. Écrits par le chantier `chantiers/tests/` (contrat, rapports par
+  avant la mise en service **sur le chemin à portes** (moteur). `setup2.sh` sur une app historique ne
+  les joue pas (T1 de `to_do_global.md`) : la reconstruire par build → `app-test.sh` → `up -d --no-build`. Écrits par le chantier `chantiers/tests/` (contrat, rapports par
   secteur — non versionnés : ils décrivent des défauts). Ils ont révélé une trentaine de défauts
   réels, dont plusieurs trous de cloisonnement (traversée de chemin dans
   `traitement-de-fichiers-compils`, prise de contrôle d'un arbre dans `arbre-genealogique`,
@@ -114,8 +114,8 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
 - **Projets** (a absorbé « Conception ») : sections « Projets de déploiement » (`deploiement/`) et
   « Outils de dev » (cadriciel), d'après le champ `kind` du moteur ; état, version en service,
   écart avec GitHub, liens vers l'app et son VS Code ; bloc App Builder pour `admins`.
-- Pour `admins` en plus : « Apps du lab », « Nouvel utilisateur », « Debug ». Les anciennes routes
-  `/outils`, `/conception` et `/code` (la route Angular, pas code-server) sont des redirections.
+- Pour `admins` en plus : « Nouvel utilisateur ». Les anciennes routes `/outils`, `/conception`,
+  `/apps-hebergees`, `/debug` et `/code` (la route Angular, pas code-server) sont des redirections.
 - Toute nouvelle vue backend est d'admin tant qu'elle ne déclare rien (`IsLabAdmin` par défaut) ;
   toute nouvelle route Angular d'admin porte `adminGuard`. Les tests backend demandent un
   PostgreSQL jetable (le rôle `lab` ne peut pas créer de base) : commande en tête de
@@ -440,7 +440,7 @@ service et vérifiés avec les comptes de test. Ce qui reste à faire avant d'ou
 durcissement de l'hôte, bascule des 17 apps vers `dev_sacha` et `deploiement/`, parcours réel d'un
 dev) est suivi dans `chantiers/multi-dev/BASCULE.md` — non versionné, à lire avant toute action
 sur ce sujet. Depuis le 2026-10-11 la séparation des bases est effective pour les rôles de dev (voir « Base de
-données ») ; les apps historiques partagent encore le rôle `devuser` jusqu'à leur bascule.
+données ») ; les apps historiques aussi, depuis leur bascule (rôle `dev_sacha`, `lab` pour le cadriciel).
 
 ---
 
@@ -1293,8 +1293,9 @@ copiable sans adaptation.
 « Règles ») — membre du groupe requis passe, non-membre refusé, non-membre avec session SSO déjà
 active refusé aussi (le contournement historique : un authentificateur `Cookie` court-circuite un
 flow mal structuré, cf. section « Verrou 1 » plus haut). **N'ajoutez pas d'autre fichier de test
-E2E** dans une app sans d'abord mettre à jour cette section — le pipeline (catalogue + exécution
-ci-dessous) suppose un seul fichier, ce nom précis.
+E2E** dans une app sans d'abord mettre à jour cette section — le runner ne joue que ce nom précis.
+Seule exception : `storage/frontend/e2e/gestes.spec.ts` (25 gestes), joué à la main par
+`jouer-gestes.sh` avec `E2E_GESTES=1`, jamais par le moteur.
 
 ### Architecture
 

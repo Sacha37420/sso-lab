@@ -305,18 +305,18 @@ guides par public.
 **Phrases fausses ou périmées de CLAUDE.md** [C]
 - [ ] « Créer une nouvelle application », étapes 1 à 4 : `dev/<app>/`, `00_schemas.sql`,
       `gh repo create` à la main, `postgres (devdb)`. Les remplacer par un renvoi au README §2.
-- [ ] « Les apps historiques partagent encore le rôle `devuser` » : faux depuis la bascule.
+- [x] « Les apps historiques partagent encore le rôle `devuser` » : faux depuis la bascule.
 - [ ] « Le même défaut [redirectUri] est dans `_templates/` et dans toutes les autres apps » :
       corrigé dans le gabarit et dans 11 apps (voir T3).
 - [ ] « atelier-3d et bilan-thermique non reconstruits » avec les trois correctifs du gabarit :
       ils sont en service dans les deux.
-- [ ] « Tests backend joués par `app-test.sh` avant chaque mise en service » : faux pour les apps
+- [x] « Tests backend joués par `app-test.sh` avant chaque mise en service » : faux pour les apps
       historiques (T1).
 - [ ] « Aucun des 14 frontends » : il y en a 16.
-- [ ] « Pour admins en plus : Apps du lab, Nouvel utilisateur, Debug » (l. 108) : Apps du lab et
+- [x] « Pour admins en plus : Apps du lab, Nouvel utilisateur, Debug » (l. 108) : Apps du lab et
       Debug sont des redirections.
-- [ ] Constats « page Apps du lab redondante » et « deux lanceurs » (l. 66-68) : réglés.
-- [ ] § Tests E2E « un seul fichier » : storage a aussi `e2e/gestes.spec.ts`, autorisé par la décision Q6.
+- [x] Constats « page Apps du lab redondante » et « deux lanceurs » (l. 66-68) : réglés.
+- [x] § Tests E2E « un seul fichier » : storage a aussi `e2e/gestes.spec.ts`, autorisé par la décision Q6.
 - [ ] Tableau des sous-modules : `test-video` absent.
 - [ ] Les doublons README/CLAUDE.md (base de données, cloisonnement, Foyer, vitrine, E2E) sont
       rédigés deux fois. Garder un texte, l'autre renvoie.
@@ -363,6 +363,12 @@ guides par public.
 ### T9 — Le moteur n'a jamais joué le cloisonnement de la plupart des apps · P2 · S
 
 - [ ] [C] `.lab-state/tests/` n'existe pas ; les `deployed/<app>.json` portent `cloisonnement: non-lancé` (atelier-3d, bilan-thermique, carto-lab, conciergerie, code-route, craft-lab, robot-lab, storage, oauth-hub…). Lancer « Tout tester » dans lab-admin.
+- [x] 2026-11-01 : cloisonnement joué par le moteur lui-même (`Engine._cloisonnement`, comme « Tout tester ») :
+      14 apps `ok` dans `.lab-state/tests/`. arbre-genealogique et traitement-de-fichiers-compils n'ont pas de
+      test, à dessein.
+- [ ] `test-video` rend `ko` : elle n'a jamais été déployée (aucun conteneur, `/test-video/` en 404), ce n'est pas
+      un trou. Mais « Tout tester » la compte comme un échec. Piste : un verdict `non-déployée` dans
+      `op_run_all_tests` pour une app sans `deployed/<app>.json` (moteur, à faire avec relecture).
 - **Test.** Un verdict `ok` par app, dans `.lab-state/tests/`.
 
 ### T10 — Preuves réelles avec le propriétaire · Ⓟ
@@ -398,7 +404,7 @@ sont ici.
 
 État : en service ; les 34 routes correspondent à `API.md` ; pas de TODO dans le code [C].
 
-- [ ] **M1 · P3** : doc vraie.
+- [ ] **M1 · P3** : doc vraie (bandeau d'`API.md` corrigé le 2026-11-01 ; reste le README).
   - Le bandeau d'`API.md` (l. 12-17) dit encore « oauth-hub ne fait confiance ni à lab-mcp ni à lab-admin » et « moteur non déployé ». Les deux sont faux.
   - `README.md:285` : `LAB_PREVIEW_TTL_H` est bien transmise.
   - `README.md:338-344` : « reste à vérifier » partiellement fait.

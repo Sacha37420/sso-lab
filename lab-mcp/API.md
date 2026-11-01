@@ -11,11 +11,13 @@ base) ; `🟡 codé` = implémenté, forme stable, pas éprouvé de bout en bout
 
 Ce qui reste `🟡`, et pourquoi (rien de tout cela ne change une forme) :
 - tout ce qui parle au **vrai GitHub** par le **vrai oauth-hub** (`POST /projects` mené à son terme,
-  `…/commits`, `…/tickets`, création du webhook) : oauth-hub ne fait confiance ni à `lab-mcp` ni à
-  `lab-admin` à ce jour — éprouvé contre des doubles ;
+  `…/commits`, `…/tickets`, création du webhook) : oauth-hub fait confiance à `lab-mcp` et à
+  `lab-admin` (table `trusted_clients`, vérifié le 2026-11-01), mais ces routes n'ont été éprouvées que
+  contre des doubles — il faut un compte GitHub humain (T10 de `to_do_global.md`) ;
 - la branche de `POST /me/init` qui inscrit réellement un compte neuf : aucun compte réel
-  inscriptible n'était disponible pour l'essai ;
-- le dernier saut « Caddy du lab → passerelle des espaces » : le moteur n'est pas déployé.
+  inscriptible n'était disponible pour l'essai.
+
+Le moteur et la passerelle des espaces sont en service depuis le 2026-10-10.
 
 > ⚠ **Changement incompatible en v11** — `GET /projects/<app>/env` ne rend plus aucune valeur
 > (`value` disparaît, `has_value` arrive). Une version de `lab-admin` antérieure à v11 afficherait des
