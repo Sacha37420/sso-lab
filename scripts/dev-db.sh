@@ -27,8 +27,9 @@
 #   bash scripts/dev-db.sh exists <uid> [--gis]     code 0 si la base existe, 1 sinon
 #   bash scripts/dev-db.sh drop <uid> --yes         supprime bases + rôle + clés (refuse s'il
 #                                                   reste une app du dev dans .owners)
-#   bash scripts/dev-db.sh lockdown-connect [--apply]   ┐ PHASE 3 — jamais appelés par un autre
-#   bash scripts/dev-db.sh lockdown-hba     [--apply]   ┘ script. Sans --apply : affichent seulement.
+#   bash scripts/dev-db.sh lockdown-connect [--apply]   ┐ Sans --apply : affichent seulement.
+#   bash scripts/dev-db.sh lockdown-hba     [--apply]   ┘ install.sh appelle lockdown-connect --apply ;
+#                                                       lockdown-hba reste un geste humain.
 #   bash scripts/dev-db.sh hba-status                    lecture seule : trust|locked par instance (code 0 = verrouillé)
 #
 # COMMENT L'ISOLATION TIENT (et ce qui ne la tient PAS) :

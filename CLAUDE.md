@@ -1136,7 +1136,8 @@ L'écriture dans le coffre (déposer/modifier un `client_secret`) est réservée
 - **Plus de joker `*` en URI de retour** : un nouveau client naît avec `redirectUris: []`, et
   `--prune-uris` remplace la liste d'un client existant par celle que le script calcule (refus si
   elle serait vide). Avec un domaine, plus aucune URI en IP LAN/WAN. Les clients `front-cadriciel`
-  et `infra`, plus utilisés, sont **désactivés** (pas supprimés) ; `dev-<uid>` (essai) est créé
+  et `infra` sont **désactivés** (pas supprimés) — ⚠ `infra` est le client du pgAdmin partagé
+  (`infra/.env`), dont la connexion est donc coupée : décision en attente (`to_do_global.md`) ; `dev-<uid>` (essai) est créé
   avec `--prune-uris` par `app-preview.sh`.
 - **Clés d'API des utilisateurs : coffre serveur** (`VAULT_ENCRYPTION_KEY`, Fernet, dans le `.env`
   de l'app, générée par `install.sh`) — plus rien en `localStorage`. Les `EncryptedTextField`

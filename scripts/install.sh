@@ -581,7 +581,9 @@ Gestes qui restent humains, dans tous les cas :
     bash scripts/create-app-client.sh <une app>  (réapplique les réglages du realm).
   • Nom de domaine + DDNS chez le fournisseur ; ports 80 et 443 du routeur vers cette machine.
   • Mots de passe des comptes : sso-lab/.env (clés <UID>_PASSWORD), à transmettre à chacun.
-  • Sauvegardes : rien n'est planifié par ce dépôt.
+  • Sauvegardes : scripts/backup.sh existe, mais install.sh ne le planifie pas. Poser le cron
+    (crontab -e : 0 3 * * * /bin/bash <dépôt>/scripts/backup.sh > /dev/null 2>&1) et, pour la
+    copie NAS, LAB_BACKUP_NAS / LAB_BACKUP_NAS_USER dans le .env racine et ~/.lab-backup-nas.
 Vérifier à tout moment : bash scripts/install.sh --check
 EOF
 [[ $N_GAP -eq 0 ]]

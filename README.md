@@ -172,9 +172,10 @@ démarrage de conteneur). En cas d'échec, corriger et relancer la même command
 - **Adresses réelles des comptes** : le gabarit de l'annuaire donne à chacun une adresse factice
   `<uid>@ssolab.local` ; mettre les vraies dans `sso-lab/ldap/init.ldif` **avant** l'installation
   (après, par phpLDAPadmin) pour que « mot de passe oublié » fonctionne.
-- **Sauvegardes** : rien n'est planifié par ce dépôt. À sauvegarder, parce que hors de tout dépôt :
-  les `.env`, `infra/dev-roles.env`, `sso-lab/ldap/init.ldif`, `.ports`, `.devs`, `.owners`,
-  `.lab-state/` (clés de déploiement), `~/edge-router/`, `~/lab-work/`, et les volumes Docker.
+- **Sauvegardes** : `scripts/backup.sh` (bases, annuaire, volumes, tout ce qui est hors dépôt ; copie
+  locale et NAS — voir CLAUDE.md « Sauvegardes »), **à planifier soi-même** : `install.sh` ne pose pas le
+  cron (`0 3 * * * /bin/bash <dépôt>/scripts/backup.sh > /dev/null 2>&1`). `~/lab-work/` n'y est pas :
+  le travail des espaces se sauvegarde en le poussant sur GitHub.
 
 > **Sans nom de domaine**, l'installation va au bout d'un lab « HTTP local » (accès direct par
 > port), mais **le moteur `lab-mcp` refuse de démarrer** (`DOMAIN=CHANGE_ME`) : la page

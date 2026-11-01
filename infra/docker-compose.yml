@@ -125,14 +125,13 @@ services:
   #
   # AUTHENTIFICATION :
   #   Login interne désactivé → seul Keycloak (OAuth2) est accepté.
-  #   Accès réservé aux membres du groupe LDAP 'developers'.
+  #   Réservé au groupe LDAP 'admins' (pgadmin/config_local.py, 2026-10-11) : il porte les
+  #   serveurs devuser/gisuser. Un développeur ouvre SON pgAdmin depuis lab-admin.
   #
-  # PRÉREQUIS :
-  #   1. sso-lab en cours d'exécution
-  #   2. bash infra/setup-keycloak-pgadmin.sh  (une seule fois)
-  #   3. Copier PGADMIN_OAUTH2_CLIENT_SECRET dans infra/.env
+  # PRÉREQUIS : sso-lab en cours d'exécution ; client Keycloak et secret dans infra/.env
+  #   (infra/setup-keycloak-pgadmin.sh, une seule fois).
   #
-  # URL : http://localhost:5050
+  # URL : http://localhost:5050, par tunnel SSH (port lié à 127.0.0.1).
   # ──────────────────────────────────────────
   pgadmin:
     image: dpage/pgadmin4:8

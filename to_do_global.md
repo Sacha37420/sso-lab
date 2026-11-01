@@ -41,6 +41,12 @@ test est fait, et coché dans la feuille de route de l'app.
   déchiffrent toutes.
 
 **Après le chantier « failles »**
+- [ ] ⚠ **Le pgAdmin partagé (`dev-pgadmin`, par tunnel) ne peut plus se connecter** : il utilise le client
+      Keycloak `infra`, désactivé pendant le chantier au motif qu'il n'était « plus utilisé » — c'était faux
+      (constaté le 2026-11-01 au soir, `KEYCLOAK_CLIENT_ID=infra` dans `infra/.env`). Le client porte encore
+      le joker `*`. À décider avec toi : soit le réactiver avec la seule URI `http://localhost:5050/*`
+      (écriture Keycloak, donc après la fin du gel ou en acceptant de la perdre en cas de retour arrière),
+      soit se passer de ce pgAdmin (chaque dev a le sien ; `docker exec dev-postgres psql` pour l'admin).
 - [ ] Te connecter avec ton compte (et ton OTP s'il y en a un) à deux ou trois apps : Keycloak 26.
 - [ ] Ressaisir une fois les clés qui étaient gardées dans le navigateur, puis faire un appel réel
       avec chacune :
@@ -83,6 +89,7 @@ Les 16 failles F1 à F16 du contrat sont corrigées et **en service** ; tout est
 - [x] **T3 (F2 à F4)** : gabarits et 16 apps — `tokenBases()`, `redirectUri` borné, PKCE S256, polices relatives,
       `.dockerignore`. Chaque client est en PKCE exigé, avec ses seules URI (`--prune-uris`).
 - [x] **§ 1.4 (F12)** : plus aucun joker `*` sur un client actif ; `front-cadriciel` et `infra` sont désactivés.
+      ⚠ `infra` servait encore au pgAdmin partagé : voir « Tests à mener par le propriétaire ».
 - [x] **T4 (F5)** : plus de `?token=` nulle part, storage compris.
 - [x] **F6, F7** : clés d'API dans un coffre serveur (`VAULT_ENCRYPTION_KEY`), plus rien en `localStorage`.
       `SECRET_KEY` peut tourner sans rien détruire (fait pour craft-lab).
@@ -237,7 +244,7 @@ en service ».
 - [ ] **Découper `setup2.sh`** (611 lignes, trois rôles) : déploiement d'une app, déploiement de tout le lab, opérations destructrices (`--restart-sso-lab`, `--rotate-secrets`). Garder `setup2.sh` comme enveloppe compatible, le moteur l'appelle.
 - [ ] **`install.sh`** :
   - [ ] poser le cron de `backup.sh` et vérifier ses prérequis (`~/.lab-backup-nas`, image `lab-backup`) ;
-  - [ ] corriger le message faux « rien n'est planifié » (`install.sh:579`, README:175).
+  - [x] corriger le message faux « rien n'est planifié » (`install.sh`, README) — 2026-11-01.
 - [ ] **Routeur** : Freebox par défaut dans la doc. Renommer `bbox.env` en `router.env` (renommage différé, plusieurs scripts le lisent).
 - [ ] **Essais rejouables de l'installation** : `install.sh --check` sur un clone jetable, et `validate-app.sh` sur des dépôts piégés (`scripts/tests/`).
 - **Test.**
