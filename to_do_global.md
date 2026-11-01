@@ -52,7 +52,10 @@ test est fait, et coché dans la feuille de route de l'app.
       dans restauration. Leurs clés se lisent, mais aucun appel n'a été fait.
 - [ ] craft-lab : une partie multijoueur, textures Phaser en jeu.
 - [ ] robot-lab : une session sur un vrai site HTTPS (le proxy de sortie de l'engine).
-- [ ] Ouvrir la console Keycloak par tunnel (`ssh -L 8080:localhost:8080 …`) : Caddy ne la sert plus.
+- [ ] Console Keycloak : elle ne s'ouvre plus, ni par Caddy ni par tunnel (la connexion part vers
+      l'adresse publique, où `realms/master` répond 404). Décider, en ta présence, de poser
+      `KC_HOSTNAME_ADMIN=http://localhost:8080` (redémarre Keycloak), puis l'ouvrir par tunnel.
+      La carte morte est retirée de lab-admin.
 - [ ] **Le 2026-11-08** : fin de la fenêtre de retour arrière de Keycloak (PROCEDURE.md § 6), et fin
       du gel. Ensuite, faire tourner le mot de passe PostgreSQL (`rotate-db-password.sh`) : il est
       apparu dans un journal de session.
@@ -94,14 +97,13 @@ Les 16 failles F1 à F16 du contrat sont corrigées et **en service** ; tout est
 **Reste**
 - [x] Images d'atelier-3d, d'arbre-genealogique et de craft-lab : vérifiées le 2026-11-01 (`lab-runner`).
       Coffres, appels réels et textures Phaser : voir « Tests à mener par le propriétaire ».
+- [x] Fermés le 2026-11-01 au soir, en service : restauration ne rend plus aucun caractère d'un secret ;
+      tdfc s'installe par `npm ci` ; `create-app-client.sh` masque toujours les secrets de son résumé ;
+      carte « console Keycloak » retirée de lab-admin.
 - [ ] Ouverts, hors de ce chantier :
   - le runner monte tout le dépôt (R1) ;
-  - restauration rend les 4 derniers caractères d'un secret ;
-  - le frontend de tdfc s'installe par `npm install` ;
   - GitHub App pour oauth-hub ;
   - `manage-users` de restauration à restreindre par les permissions fines de Keycloak 26 ;
-  - `create-app-client.sh` affiche les secrets en clair ;
-  - la carte « console Keycloak » de lab-admin ne mène plus nulle part ;
   - `code-server`, `carto-ogc` : clients confidentiels, joker retiré, mais aucun PKCE ;
   - `dev2/`.
 - [ ] Le 2026-11-08 : fin de la fenêtre de retour arrière de Keycloak (PROCEDURE.md § 6).
@@ -352,7 +354,7 @@ guides par public.
   - `app-test.sh:35,107` ;
   - `setup2.sh:15`.
 - [ ] `scripts/verify-setup2-routine.md` (prompt de juillet, obsolète) et `infra/setup-keycloak-pgadmin.sh` (plus appelé) : à supprimer après un grep de confirmation.
-- [ ] Dépôt public : `chantiers/app-builder-lab/`, `essai-dev/` et `webcams/` ne sont ni suivis ni ignorés (l'exclusion des autres vit dans `.git/info/exclude`, local à la machine). Les ajouter à `.gitignore` (`chantiers/*`), sinon un `git add -A` publierait des rapports de défauts.
+- [x] (fait : `chantiers/*` est dans `.gitignore`) Dépôt public : `chantiers/app-builder-lab/`, `essai-dev/` et `webcams/` ne sont ni suivis ni ignorés (l'exclusion des autres vit dans `.git/info/exclude`, local à la machine). Les ajouter à `.gitignore` (`chantiers/*`), sinon un `git add -A` publierait des rapports de défauts.
 - [ ] Branche `worktree-agent-a92726caa5e3e0dce` d'app-builder, déjà fusionnée.
 - [ ] `KEYCLOAK_URL` : `reset_url.sh` l'écrit dans chaque `.env` en `http://<IP WAN>:8080`, adresse morte
       depuis que 8080 n'est lié qu'à `127.0.0.1`. Aucune app ne la lit (vérifié le 2026-11-01) : retirer la clé

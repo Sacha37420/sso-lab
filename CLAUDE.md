@@ -1163,7 +1163,11 @@ perte (comptes, secrets, clé de signature identiques). Procédure et essais :
   « ✓ … client(s) public(s) portent nonce-keycloak-js-22 ».
 - **La console d'administration et le realm `master` ne sont plus servis par Caddy** (404).
   L'API REST `/auth/admin/realms/*` l'est encore (restauration et peripheriques l'appellent par
-  l'URL publique). Console : tunnel SSH vers `localhost:8080`.
+  l'URL publique). **La console ne s'ouvre pas non plus par tunnel** (constaté le 2026-11-01) :
+  servie sur `localhost:8080/admin/master/console/`, elle envoie la connexion vers
+  `authServerUrl` = l'adresse publique, où `realms/master` répond 404. Piste, à faire en présence
+  du propriétaire (redémarre Keycloak) : `KC_HOSTNAME_ADMIN=http://localhost:8080`. D'ici là,
+  administrer par l'API (`docker exec keycloak /opt/keycloak/bin/kcadm.sh …`).
 - Hostname v2 : `KC_HOSTNAME=${KEYCLOAK_HOSTNAME_URL}` (URL complète, `/auth` compris),
   `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`, `KC_PROXY_HEADERS=xforwarded`. `KC_HOSTNAME_URL`,
   `KC_PROXY`, `KC_HOSTNAME_STRICT*` n'existent plus.

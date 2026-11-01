@@ -1442,15 +1442,12 @@ if $NO_ENV; then
   fi
 else
   echo "  $APP_ENV :"
-  # LAB_JOURNAL_REDACT=1 (posé par setup2.sh/setup_unit.sh pour l'app d'un
-  # développeur, dont le journal lui est relayé) : les valeurs de secrets sont
-  # masquées. Elles restent dans le .env, où le conteneur les lit.
-  if [[ "${LAB_JOURNAL_REDACT:-}" == "1" ]]; then
-    grep -E "^KEYCLOAK_|^PORT_KEYCLOAK" "$APP_ENV" 2>/dev/null \
-      | sed -E -e 's/^([A-Z_]*(SECRET|PASSWORD|TOKEN)[A-Z_]*)=.*/\1=(masqué)/' -e 's/^/  /'
-  else
-    grep -E "^KEYCLOAK_|^PORT_KEYCLOAK" "$APP_ENV" 2>/dev/null | sed 's/^/  /'
-  fi
+  # Les valeurs de secrets sont TOUJOURS masquées (2026-11-01) : ce journal est relayé au
+  # développeur (setup2.sh/setup_unit.sh) et se retrouve dans les journaux de session. Elles
+  # restent dans le .env, où le conteneur les lit. LAB_JOURNAL_REDACT ne joue plus que pour
+  # --no-env, où ce résumé est le seul endroit où lire le secret d'un client confidentiel.
+  grep -E "^KEYCLOAK_|^PORT_KEYCLOAK" "$APP_ENV" 2>/dev/null \
+    | sed -E -e 's/^([A-Z_]*(SECRET|PASSWORD|TOKEN)[A-Z_]*)=.*/\1=(masqué)/' -e 's/^/  /'
 fi
 echo "─────────────────────────────────────────────────────────────"
 echo ""
