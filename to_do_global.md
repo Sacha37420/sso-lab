@@ -21,6 +21,55 @@ commande de test.
 
 ---
 
+## Tests à mener par le propriétaire (liste tenue à jour)
+
+Ne restent ici que les vérifications que la machine ne peut pas faire : un compte humain, de vraies
+clés, un vrai site, du matériel ou un coût. Ce que `lab-runner` sait vérifier avec les comptes de
+test est fait, et coché dans la feuille de route de l'app.
+
+**Fait par la machine le 2026-11-01**, sur les 16 apps et avec `e2e_member`, sans rien laisser derrière :
+- PKCE S256 à la connexion ;
+- un lien direct revient sur sa page après la connexion ;
+- polices WOFF2 en 200 ;
+- aucune requête avec `token=` ;
+- `Authorization` envoyé seulement à l'API de l'app (plus storage pour craft-lab, le moteur et
+  app-builder pour lab-admin) ;
+- une photo d'atelier-3d et les icônes de craft-lab s'affichent par `blob:` ;
+- le média d'un arbre privé est lu par son propriétaire et refusé à un autre compte (404) ;
+- le relais de craft-lab ne voit ni `DB_` ni `SECRET` ;
+- les clés déjà enregistrées côté serveur (code-route, craft-lab, restauration, robot-lab) se
+  déchiffrent toutes.
+
+**Après le chantier « failles »**
+- [ ] Te connecter avec ton compte (et ton OTP s'il y en a un) à deux ou trois apps : Keycloak 26.
+- [ ] Ressaisir une fois les clés qui étaient gardées dans le navigateur, puis faire un appel réel
+      avec chacune :
+  - app-builder : clés Claude et Mistral, une conversation ;
+  - traitement-de-fichiers-compils : clé OCR Mistral, un OCR ;
+  - carto-lab : clé Météo-France, la page Météo ;
+  - arbre-genealogique : identifiants des fournisseurs externes, une recherche.
+- [ ] Un appel IA réel dans code-route (génération), craft-lab et robot-lab ; un appel Météo-France
+      dans restauration. Leurs clés se lisent, mais aucun appel n'a été fait.
+- [ ] craft-lab : une partie multijoueur, textures Phaser en jeu.
+- [ ] robot-lab : une session sur un vrai site HTTPS (le proxy de sortie de l'engine).
+- [ ] Ouvrir la console Keycloak par tunnel (`ssh -L 8080:localhost:8080 …`) : Caddy ne la sert plus.
+- [ ] **Le 2026-11-08** : fin de la fenêtre de retour arrière de Keycloak (PROCEDURE.md § 6), et fin
+      du gel. Ensuite, faire tourner le mot de passe PostgreSQL (`rotate-db-password.sh`) : il est
+      apparu dans un journal de session.
+
+**Dans les apps** (détail dans leur feuille de route)
+- [ ] peripheriques : direct H.264, WebRTC depuis le WAN, révocation pendant une lecture, HD USB Camera.
+- [ ] code-route : les 8 scénarios de `route-robot.md` (lot 2).
+- [ ] traitement-de-fichiers-compils : partage à un destinataire puis retrait ; recadrage, filtres, PDF (lot 3).
+- [ ] carto-lab : QGIS ouvre une couche publiée (lot 2).
+- [ ] storage : glisser depuis le bureau, tactile, lecteur d'écran.
+
+**Lab multi-dev** (T10) : redémarrage de l'hôte et règles `lws`, webhook push, ticket et commits
+GitHub, `me/init` d'un compte neuf, pgAdmin personnel, conversation Claude et Vibe, `lab-essai`,
+création d'un projet avec graine App Builder jusqu'au déploiement.
+
+---
+
 ## État au 2026-11-01, après le chantier « failles » (`chantiers/failles/`)
 
 Les 16 failles F1 à F16 du contrat sont corrigées et **en service** ; tout est commité et poussé.
@@ -43,10 +92,8 @@ Les 16 failles F1 à F16 du contrat sont corrigées et **en service** ; tout est
 - [x] **F16** : secret du compte de service d'arbre-genealogique régénéré.
 
 **Reste**
-- [ ] À vérifier en navigateur réel :
-  - images d'atelier-3d, d'arbre-genealogique et de craft-lab, textures Phaser ;
-  - pages des coffres, où il faut ressaisir chaque clé ;
-  - un appel OCR réel, un appel Météo-France et un appel IA.
+- [x] Images d'atelier-3d, d'arbre-genealogique et de craft-lab : vérifiées le 2026-11-01 (`lab-runner`).
+      Coffres, appels réels et textures Phaser : voir « Tests à mener par le propriétaire ».
 - [ ] Ouverts, hors de ce chantier :
   - le runner monte tout le dépôt (R1) ;
   - restauration rend les 4 derniers caractères d'un secret ;
@@ -140,8 +187,8 @@ en service ».
 - [ ] Feuille de route de chaque app, au format machine. **Écrite par cette analyse** : à relire,
       puis à commiter dans chaque sous-module (voir § 4).
 - [ ] `validate-app.sh` :
-  - [ ] la règle `[service-account]` compte les commentaires comme des rôles (faux positif sur atelier-3d) ;
-  - [ ] exemption déclarée du cloisonnement (`cloisonnement : aucun — <raison>` dans la feuille de
+  - [x] la règle `[service-account]` compte les commentaires comme des rôles (faux positif sur atelier-3d) — corrigé le 2026-11-01, même lecture que `create-app-client.sh` ;
+  - [x] (2026-11-01, réservée aux apps du superutilisateur, lignes posées dans les deux feuilles de route) exemption déclarée du cloisonnement (`cloisonnement : aucun — <raison>` dans la feuille de
         route) pour arbre-genealogique et traitement-de-fichiers-compils, aujourd'hui refusées
         par `validate-app.sh:96`.
 - [ ] Mises en conformité côté apps, détaillées dans leurs feuilles de route :
@@ -307,6 +354,9 @@ guides par public.
 - [ ] `scripts/verify-setup2-routine.md` (prompt de juillet, obsolète) et `infra/setup-keycloak-pgadmin.sh` (plus appelé) : à supprimer après un grep de confirmation.
 - [ ] Dépôt public : `chantiers/app-builder-lab/`, `essai-dev/` et `webcams/` ne sont ni suivis ni ignorés (l'exclusion des autres vit dans `.git/info/exclude`, local à la machine). Les ajouter à `.gitignore` (`chantiers/*`), sinon un `git add -A` publierait des rapports de défauts.
 - [ ] Branche `worktree-agent-a92726caa5e3e0dce` d'app-builder, déjà fusionnée.
+- [ ] `KEYCLOAK_URL` : `reset_url.sh` l'écrit dans chaque `.env` en `http://<IP WAN>:8080`, adresse morte
+      depuis que 8080 n'est lié qu'à `127.0.0.1`. Aucune app ne la lit (vérifié le 2026-11-01) : retirer la clé
+      des `.env`, des gabarits et de `reset_url.sh`.
 
 ### T9 — Le moteur n'a jamais joué le cloisonnement de la plupart des apps · P2 · S
 

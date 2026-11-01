@@ -93,7 +93,17 @@ quality_gates() {
   elif ! grep -qE '^## Lot [0-9]+ — .+·[[:space:]]*statut : (à faire|en cours|livré)[[:space:]]*$' "$fdr"; then
     refuse feuille-de-route "FEUILLE_DE_ROUTE.md ne contient aucun lot au format « ## Lot <N> — <titre>   ·   statut : à faire | en cours | livré »"
   fi
-  if [[ -d "$APP_DIR/frontend" && ! -f "$APP_DIR/frontend/e2e/cloisonnement.spec.ts" ]]; then
+  # Exemption déclarée (arbre-genealogique, traitement-de-fichiers-compils : protection tenue
+  # par l'API, voir CLAUDE.md « Tests ») : une ligne « cloisonnement : aucun — <raison> » dans la
+  # feuille de route. Réservée aux apps du superutilisateur : un développeur ne soustrait pas
+  # lui-même son app au test.
+  local exempt=""
+  if [[ -f "$fdr" && ! -L "$fdr" && ( -z "$OWNER" || "$OWNER" == "$SUPERUSER" ) ]]; then
+    exempt="$(grep -m1 -E '^cloisonnement : aucun — .{10,}$' "$fdr" || true)"
+  fi
+  if [[ -d "$APP_DIR/frontend" && ! -f "$APP_DIR/frontend/e2e/cloisonnement.spec.ts" && -n "$exempt" ]]; then
+    warn "pas de test de cloisonnement, exemption déclarée : ${exempt#cloisonnement : aucun — }"
+  elif [[ -d "$APP_DIR/frontend" && ! -f "$APP_DIR/frontend/e2e/cloisonnement.spec.ts" ]]; then
     refuse cloisonnement "frontend/e2e/cloisonnement.spec.ts absent — une app avec frontend a son test de cloisonnement (à copier de _templates/django-angular/frontend/e2e/)"
   fi
 }
@@ -192,7 +202,9 @@ fi
 SA_FILE="$APP_DIR/.keycloak-service-account-roles"
 if [[ -L "$SA_FILE" ]]; then
   refuse service-account ".keycloak-service-account-roles est un lien symbolique"
-elif [[ -e "$SA_FILE" ]] && grep -q '[^[:space:]]' "$SA_FILE" 2>/dev/null; then
+# Même lecture que create-app-client.sh : tout ce qui suit « # » est un commentaire, une ligne
+# qui ne contient rien d'autre ne donne aucun rôle (sinon faux positif sur atelier-3d).
+elif [[ -e "$SA_FILE" ]] && sed 's/[[:space:]]*#.*//' "$SA_FILE" 2>/dev/null | grep -q '[^[:space:]]'; then
   refuse service-account ".keycloak-service-account-roles n'est pas vide — il donnerait des rôles realm-management (administration du realm)"
 fi
 

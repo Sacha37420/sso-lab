@@ -94,9 +94,19 @@ if [[ "$BEFORE" != "$AFTER" ]]; then
 fi
 
 # Tous les conteneurs doivent tourner (ou s'être terminés normalement : tâche d'initialisation).
-BAD="$(docker ps -a --filter "label=com.docker.compose.project=${APP}" \
-         --format '{{.Label "com.docker.compose.service"}}\t{{.State}}\t{{.Status}}' 2>/dev/null \
-       | awk -F'\t' '$2 != "running" && !($2 == "exited" && $3 ~ /^Exited \(0\)/) { print $1 " (" $2 ")" }' | tr '\n' ' ')"
+# Un conteneur peut être encore « created » ou « restarting » quand `up` rend la main (vu sur
+# craft-lab : le backend attendait la fin du `migrate` d'un autre service) : on laisse jusqu'à
+# 90 s aux états transitoires avant de juger, sans jamais attendre un état final.
+not_running() {
+  docker ps -a --filter "label=com.docker.compose.project=${APP}" \
+    --format '{{.Label "com.docker.compose.service"}}\t{{.State}}\t{{.Status}}' 2>/dev/null \
+  | awk -F'\t' '$2 != "running" && !($2 == "exited" && $3 ~ /^Exited \(0\)/) { print $1 " (" $2 ")" }' | tr '\n' ' '
+}
+for _ in $(seq 1 45); do
+  BAD="$(not_running)"
+  [[ "$BAD" =~ \((created|restarting)\) ]] || break
+  sleep 2
+done
 [[ -z "$BAD" ]] || die "après redémarrage, ces services ne tournent pas : $BAD"
 
 log "✓ $APP redémarrée : $(wc -l <<< "$AFTER" | tr -d ' ') service(s), mêmes images qu'avant."

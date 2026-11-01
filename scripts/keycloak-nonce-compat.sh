@@ -25,6 +25,14 @@ SSO_ENV="${SSO_ENV:-$ROOT/sso-lab/.env}"
 _v() { grep -E "^$1=" "$SSO_ENV" | head -1 | cut -d= -f2- | sed -e 's/[[:space:]]*#.*//' -e "s/^['\"]//" -e "s/['\"]\$//"; }
 KC_URL="${KC_URL:-http://localhost:$(_v PORT_KEYCLOAK)}"
 REALM=ssolab SCOPE=nonce-keycloak-js-22
+# Juste après un démarrage, Keycloak peut répondre avant d'être prêt : sous `set -e`, un
+# `curl -sf` raté dans une substitution arrêtait le script SANS AUCUN MESSAGE (vu le
+# 2026-11-01). D'où l'attente du realm, et un message pour toute sortie sur erreur.
+trap 'echo "✗ échec à la ligne $LINENO (Keycloak pas prêt ?) — relancer le script" >&2' ERR
+for _ in $(seq 1 60); do
+  curl -sf -o /dev/null "$KC_URL/realms/$REALM/.well-known/openid-configuration" && break
+  sleep 2
+done
 TOKEN="$(curl -sf --data-urlencode client_id=admin-cli --data-urlencode grant_type=password \
   --data-urlencode "username=$(_v KEYCLOAK_ADMIN)" --data-urlencode "password@/dev/fd/3" \
   "$KC_URL/realms/master/protocol/openid-connect/token" 3< <(printf '%s' "$(_v KEYCLOAK_ADMIN_PASSWORD)") | jq -r '.access_token // empty')"

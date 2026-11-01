@@ -91,6 +91,9 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
   requis) et `traitement-de-fichiers-compils` (page publique en `check-sso`, atelier dans le
   navigateur) — leur protection est entièrement dans l'API, tenue par leurs tests backend.
   Pour elles le runner répond `[]`, ce qui veut dire « aucun test », jamais « tout va bien ».
+  Leur feuille de route porte la ligne `cloisonnement : aucun — <raison>`, que `validate-app.sh`
+  accepte (avertissement) **pour une app du superutilisateur seulement** (2026-11-01) : un
+  développeur ne soustrait pas lui-même son app au test.
 - `carto-lab` teste par `--settings=config.settings_test` (base clonée de `template_postgis` :
   créer l'extension demande un superutilisateur ; la migration du rôle lecteur y est neutralisée).
 - Pour lancer une suite sans tenir le verrou de déploiement ni toucher une base du lab :
