@@ -323,7 +323,7 @@ parenthèses), sur MediaMTX 1.21.1, avec deux apps fictives et des sources synth
 | Hook d'app en `https://` | codé |
 | Lecture RTSP par jeton en mot de passe | prouvé (L9, L10) |
 | Lecture WHEP : signalisation, ICE, média (octets émis en hausse), à travers Caddy | prouvé avec un client WHEP non navigateur (W1, W3) |
-| **Image vidéo H.264 dans un vrai navigateur** | **non prouvé** : à valider par l'utilisateur à la bascule |
+| **Image vidéo H.264 dans un vrai navigateur** | **non prouvé** : à valider par l'utilisateur (lot 3 de `peripheriques`) |
 | `GET /v1/devices` : héritée seule au départ ; forme complète ; tri ; autre app → `[]` et 404 ; sans identifiants → 401 | prouvé (M0–M0d, M2, M5, M7) |
 | Découverte au branchement, capture, `live` ; vidéo seule sans micro (pas de chemin audio, `av` en H.264 seul) ; avec micro : `av` H.264 + Opus | prouvé (M1, M3, M6) sur faux matériel, mode mire |
 | Plafond : 3ᵉ webcam `waiting` ; dix d'un coup ⇒ toujours 2 ffmpeg ; pas de préemption | prouvé (M8, M25, M32, M37) |
@@ -334,4 +334,4 @@ parenthèses), sur MediaMTX 1.21.1, avec deux apps fictives et des sources synth
 | `webcam-ancienne` : jamais capturée, anciens enregistrements relisibles | prouvé (M41, M29) |
 | Nom de produit et numéro de série hostiles : rien d'exécuté, jamais au journal ; mot de passe de publication masqué dans le journal de ffmpeg | prouvé (M4, M39, J3, J4) ; tests unitaires |
 | `state: error` (capture absente ou en échec depuis plus de 20 s) | codé ; tests unitaires seulement |
-| Capture d'une vraie webcam (V4L2, MJPEG 1280x720, repli sur le format du pilote), micro USB réel (`plughw`) | **non prouvé** : essai réel à faire à l'intégration |
+| Capture d'une vraie webcam (V4L2, MJPEG 1280x720, repli sur le format du pilote), micro USB réel (`plughw`) | **prouvé en service** pour la vidéo : deux HD USB Camera capturées et enregistrées heure par heure (constaté le 2026-11-01) ; micro réel non relevé |

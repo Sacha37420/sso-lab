@@ -459,7 +459,7 @@ sont ici.
 
 État : la brique la mieux prouvée (`verify.sh` à 149 contrôles, tests unitaires).
 
-- [ ] **LM1 · P3** :
+- [ ] **LM1 · P3** (2026-11-01 : capture réelle notée prouvée, réglages du lab dans le README ; restent H.264 en navigateur, l'archivage de §5 et de `BASCULE.md`) :
   - `API.md` §6 indique encore « non prouvé » pour H.264 en navigateur et pour la capture réelle, alors que c'est validé par le propriétaire ;
   - archiver `API.md` §5 et `lab-media/BASCULE.md` (procédures terminées) ;
   - dire dans le README que le service tourne à `MEDIA_CAPTURE_MAX=3` et `FPS=8`, contre 2 et 15 par défaut.
