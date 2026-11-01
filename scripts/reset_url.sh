@@ -330,6 +330,15 @@ while IFS= read -r envfile; do
     [[ -n "$POSTGIS_PASSWORD" ]] && upsert_env "$envfile" POSTGIS_PASSWORD "$POSTGIS_PASSWORD"
   fi
   upsert_env "$envfile" DOMAIN               "$DOMAIN"
+  # Adresse des ports publiés (« ${LAB_BIND_ADDR:-127.0.0.1}:<hôte>:<conteneur> »,
+  # chantier « failles ») : absente ⇒ 127.0.0.1, tout passe par Caddy. Posée à
+  # 0.0.0.0 seulement en HTTP local sans domaine, où l'on joint les apps par IP:port.
+  if [[ "$DOMAIN" == "CHANGE_ME" || -z "$DOMAIN" ]]; then
+    grep -qE '^LAB_BIND_ADDR=' "$envfile" || printf '\nLAB_BIND_ADDR=0.0.0.0\n' >> "$envfile"
+    upsert_env "$envfile" LAB_BIND_ADDR 0.0.0.0
+  else
+    sed -i '/^LAB_BIND_ADDR=/d' "$envfile"
+  fi
   upsert_env "$envfile" ACME_EMAIL           "$ACME_EMAIL"
   upsert_env "$envfile" HOST_DEV_ROOT        "$HOST_DEV_ROOT"
   # Contrat multi-dev (I1/I3) : superutilisateur et dossier d'état (clés SSH,

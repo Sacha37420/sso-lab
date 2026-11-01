@@ -278,6 +278,15 @@ def main():
                                 f"({', '.join(sorted(allowed_ports)) or 'aucun port réservé'})")
             if isinstance(port, dict) and port.get("mode") not in (None, "ingress"):
                 refuse("ports", f"{where} : mode de publication « {port.get('mode')} » non autorisé")
+            # Avec un domaine, tout passe par Caddy : un port publié ne sert qu'à l'hôte
+            # lui-même. Lié à toutes les interfaces, il laissait le LAN contourner Caddy
+            # (chantier « failles », 2026-10-31). Forme attendue :
+            # "${LAB_BIND_ADDR:-127.0.0.1}:<hôte>:<conteneur>" ; LAB_BIND_ADDR n'est posée
+            # (0.0.0.0) que par reset_url.sh, en HTTP local sans domaine.
+            host_ip = port.get("host_ip") if isinstance(port, dict) else None
+            if domain not in ("", "CHANGE_ME") and host_ip != "127.0.0.1":
+                refuse("ports", f"{where} : port publié {published} lié à « {host_ip or 'toutes les interfaces'} » ; "
+                                "avec un domaine, seulement 127.0.0.1 (\"${LAB_BIND_ADDR:-127.0.0.1}:<hôte>:<conteneur>\")")
 
         # networks du service
         svc_nets = svc.get("networks") or {}

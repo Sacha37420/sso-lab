@@ -1,24 +1,33 @@
 import { HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
-import { from, switchMap } from 'rxjs';
+import { from, switchMap, catchError } from 'rxjs';
 import { KeycloakService } from './keycloak.service';
+import { tokenBases } from './env';
+import { carriesToken } from './token-scope';
 
 /**
- * Intercepteur HTTP qui renouvelle le token Keycloak si nécessaire,
- * puis injecte le Bearer dans l'en-tête Authorization de chaque requête.
+ * Joint le jeton de l'utilisateur aux appels vers les API de `tokenBases()` —
+ * et à elles seules. Une requête vers toute autre adresse part telle quelle,
+ * sans jeton.
  */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
-  const kc = inject(KeycloakService);
+  if (!carriesToken(req.url, tokenBases(), window.location.origin)) return next(req);
 
-  return from(kc.updateToken(30)).pipe(
+  const kc = inject(KeycloakService);
+  const token = kc.getToken();
+
+  // Chemin synchrone : token présent et valide — aucune attente async
+  if (token && !kc.isTokenExpired(30)) {
+    return next(req.clone({ setHeaders: { Authorization: `Bearer ${token}` } }));
+  }
+
+  // Chemin async : token expiré ou absent — tentative de refresh
+  return from(kc.updateToken(-1)).pipe(
     switchMap(() => {
-      const token = kc.getToken();
-      if (token) {
-        req = req.clone({
-          setHeaders: { Authorization: `Bearer ${token}` },
-        });
-      }
+      const fresh = kc.getToken();
+      if (fresh) req = req.clone({ setHeaders: { Authorization: `Bearer ${fresh}` } });
       return next(req);
     }),
+    catchError(() => next(req)),
   );
 };

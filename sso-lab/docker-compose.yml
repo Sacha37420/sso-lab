@@ -111,7 +111,7 @@ services:
       - ldap-config:/etc/ldap/slapd.d
       - ./ldap/init.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/init.ldif
     ports:
-      - "${PORT_LDAP}:${PORT_LDAP}"
+      - "${LAB_BIND_ADDR:-127.0.0.1}:${PORT_LDAP}:${PORT_LDAP}"
     networks:
       - sso-net
     command: ["--copy-service", "--loglevel", "warning"]
@@ -128,7 +128,7 @@ services:
       PHPLDAPADMIN_LDAP_HOSTS: "openldap"
       PHPLDAPADMIN_HTTPS: "false"
     ports:
-      - "${PORT_PHPLDAPADMIN}:80"
+      - "${LAB_BIND_ADDR:-127.0.0.1}:${PORT_PHPLDAPADMIN}:80"
     networks:
       - sso-net
     depends_on:
@@ -163,7 +163,7 @@ services:
       # → invalid_redirect_uri → la console reste bloquée sur "Loading the Admin UI".
       KC_HOSTNAME_ADMIN_URL: "${KEYCLOAK_HOSTNAME_URL}"
     ports:
-      - "${PORT_KEYCLOAK}:8080"
+      - "${LAB_BIND_ADDR:-127.0.0.1}:${PORT_KEYCLOAK}:8080"
     networks:
       - sso-net
     depends_on:

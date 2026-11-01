@@ -255,6 +255,11 @@ fresh_env() {  # fresh_env <dossier de l'unité>
       key="${BASH_REMATCH[1]}"
       case "$key" in
         DB_PASSWORD|POSTGIS_PASSWORD|KEYCLOAK_*|OAUTH_HUB_ENCRYPTION_KEY|CODE_SERVER_*|LDAP_*|POSTGRES_PASSWORD|PGADMIN_*|BBOX_*|SMTP_*) ;;
+        VAULT_ENCRYPTION_KEY)
+          # Clé Fernet (32 octets en base64 urlsafe) : une chaîne alphanumérique ne
+          # serait pas acceptée par cryptography et l'app ne démarrerait pas.
+          val="$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+          line="${key}=${val}" ;;
         *KEY*|*SECRET*|*PASSWORD*)
           val="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 50 || true)"
           line="${key}=${val}" ;;

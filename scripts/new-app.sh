@@ -695,7 +695,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "${port}:8080"
+      - "\${LAB_BIND_ADDR:-127.0.0.1}:${port}:8080"
     networks:
       - sso-net
       - dev-net
@@ -729,7 +729,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "${port}:8000"
+      - "\${LAB_BIND_ADDR:-127.0.0.1}:${port}:8000"
     networks:
       - sso-net
       - dev-net
@@ -772,7 +772,7 @@ services:
       PORT_BACKEND: \${PORT_BACKEND:-}
       PORT_FRONTEND: \${PORT_FRONTEND:-}
     ports:
-      - "${port}:80"
+      - "\${LAB_BIND_ADDR:-127.0.0.1}:${port}:80"
     networks:
       - sso-net
     labels:
@@ -804,7 +804,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "${bport}:8080"
+      - "\${LAB_BIND_ADDR:-127.0.0.1}:${bport}:8080"
     networks:
       - sso-net
       - dev-net
@@ -828,7 +828,7 @@ services:
       PORT_BACKEND: \${PORT_BACKEND:-}
       PORT_FRONTEND: \${PORT_FRONTEND:-}
     ports:
-      - "${fport}:80"
+      - "\${LAB_BIND_ADDR:-127.0.0.1}:${fport}:80"
     networks:
       - sso-net
     labels:
@@ -860,7 +860,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "${bport}:8000"
+      - "\${LAB_BIND_ADDR:-127.0.0.1}:${bport}:8000"
     networks:
       - sso-net
       - dev-net
@@ -884,7 +884,7 @@ services:
       PORT_BACKEND: \${PORT_BACKEND:-}
       PORT_FRONTEND: \${PORT_FRONTEND:-}
     ports:
-      - "${fport}:80"
+      - "\${LAB_BIND_ADDR:-127.0.0.1}:${fport}:80"
     networks:
       - sso-net
     labels:

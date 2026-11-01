@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import Keycloak from 'keycloak-js';
+import { loginRedirectUri } from './redirect-uri';
 
 interface EnvWindow {
   __env?: {
@@ -29,12 +30,15 @@ export class KeycloakService {
       clientId: env.keycloakClientId ?? '__APP_NAME__',
     });
 
-    const redirectUri = env.appUrl ?? window.location.origin;
+    // La page demandée, limitée à l'origine et au préfixe de l'app
+    // (`redirect-uri.ts`) ; sinon `appUrl`.
+    const redirectUri = loginRedirectUri(window.location.href, env.appUrl, window.location.origin);
 
     return this.kc.init({
       onLoad:           'login-required',
       checkLoginIframe: false,
       redirectUri,
+      pkceMethod:       'S256',
     });
   }
 

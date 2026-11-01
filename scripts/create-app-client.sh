@@ -30,6 +30,8 @@
 #                            --native-redirect 'http://127.0.0.1:8765/callback'
 #                            Implique --pkce (voir ci-dessous).
 #   --pkce / --no-pkce     Force / retire l'exigence PKCE S256 sur le client.
+#   --prune-uris           Remplace les redirect URIs et web origins par la liste
+#                            calculée (plus de joker « * », plus d'ancienne IP).
 #   --exact-groups         Les groupes de --require-group REMPLACENT ceux que le
 #                            client portait : le rôle <client>-access est retiré
 #                            à tout groupe (et à tout compte) qui n'est pas dans
@@ -86,6 +88,7 @@ usage() {
   echo "  --require-group <g>    Crée un rôle realm <g>-member et l'assigne au groupe <g>"
   echo "  --native-redirect <u>  URI de rappel ajoutée telle quelle (répétable, implique --pkce)"
   echo "  --pkce | --no-pkce     Force / retire l'exigence PKCE S256"
+  echo "  --prune-uris           Remplace les URIs par la liste calculée (retire « * »)"
   echo "  --no-env               N'écrit aucun <app>/.env (client sans dossier d'app)"
   echo "  --exact-groups         Les groupes de --require-group remplacent ceux du client"
   echo ""
@@ -180,6 +183,7 @@ declare -a NATIVE_REDIRECTS=()
 NO_ENV=false
 # vide = « laisser tel quel » ; true/false = décision explicite
 PKCE_CHOICE=""
+PRUNE_URIS=false
 EXACT_GROUPS=false
 
 while [[ $# -gt 0 ]]; do
@@ -198,6 +202,7 @@ while [[ $# -gt 0 ]]; do
     --exact-groups)    EXACT_GROUPS=true ;;
     --pkce)            PKCE_CHOICE="true" ;;
     --no-pkce)         PKCE_CHOICE="false" ;;
+    --prune-uris)      PRUNE_URIS=true ;;
     --caddy-path)      [[ $# -gt 1 ]] || die "--caddy-path requiert une valeur"; CADDY_PATH="$2"; shift ;;
     --caddy-subdomain) [[ $# -gt 1 ]] || die "--caddy-subdomain requiert une valeur"; CADDY_PATH="$2"; shift ;;  # alias rétrocompat
     --help|-h)         usage ;;
@@ -801,8 +806,8 @@ else
       standardFlowEnabled:       true,
       directAccessGrantsEnabled: false,
       serviceAccountsEnabled:    false,
-      redirectUris:              ["*"],
-      webOrigins:                ["*"],
+      redirectUris:              [],
+      webOrigins:                [],
       attributes: { "post.logout.redirect.uris": "+" }
     }')
 
@@ -876,8 +881,13 @@ CLIENT_JSON=$(curl -sf \
 declare -a DESIRED_URIS=()
 declare -a DESIRED_ORIGINS=()
 
+# Avec un domaine, les ports des apps ne sont liés qu'à 127.0.0.1 (chantier
+# « failles », 2026-10-31) : une URI en IP LAN ou WAN ne mène plus nulle part.
+_ROOT_ENV="$(cd "$(dirname "$0")/.." && pwd)/.env"
+_DOMAIN=$(_env_val "$_ROOT_ENV" "DOMAIN" "CHANGE_ME")
+if [[ "$_DOMAIN" != "CHANGE_ME" && -n "$_DOMAIN" ]]; then _IP_HOSTS=(); else _IP_HOSTS=(${LAN_IP:+"$LAN_IP"} ${WAN_IP:+"$WAN_IP"}); fi
 if [[ -n "$APP_PORT" ]]; then
-  for _host in "localhost" ${LAN_IP:+"$LAN_IP"} ${WAN_IP:+"$WAN_IP"}; do
+  for _host in "localhost" ${_IP_HOSTS[@]+"${_IP_HOSTS[@]}"}; do
     DESIRED_URIS+=("http://${_host}:${APP_PORT}${REDIRECT_PATH}")
     DESIRED_ORIGINS+=("http://${_host}:${APP_PORT}")
   done
@@ -894,8 +904,6 @@ done
 
 # URIs HTTPS via Caddy — ajoutées si --caddy-path est fourni et DOMAIN configuré
 if [[ -n "$CADDY_PATH" ]]; then
-  _ROOT_ENV="$(cd "$(dirname "$0")/.." && pwd)/.env"
-  _DOMAIN=$(_env_val "$_ROOT_ENV" "DOMAIN" "CHANGE_ME")
   if [[ "$_DOMAIN" != "CHANGE_ME" && -n "$_DOMAIN" ]]; then
     DESIRED_URIS+=("https://${_DOMAIN}/${CADDY_PATH}${REDIRECT_PATH}")
     DESIRED_ORIGINS+=("https://${_DOMAIN}")
@@ -924,19 +932,27 @@ fi
 #   aujourd'hui sur ce joker pour les accès LAN/WAN non calculés, les purger
 #   tous ici couperait des accès en service sans prévenir.
 if [[ ${#NATIVE_REDIRECTS[@]} -gt 0 ]]; then STRICT_URIS=true; else STRICT_URIS=false; fi
+# --prune-uris : la liste calculée REMPLACE l'existante (joker, anciennes IP WAN,
+# chemins abandonnés). Refusé si elle est vide : un client sans aucune URI ne
+# laisserait plus personne se connecter.
+if $PRUNE_URIS && [[ "$DESIRED_URIS_JSON" == "[]" ]]; then
+  die "--prune-uris : aucune URI calculée (ni --port, ni --caddy-path avec DOMAIN, ni --native-redirect)"
+fi
 
 # Fusionner avec les URIs existantes (union sans doublons)
 NEW_URIS_JSON=$(echo "$CLIENT_JSON" | jq \
   --argjson d "$DESIRED_URIS_JSON" \
   --argjson strict "$STRICT_URIS" \
-  '((.redirectUris // []) + $d) | unique
-   | if $strict then map(select(. != "*")) else . end')
+  --argjson prune "$PRUNE_URIS" \
+  '(if $prune then $d else ((.redirectUris // []) + $d) end) | unique
+   | if $strict or $prune then map(select(. != "*")) else . end')
 
 NEW_ORIGINS_JSON=$(echo "$CLIENT_JSON" | jq \
   --argjson d "$DESIRED_ORIGINS_JSON" \
   --argjson strict "$STRICT_URIS" \
-  '((.webOrigins // []) + $d) | unique
-   | if $strict then map(select(. != "*" and . != "")) else . end')
+  --argjson prune "$PRUNE_URIS" \
+  '(if $prune then $d else ((.webOrigins // []) + $d) end) | unique
+   | if $strict or $prune then map(select(. != "*" and . != "")) else . end')
 
 # Comparer avec l'existant
 PREV_URIS=$(echo "$CLIENT_JSON"    | jq -Sc '(.redirectUris // []) | sort')

@@ -148,7 +148,7 @@ services:
       - ./pgadmin/config_local.py:/pgadmin4/config_local.py:ro
       - ./pgadmin/docker-entrypoint.sh:/pgadmin4/docker-entrypoint.sh:ro
     ports:
-      - "${PORT_PGADMIN}:80"
+      - "${LAB_BIND_ADDR:-127.0.0.1}:${PORT_PGADMIN}:80"
     networks:
       - dev-net   # pour atteindre postgres:5432 et postgis:5432
       - sso-net   # pour atteindre keycloak:8080 (token endpoint)

@@ -36,3 +36,6 @@ atelier-3d-spike/
 .owners
 # État local : verrou de déploiement, clés de déploiement, enregistrements de déploiement
 .lab-state/
+
+# Contrats et rapports de chantier : ils décrivent des défauts ouverts, et ce dépôt est public.
+chantiers/*
