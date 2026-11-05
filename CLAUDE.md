@@ -1225,6 +1225,21 @@ dossier vide avec un `.env` orphelin que rien ne déployait. Utilisé par `stora
 - **Du code non commité dans le dossier d'une app en service est un déploiement en attente** :
   le sortir sur une branche poussée et revenir à la version en service.
 - Hors vitrine : `peripheriques` n'est pas dans `.app-descriptions`.
+- **Coupure globale** (2026-11-05, chantier `chantiers/webcams-modeles/`) : bouton de la page
+  Droits (`/api/admin/cutoff/`, admins des droits). Active ⇒ le hook refuse toute lecture par jeton
+  Keycloak, les sessions en cours sont expulsées (d'après la liste de lab-media, pas seulement
+  `MediaSession`), chaque webcam qui enregistrait passe à `record=false` et `PATCH record=true` répond
+  409 ; à la levée, exactement ces webcams reprennent. La **relecture reste permise** et la capture
+  tourne toujours (décisions du propriétaire).
+- **Pont vers `google-agenda` de dev2** (seul lien entre les deux cadriciels, hors hôte et
+  edge-router) : `POST /api/bridge/model-cameras/` avec `Authorization: Bridge
+  <PERIPHERIQUES_BRIDGE_KEY>` (même valeur dans `dev2/google-agenda/.env` ; vide ⇒ 404) rend les
+  webcams où le **modèle** (rapproché par email) a la vidéo, et un ticket `pt1.` de 120 s que le
+  navigateur du watcher présente en `Bearer` au WHEP. Le hook l'accepte en WebRTC seulement, revérifie
+  le droit du modèle à chaque ouverture et **ignore la coupure** — voulu. Retirer le droit du modèle
+  coupe aussi ses watchers. Passage par l'adresse publique, jamais un réseau Docker commun
+  (relier `dev2-net` à `dev-net` ouvrirait les bases de dev). Qui administre l'annuaire de dev2
+  décide quel compte porte l'email d'un modèle.
 
 ---
 
