@@ -1,4 +1,4 @@
-# lab-media — API des apps (contrat `chantiers/lab-media`, I3 ; chantier `webcams`, I1 et I2)
+# lab-media — API des apps (contrat `chantiers/lab-media`, I3 ; chantier `webcams`, I1 et I2 ; chantier `haut-parleur`, I1 à I3)
 
 Ce document fait foi pour tout ce qu'une app échange avec `lab-media`. Il est écrit à partir de
 ce que le code rend (`auth/labmediaauth/server.py`) ; chaque forme de réponse ci-dessous est
@@ -8,9 +8,9 @@ Une app a quatre points de contact avec la brique, et seulement ceux-là :
 
 | # | Quoi | Où | Authentifié par |
 |---|---|---|---|
-| 1 | **API de contrôle** (état, sessions, expulsion, relecture, webcams) | `http://lab-media-auth:9100` — `dev-net` seulement | identifiants de contrôle de l'app (HTTP Basic) |
-| 2 | **Hook de lecture** : `lab-media` appelle l'app à chaque demande de lecture | URL de l'app, déclarée au registre | clé de hook de l'app (`?key=`) |
-| 3 | **Lecture par un navigateur** | `https://<DOMAIN>/lab-media-webrtc/<chemin>/whep` et `/lab-media-hls/<chemin>/index.m3u8` | ce que le hook de l'app accepte (un jeton `Bearer`) |
+| 1 | **API de contrôle** (état, sessions, expulsion, relecture, webcams, haut-parleurs) | `http://lab-media-auth:9100` — `dev-net` seulement | identifiants de contrôle de l'app (HTTP Basic) |
+| 2 | **Hook de l'app** : `lab-media` l'appelle à chaque demande de lecture, et à chaque demande de publication WHIP sur un haut-parleur | URL de l'app, déclarée au registre | clé de hook de l'app (`?key=`) |
+| 3 | **Navigateur** : lecture, et parole sur un haut-parleur | `https://<DOMAIN>/lab-media-webrtc/<chemin>/whep`, `/lab-media-hls/<chemin>/index.m3u8` ; `…/lab-media-webrtc/speaker/<id>/whip` | ce que le hook de l'app accepte (un jeton `Bearer`) |
 | 4 | **RTSP** (publier un flux, ou le lire depuis un backend) | `rtsp://lab-media:8554/<chemin>` — `dev-net` | publication : identifiants de publication de l'app ; lecture : le hook de l'app |
 
 L'API et le serveur de relecture de MediaMTX (ports 9997 et 9996) ne sont pas joignables par une
@@ -34,7 +34,8 @@ pas (`404`), sans distinction possible.
 - Erreurs : `{"error": "<code>", "detail": "<phrase>"}`. Codes : `unauthorized` (401),
   `unknown_path` (404), `unknown_session` (404), `unknown_device` (404), `no_recording` (404),
   `not_found` (404, route inconnue), `bad_request` (400), `bad_protocol` (400),
-  `not_a_reader` (409), `legacy` (409), `connected` (409),
+  `not_a_reader` (409), `legacy` (409), `connected` (409), `not_recordable` (409),
+  `not_forgettable` (409),
   `media_unavailable` (502 : MediaMTX injoignable ou réponse inattendue).
 - `GET /healthz` → `200 {"status": "ok"}`, sans authentification (sonde de vie du conteneur ;
   ne dit rien de MediaMTX).
@@ -96,13 +97,15 @@ n'est pas un chemin de l'app ; `400 bad_protocol` si le protocole est inconnu).
 
 Ni `user`, ni `query`, ni `userAgent` ne sont rendus (la query peut porter un jeton).
 
-**`POST /v1/sessions/<protocol>/<id>/kick`** — expulse une session **de lecture**. Corps vide.
+**`POST /v1/sessions/<protocol>/<id>/kick`** — expulse une session **de lecture**, ou une
+**publication sur un haut-parleur** (`speaker/<id>`, chantier haut-parleur I3 : la parole
+s'arrête). Corps vide.
 
 | Réponse | Cas |
 |---|---|
-| `204` | expulsée |
+| `204` | expulsée (lecture, ou publication sur `speaker/*`) |
 | `404 unknown_session` | id inconnu, session déjà terminée, **ou session d'une autre app** |
-| `409 not_a_reader` | la session est une publication : l'API ne coupe pas un flux entrant |
+| `409 not_a_reader` | la session est une publication sur un autre chemin (webcam, app) : l'API ne coupe pas un flux entrant |
 | `400 bad_protocol` | protocole hors `webrtc`, `hls`, `rtsp` |
 
 Une révocation de droit **doit** expulser, dans les deux protocoles : refuser au hook ne coupe
@@ -120,13 +123,15 @@ Les segments contigus sont fusionnés en une plage ; `start`/`end` rognent la li
 
 `duration` en secondes. **Toujours `200`** : `[]` quand rien n'est enregistré (chemin non
 enregistré, jamais publié, ou filtre hors de toute plage). `404 unknown_path` si `path` est absent
-ou n'est pas un chemin de l'app ; `400 bad_request` si `start`/`end` n'est pas un horodatage
+ou n'est pas un chemin de l'app, **ou est un chemin de haut-parleur** (`speaker/*` : jamais
+enregistré, pas de relecture) ; `400 bad_request` si `start`/`end` n'est pas un horodatage
 RFC 3339 **avec fuseau** (`Z` ou `±hh:mm`).
 
 **`GET /v1/recordings/get?path=<chemin>&start=<RFC 3339>&duration=<secondes>[&format=fmp4|mp4]`** —
 le média de la plage, en flux (`Content-Type: video/mp4`, longueur inconnue, la connexion se ferme
 à la fin). `format` vaut `fmp4` par défaut. `404 no_recording` si aucune donnée sur cette plage ;
-`400 bad_request` si `start` ou `duration` est mal formé ; `404 unknown_path` hors de ses chemins.
+`400 bad_request` si `start` ou `duration` est mal formé ; `404 unknown_path` hors de ses chemins
+et sur `speaker/*`.
 Le flux porte **toutes** les pistes du chemin : retirer une piste reste l'affaire de l'app.
 
 ### 1.4 Webcams de l'hôte (chantier webcams, I1)
@@ -170,7 +175,7 @@ de série rebranchée sur un autre port est un nouveau périphérique. L'entrée
 | Champ | Sens |
 |---|---|
 | `id` | identifiant I0 (ou `webcam-ancienne`) |
-| `kind` | toujours `"webcam"` |
+| `kind` | `"webcam"` (les haut-parleurs, `"speaker"`, sont décrits au §1.5) |
 | `model` | nom de produit USB, **texte fourni par l'appareil** : caractères de contrôle et de bidirectionnalité retirés, 100 caractères au plus, jamais interprété. À échapper à l'affichage comme toute donnée externe |
 | `vendor_id`, `product_id` | 4 hexadécimaux minuscules |
 | `serial` | numéro de série tel que lu (nettoyé comme `model`, 64 caractères au plus), `""` s'il n'y en a pas |
@@ -182,7 +187,7 @@ de série rebranchée sur un autre port est un nouveau périphérique. L'entrée
 | `record` | enregistrement de `paths.av` (coupé par défaut ; toujours `false` pour l'héritée) |
 | `first_seen` | première découverte (RFC 3339 à la seconde, fuseau du conteneur) |
 | `last_seen` | dernier instant où il était branché ; l'instant présent s'il l'est |
-| `paths` | les chemins MediaMTX du périphérique. `audio` vaut `null` sans micro (rien n'est publié côté audio, le chemin n'existe pas). **Toujours les prendre ici, ne jamais les recomposer** : l'héritée a `webcam/{av,video,audio}` |
+| `paths` | les chemins MediaMTX du périphérique. `audio` vaut `null` sans micro (rien n'est publié côté audio, le chemin n'existe pas). `talk` vaut toujours `null` pour une webcam (chantier haut-parleur). **Toujours les prendre ici, ne jamais les recomposer** : l'héritée a `webcam/{av,video,audio}` |
 
 **`GET /v1/devices/<id>`** → `200`, le même objet ; `404 unknown_device` sinon.
 
@@ -205,15 +210,65 @@ MediaMTX les purge. `409 connected` s'il est branché ; `404 unknown_device` sin
 `webcam-ancienne` peut être oubliée. Rebranché plus tard, un périphérique oublié revient comme
 neuf (même identifiant, nouveau `first_seen`, enregistrement coupé).
 
+### 1.5 Haut-parleurs (chantier haut-parleur, I1)
+
+Un haut-parleur est **déclaré** au registre (`devices.speakers`, voir `README.md`), pas découvert :
+une prise jack n'a pas d'identité USB. Il appartient à la même app que les webcams (le préfixe
+`speaker` est dans ses `prefixes`) ; toute autre app : absent de la liste, `404 unknown_device`.
+
+`GET /v1/devices` et `GET /v1/devices/<id>` le rendent avec la même forme que les webcams.
+Les webcams viennent d'abord (`first_seen` croissant), puis les haut-parleurs par `id`. Réponse
+réelle de `verify.sh` (faux matériel ALSA) :
+
+```json
+{"id": "hp-test", "kind": "speaker", "model": "Haut-parleur de test",
+ "vendor_id": "", "product_id": "", "serial": "", "usb_port": "",
+ "has_audio": false, "connected": true, "state": "idle", "record": false,
+ "first_seen": "2026-11-05T09:52:01+00:00", "last_seen": "2026-11-05T09:58:48+00:00",
+ "paths": {"av": null, "video": null, "audio": null, "talk": "speaker/hp-test"}}
+```
+
+| Champ | Sens pour un haut-parleur |
+|---|---|
+| `id` | celui du registre : `^[a-z][a-z0-9-]{1,40}$`, jamais `usb-…` ni `webcam…` (en service : `hp-jack`) |
+| `kind` | `"speaker"` |
+| `model` | nom déclaré au registre |
+| `vendor_id`, `product_id`, `serial`, `usb_port` | toujours `""` |
+| `has_audio`, `record` | toujours `false` (rien n'est capté, rien n'est enregistré) |
+| `state` | `idle` (lecteur prêt, personne ne parle) · `talking` (un publieur sur `paths.talk`) · `error` (+ `error_detail`) · `offline` (source capture absente : statut du lecteur vieux de plus de 10 s) |
+| `error_detail` | seulement en `error`, phrase sans secret : « Réglage du mixeur impossible (carte son absente ou contrôle inconnu) : voir le journal de lab-media-capture. », « Sortie ALSA impossible à ouvrir ou en échec : voir le journal de lab-media-capture. » ou « Serveur média injoignable. » |
+| `connected` | vrai sauf `offline` |
+| `first_seen` | première fois que `lab-media-auth` l'a vu déclaré (gardé dans l'inventaire) |
+| `last_seen` | l'instant présent ; en `offline`, le dernier statut écrit par le lecteur |
+| `paths.talk` | le chemin où **publier** la parole (WHIP, §3). `av`, `video`, `audio` : `null` |
+
+| Route | Réponse pour un haut-parleur |
+|---|---|
+| `PATCH /v1/devices/<id>` | `409 {"error": "not_recordable", "detail": "Un haut-parleur ne s'enregistre jamais."}`, quel que soit le corps |
+| `DELETE /v1/devices/<id>` | `409 {"error": "not_forgettable", "detail": "Un haut-parleur est déclaré au registre : il ne s'oublie qu'en l'en retirant."}` |
+| `GET /v1/paths/speaker/<id>` | l'objet du §1.1 (`"recorded": false`, `ready` vrai pendant une parole, `tracks: ["Opus"]`) |
+| `GET /v1/sessions?path=speaker/<id>` | la session du publieur : `"protocol": "webrtc"`, `"state": "publish"`, `id` = celui reçu par le hook |
+| `POST /v1/sessions/webrtc/<id>/kick` | `204` : la parole est coupée (§1.2) |
+| `GET /v1/recordings…?path=speaker/<id>` | `404 unknown_path` (jamais enregistré) |
+
+Exemple réel de session de parole (`GET /v1/sessions?path=speaker/hp-test`) :
+
+```json
+{"items": [{"protocol": "webrtc", "id": "019df663-a691-4647-94f9-6bac965d46a6", "path": "speaker/hp-test",
+            "state": "publish", "created": "2026-11-05T09:59:43.539451212Z",
+            "remoteAddr": "192.168.80.3:42784", "inboundBytes": 12339, "outboundBytes": 431}]}
+```
+
 Les routes 1.1 à 1.3 acceptent les chemins de `paths` tels quels (`/v1/paths/webcam/<id>/av`,
 `/v1/sessions?path=…`, `/v1/recordings?path=…`). Un chemin `audio` absent (`null`) n'existe pas :
 `404 unknown_path`.
 
 ---
 
-## 2. Hook de lecture de l'app
+## 2. Hook de l'app : lecture, et parole sur un haut-parleur
 
-Chaque demande de lecture d'un chemin sous un préfixe de l'app lui est relayée :
+Chaque demande de lecture d'un chemin sous un préfixe de l'app lui est relayée (sauf sur un
+chemin de haut-parleur, voir plus bas) :
 
 ```
 POST <read_hook de l'app au registre>?key=<clé de hook de l'app>
@@ -228,9 +283,23 @@ Content-Type: application/json
   retrouve le périphérique **par ses chemins connus** (`GET /v1/devices`), jamais en découpant
   la chaîne ; un chemin qu'elle ne connaît pas ⇒ refus. Un chemin d'un périphérique oublié
   n'arrive jamais au hook.
-- Le corps est celui de MediaMTX, **octet pour octet**. `action` vaut toujours `read` : la
-  publication, l'API, la relecture et les métriques de MediaMTX ne parviennent plus jamais à
-  l'app (`lab-media-auth` les tranche lui-même).
+- Le corps est celui de MediaMTX, **octet pour octet**. `action` vaut `read`, ou `publish`
+  pour une parole sur un haut-parleur (ci-dessous) : aucune autre publication, ni l'API, la
+  relecture et les métriques de MediaMTX ne parviennent à l'app (`lab-media-auth` les tranche
+  lui-même).
+- **Haut-parleur (chantier haut-parleur, I2)** : une demande de publication WHIP sur un
+  `paths.talk` (`speaker/<id>`) est relayée de même, avec `"action": "publish"`,
+  `"protocol": "webrtc"`, le jeton du navigateur dans `token` (corps réel de `verify.sh`) :
+  ```json
+  {"ip": "192.168.80.3", "user": "", "password": "", "token": "<jeton>", "action": "publish",
+   "path": "speaker/hp-test", "protocol": "webrtc", "id": "761036f0-db07-4180-9b8e-7dbce5a7410b",
+   "query": "", "userAgent": "Python-urllib/3.12"}
+  ```
+  Même règle : `200` autorise, tout le reste refuse (hook injoignable, lent, saturé compris).
+  L'`id` est celui de la session à expulser pour couper la parole (§1.2). **Une lecture d'un
+  chemin `speaker/*` n'arrive jamais au hook** : elle est refusée à tous par `lab-media-auth`.
+  Un second publieur sur un haut-parleur occupé **passe par le hook** (qui peut dire `200`) :
+  c'est MediaMTX qui le refuse ensuite (§3).
 - **`200` autorise. Toute autre réponse refuse** (`204` compris), de même qu'un hook injoignable
   ou qui ne répond pas en `LAB_MEDIA_READ_HOOK_TIMEOUT_S` (3 s, délai total). Échec fermé.
 - `token` : le jeton du navigateur (`Authorization: Bearer …`, sans le préfixe) en WHEP et en HLS.
@@ -249,12 +318,25 @@ Content-Type: application/json
 - L'app doit continuer de vérifier `key` : son URL de hook reste joignable par toute app de
   `dev-net`.
 
-## 3. Lecture par un navigateur
+## 3. Navigateur : lecture, et parole sur un haut-parleur
 
 | Protocole | URL | Jeton |
 |---|---|---|
 | WebRTC (WHEP) | `POST https://<DOMAIN>/lab-media-webrtc/<chemin>/whep` (offre SDP) | `Authorization: Bearer <jeton>` |
 | HLS | `GET https://<DOMAIN>/lab-media-hls/<chemin>/index.m3u8` | `Authorization: Bearer <jeton>` sur la playlist d'ouverture (`hls.js` : `xhrSetup`) |
+| WebRTC (WHIP), haut-parleur seulement | `POST https://<DOMAIN>/lab-media-webrtc/speaker/<id>/whip` (offre SDP avec une piste audio Opus, sans vidéo) | `Authorization: Bearer <jeton>` (ce que le hook de l'app accepte : jeton Keycloak, ticket…) |
+
+WHIP (chantier haut-parleur, I2) :
+- `201` + réponse SDP + en-tête `Location` (préfixe `/lab-media-webrtc/` réécrit par Caddy) :
+  l'authentification est passée. `401` : le hook a refusé (ou ne répond pas). Une offre sans
+  piste utilisable : `406 {"status":"error","error":"no valid tracks found"}`.
+- **Fin de parole** : `DELETE` sur l'URL `Location`, ou fermeture de la `RTCPeerConnection`.
+- **Un seul publieur** : sur un haut-parleur occupé, le second reçoit quand même `201` et sa
+  réponse SDP ; MediaMTX ferme sa session dès que la connexion s'établit (« someone is already
+  publishing »). Le client le voit à l'état de sa connexion (`failed`/`closed`), pas à un code
+  HTTP. Pour l'éviter, regarder d'abord `state` (`talking` = quelqu'un parle, §1.5).
+- Sur tout autre chemin (webcams comprises), WHIP est refusé (`401`) **sans consulter l'app**.
+- Personne ne peut écouter ce qui est dit : WHEP, HLS et RTSP sur `speaker/*` → `401`.
 
 Caddy retire le préfixe et réécrit les `Location` que MediaMTX renvoie (session WHEP ; redirection
 `?cookieCheck=1` de HLS → `/lab-media-hls/<chemin>/index.m3u8?cookieCheck=1`). Média ICE : port
@@ -267,7 +349,10 @@ Caddy retire le préfixe et réécrit les `Location` que MediaMTX renvoie (sessi
   un chemin déclaré au registre sous un préfixe de l'app. Tout autre cas est refusé en `401`
   (`400` pour un chemin non déclaré) : mauvais identifiants, préfixe d'une autre app, chemin
   tiré, identifiants de contrôle.
-- **Publication WebRTC (WHIP) : fermée**, avec ou sans identifiants (`401`).
+- **Publication WebRTC (WHIP) : fermée**, avec ou sans identifiants (`401`), sauf sur les
+  chemins de haut-parleur où elle est décidée par le hook de l'app (§2, §3).
+- **Chemins de haut-parleur** : publication RTSP refusée à tous (identifiants de l'app ou d'une
+  source compris) ; lecture RTSP refusée à tous sauf au lecteur interne de la capture.
 - **Lire depuis un backend** : `rtsp://x:<jeton>@lab-media:8554/<chemin>` — passe par le hook de
   l'app propriétaire comme toute lecture.
 
@@ -335,3 +420,14 @@ parenthèses), sur MediaMTX 1.21.1, avec deux apps fictives et des sources synth
 | Nom de produit et numéro de série hostiles : rien d'exécuté, jamais au journal ; mot de passe de publication masqué dans le journal de ffmpeg | prouvé (M4, M39, J3, J4) ; tests unitaires |
 | `state: error` (capture absente ou en échec depuis plus de 20 s) | codé ; tests unitaires seulement |
 | Capture d'une vraie webcam (V4L2, MJPEG 1280x720, repli sur le format du pilote), micro USB réel (`plughw`) | **prouvé en service** pour la vidéo : deux HD USB Camera capturées et enregistrées heure par heure (constaté le 2026-11-01) ; micro réel non relevé |
+| **Haut-parleurs** (chantier haut-parleur) : forme I1 dans `/v1/devices` (`kind`, `paths.talk`, `talk: null` des webcams) ; états `idle`, `error` (mixeur, sortie), `talking`, `offline` ; autre app → `[]` et 404 ; `PATCH` → 409 `not_recordable`, `DELETE` → 409 `not_forgettable` ; relecture → 404 | prouvé (HP1–HP5, HP12, HP18, HP22, M0, M2, M3) sur faux matériel ALSA |
+| WHIP refusé sans consulter l'app sur un chemin de webcam ou d'app, même avec un jeton que le hook accepterait | prouvé (HP6, P7, P8) |
+| WHIP sur `speaker/*` relayé au hook (corps intact) ; 401 si le hook refuse, répond 500, pend (borné), est arrêté ; jeton d'une autre app refusé | prouvé (HP7–HP9, HP11) |
+| Publication RTSP sur `speaker/*` refusée (identifiants de l'app, de la source capture) | prouvé (HP23, HP24) ; tests unitaires |
+| Lecture de `speaker/*` refusée (WHEP, HLS, RTSP par jeton, identifiants de publication ou de contrôle), hook non appelé ; seul le lecteur de la capture lit | prouvé (HP14, HP16, HP25) |
+| Second publieur WHIP refusé par MediaMTX, le premier continue | prouvé (HP17, HP26) |
+| Expulsion d'un publieur de haut-parleur : 204, parole coupée ; autre app → 404 ; publieur de webcam → 409 | prouvé (HP15, HP19, HP20, W6) |
+| Jamais enregistré | prouvé (HP5, HP29) |
+| Le lecteur joue ce qui est publié ; latence publieur → sortie ALSA 218 à 290 ms (+ tampon de la carte, 80 à 160 ms) | prouvé sur faux matériel (HP27, HP28) |
+| Échec ALSA ⇒ `error`, sans redémarrage de la capture ni de la vidéo | prouvé (HP2, HP21, HP30) |
+| **Son audible sur la vraie carte (ALC662), réglage réel du mixeur, WHIP depuis un vrai navigateur** | **non prouvé** : essai avec le propriétaire (aucun son ne devait sortir pendant les essais du secteur) |

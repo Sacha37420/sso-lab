@@ -4,7 +4,9 @@
 #   * la capture lit le même faux sysfs, et ses montages /hostdev et /dev/snd sont REMPLACÉS
 #     (même cible ⇒ Compose remplace la source) par les faux nœuds : le /dev de l'hôte n'est
 #     pas monté du tout dans la pile de test, la vraie caméra ne peut pas être ouverte ;
-#   * mode testsrc : mire et bip à la place des périphériques.
+#   * mode testsrc : mire et bip à la place des périphériques ;
+#   * haut-parleurs : /etc/asound.conf de test (verify/asound.test.conf) — « lmt_ok » joue dans
+#     un fichier du volume lmt-speakerout (lu par verify/speakerprobe.py), sans carte son.
 # Tout le reste (absence de `devices:`, règles cgroup, réseaux, identités) est celui de la
 # production : c'est lui qui est éprouvé.
 services:
@@ -20,7 +22,10 @@ services:
       - fakesys:/fakesys:ro
       - fakedev:/hostdev:ro
       - fakesnd:/dev/snd
+      - ./verify/asound.test.conf:/etc/asound.conf:ro
+      - speakerout:/speaker-out
 volumes:
   fakesys: {external: true, name: lmt-fakesys}
   fakedev: {external: true, name: lmt-fakedev}
   fakesnd: {external: true, name: lmt-fakesnd}
+  speakerout: {external: true, name: lmt-speakerout}

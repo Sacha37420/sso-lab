@@ -31,6 +31,9 @@ volumes:
   # (chantier webcams). Écrit par lab-media-auth seul ; lu (lecture seule) par la capture.
   # À SAUVEGARDER : le perdre oublie les webcams et remet tous les enregistrements à « coupé ».
   state:
+  # Statut des lecteurs de haut-parleur (chantier haut-parleur) : écrit par la capture seule,
+  # lu (lecture seule) par lab-media-auth. Rien à sauvegarder : réécrit toutes les 2 s.
+  speakers:
 
 networks:
   internal:
@@ -61,6 +64,7 @@ services:
       - ${LAB_MEDIA_REGISTRY:-${HOST_DEV_ROOT:?HOST_DEV_ROOT manquant dans lab-media/.env (propagé par reset_url.sh)}/lab-media/registry.json}:/etc/lab-media/registry.json:ro
       - config:/config
       - state:/state
+      - speakers:/speakers:ro
     # Découverte des webcams : lab-media-auth lit /sys (celui que Docker monte en lecture seule
     # dans tout conteneur). Il n'ouvre aucun périphérique et n'a aucune règle cgroup.
     networks:
@@ -126,12 +130,17 @@ services:
   # Profil `capture` : la brique tourne sans aucun matériel ; ce service n'est lancé que si
   # COMPOSE_PROFILES=capture est dans .env. SEUL conteneur du lab qui ouvre les webcams et
   # leurs micros (un V4L2 ne s'ouvre qu'une fois). Il capture les webcams que lab-media-auth
-  # a mises au plan (/state/plan, au plus MEDIA_CAPTURE_MAX), un ffmpeg par webcam.
+  # a mises au plan (/state/plan, au plus MEDIA_CAPTURE_MAX), un ffmpeg par webcam. Il joue
+  # aussi la parole publiée sur speaker/<id> sur la sortie ALSA déclarée (/state/speakers) : il
+  # est le seul lecteur de ces chemins, et la seule carte son ouverte est la sienne.
   # Réseau interne seulement : il ne joint ni les apps ni Caddy, il publie en RTSP vers
   # MediaMTX avec ses propres identifiants.
   capture:
     profiles: ["capture"]
-    build: ./mediamtx
+    # Étape « capture » du Dockerfile : + alsa-utils (amixer, aplay) pour le haut-parleur.
+    build:
+      context: ./mediamtx
+      target: capture
     container_name: ${LAB_MEDIA_PREFIX:-lab-media}-capture
     restart: unless-stopped
     init: true
@@ -145,6 +154,8 @@ services:
       MEDIA_CAPTURE_MAX: "${MEDIA_CAPTURE_MAX:-2}"
       MEDIA_CAPTURE_FPS: "${MEDIA_CAPTURE_FPS:-15}"
       MEDIA_CAPTURE_MODE: "${MEDIA_CAPTURE_MODE:-device}"
+      # Tampon ALSA des haut-parleurs, en ms (40 à 1000) : la latence ajoutée par la carte.
+      MEDIA_SPEAKER_BUFFER_MS: "${MEDIA_SPEAKER_BUFFER_MS:-160}"
       # MEDIA_DEVICE_VIDEO / MEDIA_DEVICE_AUDIO ne sont plus lues (la découverte les remplace) :
       # présentes dans .env, elles sont ignorées.
     # AUCUN `devices:` : il fige major:minor à la création du conteneur, et une ré-énumération
@@ -163,6 +174,7 @@ services:
     volumes:
       - /dev:/hostdev:ro          # vue live : les nœuds suivent branchements et ré-énumérations
       - /dev/snd:/dev/snd         # ALSA ne cherche que /dev/snd ; bind = vue live
-      - state:/state:ro           # le plan de capture écrit par lab-media-auth
+      - state:/state:ro           # les plans (webcams, haut-parleurs) écrits par lab-media-auth
+      - speakers:/speakers        # statut des lecteurs de haut-parleur, lu par lab-media-auth
     networks:
       internal: {}

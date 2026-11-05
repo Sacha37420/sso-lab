@@ -2,7 +2,9 @@
 
   * HOOK (réseau interne de lab-media, port 9000) : cible de `authHTTPAddress` de MediaMTX.
     Décide lui-même publish / api / playback / metrics / pprof ; relaie `read` au hook de
-    l'app propriétaire du préfixe, corps transmis tel quel, en échec fermé.
+    l'app propriétaire du préfixe, corps transmis tel quel, en échec fermé. Chemins de
+    haut-parleur (`speaker/<id>`, chantier haut-parleur) : c'est la PUBLICATION WebRTC qui est
+    relayée au hook de l'app, et la lecture est fermée à tous sauf au lecteur de la capture.
   * CONTRÔLE (dev-net, port 9100) : l'API I3 des apps — voir lab-media/API.md — et les
     routes /v1/devices (webcams, chantier webcams I1).
   * DÉCOUVERTE des webcams (devices.py) : un fil qui lit sysfs, tient l'inventaire et le plan
@@ -184,6 +186,15 @@ def decide(state: State, raw: bytes) -> tuple[bool, dict]:
         if app is None or path not in registry.paths:
             return False, {**info, 'reason': 'chemin sans propriétaire'}
         info['app'] = app.name
+        if registry.is_talk(path):
+            # Haut-parleur (I2) : WHIP seulement, et c'est l'app qui décide (même relais, même
+            # échec fermé que pour une lecture). Aucun identifiant n'ouvre une publication RTSP.
+            if protocol != 'webrtc':
+                return False, {**info, 'reason': f'haut-parleur : publication {protocol} fermée (WHIP seul)'}
+            ok, why = relay_read(state, app, raw)
+            if ok and state.devices is not None:
+                state.devices.talk_allowed(path)
+            return ok, {**info, 'reason': why}
         if registry.paths[path].pull_url:
             return False, {**info, 'reason': 'chemin tiré : personne n\'y publie'}
         who = None
@@ -194,7 +205,7 @@ def decide(state: State, raw: bytes) -> tuple[bool, dict]:
             if creds_ok(body, source.publish) and path in source.paths:
                 who = who or f'source {source.name}'
         # RTSP seulement : la publication WebRTC (WHIP, joignable par Caddy donc depuis
-        # Internet) n'a pas été prouvée sûre — fermée, même avec de bons identifiants.
+        # Internet) n'est ouverte que sur les chemins de haut-parleur, ci-dessus.
         if who and protocol != 'rtsp':
             return False, {**info, 'reason': f'{who} : publication {protocol} fermée (RTSP seul)'}
         if who:
@@ -207,6 +218,13 @@ def decide(state: State, raw: bytes) -> tuple[bool, dict]:
         if app is None or path not in registry.paths:
             return False, {**info, 'reason': 'chemin sans propriétaire'}
         info['app'] = app.name
+        if registry.is_talk(path):
+            # Personne n'écoute ce qui est dit : seul le lecteur ALSA de la capture lit, en RTSP,
+            # avec les identifiants de sa source. L'app n'est pas consultée.
+            source = registry.sources.get(registry.devices.source) if registry.devices else None
+            ok = protocol == 'rtsp' and source is not None and creds_ok(body, source.publish)
+            return ok, {**info, 'reason': f'haut-parleur : lecteur de la source {source.name}' if ok
+                        else 'haut-parleur : lecture fermée'}
         ok, why = relay_read(state, app, raw)
         return ok, {**info, 'reason': why}
 
@@ -229,8 +247,9 @@ def _post_hook(app, raw: bytes, timeout: float, slot) -> int:
 
 
 def relay_read(state: State, app, raw: bytes) -> tuple[bool, str]:
-    """Relaie le corps de MediaMTX tel quel au hook de l'app. Échec fermé : injoignable,
-    lent au-delà du délai (délai TOTAL, pas par opération de socket) ou réponse ≠ 200."""
+    """Relaie le corps de MediaMTX tel quel au hook de l'app (une lecture, ou une publication
+    WHIP sur un haut-parleur). Échec fermé : injoignable, lent au-delà du délai (délai TOTAL,
+    pas par opération de socket) ou réponse ≠ 200."""
     slot = state.relay_slots[app.name]
     if not slot.acquire(blocking=False):
         return False, f'hook de {app.name} : saturé ({RELAY_PER_APP} appels en cours)'
@@ -417,7 +436,7 @@ class ControlHandler(_Base):
             return self.device_one(app, method, rest[1])
         return None
 
-    # ── webcams (chantier webcams, I1) ───────────────────────────────────────
+    # ── périphériques : webcams (chantier webcams, I1) et haut-parleurs (I1 haut-parleur) ──
     def devices_list(self, app):
         manager = self.state.devices
         if manager is None or not manager.owns(app):
@@ -435,6 +454,8 @@ class ControlHandler(_Base):
                 # Même réponse qu'un identifiant inconnu : rien ne distingue « à une autre app ».
                 raise dev_mod.DeviceError(404, 'unknown_device', 'Périphérique inconnu pour cette app.')
             if method == 'PATCH':
+                manager.get(ident, set())           # 404 d'abord pour un inconnu
+                manager.check_recordable(ident)     # 409 not_recordable : haut-parleur
                 try:
                     body = json.loads(self.body or b'')
                 except (ValueError, UnicodeDecodeError):
@@ -533,7 +554,8 @@ class ControlHandler(_Base):
             self.error(404, 'unknown_session', 'Session inconnue pour cette app.')
             return self.done(app, 404, route='sessions/kick', protocol=protocol, id=session_id[:64],
                              reason='session inconnue ou hors de ses préfixes')
-        if mine.get('state') == 'publish':
+        if mine.get('state') == 'publish' and not self.state.registry.is_talk(mine.get('path')):
+            # Une publication n'est expulsable que sur un haut-parleur (I3) : la parole s'arrête.
             self.error(409, 'not_a_reader', 'Seule une session de lecture peut être expulsée.')
             return self.done(app, 409, route='sessions/kick', protocol=protocol, id=session_id)
         code, _ = self.state.mtx_json('POST', f'/v3/{SESSION_ENDPOINTS[protocol]}/kick/{session_id}')
@@ -548,7 +570,7 @@ class ControlHandler(_Base):
 
     def recordings_list(self, app, query):
         path = query.get('path')
-        if not self._own_path(app, path):
+        if not self._own_path(app, path) or self.state.registry.is_talk(path):   # jamais enregistré
             return self._not_yours(app, 'recordings', path)
         params = {'path': path}
         for key in ('start', 'end'):
@@ -575,7 +597,7 @@ class ControlHandler(_Base):
 
     def recordings_get(self, app, query):
         path = query.get('path')
-        if not self._own_path(app, path):
+        if not self._own_path(app, path) or self.state.registry.is_talk(path):
             return self._not_yours(app, 'recordings/get', path)
         if not RFC3339.match(query.get('start', '')) or not DURATION.match(query.get('duration', '')):
             self.error(400, 'bad_request', 'Requis : start (RFC 3339 avec fuseau) et duration (secondes).')
@@ -700,6 +722,10 @@ def _scanner(state: State) -> None:
         time.sleep(state.devices.scan_s)
         try:
             state.devices.tick()
+            # Haut-parleurs : MediaMTX n'est interrogé que pendant une prise de parole (en cours
+            # ou tout juste autorisée), pas en continu.
+            if state.devices.talk_active():
+                state.devices.update_talk(state.ready_paths())
         except Exception as exc:  # noqa: BLE001
             log('device', change='scan-error', reason=type(exc).__name__)
 
@@ -737,7 +763,8 @@ def main() -> int:
         read_timeout_s=state.read_timeout,
         devices=None if state.devices is None else {'prefix': state.devices.conf.prefix,
                                                      'capture_max': state.devices.max,
-                                                     'scan_s': state.devices.scan_s})
+                                                     'scan_s': state.devices.scan_s,
+                                                     'speakers': sorted(state.devices.speakers)})
     stop = threading.Event()
     import signal
     signal.signal(signal.SIGTERM, lambda *_: stop.set())

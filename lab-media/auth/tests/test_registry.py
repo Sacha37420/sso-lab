@@ -166,6 +166,76 @@ class HookDecisionTests(unittest.TestCase):
         self.assertFalse(S.decide(self.state, b'[]')[0])
 
 
+class SpeakerHookTests(unittest.TestCase):
+    """Chantier haut-parleur, I2 : décisions du hook sur speaker/*."""
+
+    def setUp(self):
+        reg = json.loads(json.dumps(REG))
+        reg['apps']['appa']['prefixes'] = ['appa', 'webcam', 'speaker']
+        reg['sources'] = {'capture': {'devices': True}}
+        reg['paths'].pop('webcam/av')
+        reg['devices'] = {'prefix': 'webcam', 'source': 'capture', 'segment': '1h', 'delete_after': '7d',
+                          'legacy': None,
+                          'speakers': {'hp': {'model': 'HP', 'pcm': 'null', 'mixer': None}}}
+        base = R.load(json.dumps(reg), ENV)
+        from labmediaauth import devices as D
+        extra = {'speaker/hp': R.PathConf(name='speaker/hp', talk=True),
+                 'webcam/usb-1b3f-0001-p9-1/av': R.PathConf(name='webcam/usb-1b3f-0001-p9-1/av')}
+        self.state = FakeState()
+        self.state.registry = R.with_paths(base, extra, frozenset({'webcam/usb-1b3f-0001-p9-1/av'}))
+        self.allowed = []
+        self.state.devices = type('M', (), {'talk_allowed': lambda _s, p: self.allowed.append(p)})()
+        self.verdict = (True, 'stub')
+        self._relay = S.relay_read
+        S.relay_read = lambda state, app, raw: (state.relayed.append(app.name) or self.verdict)
+        del D
+
+    def tearDown(self):
+        S.relay_read = self._relay
+
+    def decide(self, **body):
+        return S.decide(self.state, json.dumps(body).encode())[0]
+
+    def test_whip_on_speaker_goes_to_the_app(self):
+        self.assertTrue(self.decide(action='publish', protocol='webrtc', path='speaker/hp', token='t'))
+        self.assertEqual((self.state.relayed, self.allowed), (['appa'], ['speaker/hp']))
+        self.verdict = (False, 'hook : 401')
+        self.assertFalse(self.decide(action='publish', protocol='webrtc', path='speaker/hp', token='t'))
+        self.assertEqual(self.allowed, ['speaker/hp'])            # un refus ne déclenche rien
+
+    def test_whip_elsewhere_never_relayed(self):
+        cap = dict(user='capture', password='pc' * 10)
+        pub = dict(user='appa-pub', password='pa' * 10)
+        for body in (dict(path='webcam/usb-1b3f-0001-p9-1/av', **cap), dict(path='appa/cam', **pub),
+                     dict(path='appa/cam', token='t'), dict(path='speaker/autre', token='t'),
+                     dict(path='speaker', token='t')):
+            self.assertFalse(self.decide(action='publish', protocol='webrtc', **body), body)
+        self.assertEqual(self.state.relayed, [])
+
+    def test_rtsp_publish_on_speaker_refused_to_all(self):
+        for creds in (dict(user='capture', password='pc' * 10), dict(user='appa-pub', password='pa' * 10),
+                      dict(user='lab-media-auth', password='i' * 40), {}):
+            self.assertFalse(self.decide(action='publish', protocol='rtsp', path='speaker/hp', **creds), creds)
+        self.assertEqual(self.state.relayed, [])
+        # la capture garde ses publications RTSP de webcam
+        self.assertTrue(self.decide(action='publish', protocol='rtsp', path='webcam/usb-1b3f-0001-p9-1/av',
+                                    user='capture', password='pc' * 10))
+
+    def test_read_on_speaker(self):
+        cap = dict(user='capture', password='pc' * 10)
+        self.assertTrue(self.decide(action='read', protocol='rtsp', path='speaker/hp', **cap))
+        denied = [dict(protocol='rtsp'), dict(protocol='rtsp', user='capture', password='faux'),
+                  dict(protocol='rtsp', user='appa-pub', password='pa' * 10),
+                  dict(protocol='rtsp', user='appa-ctl', password='ca' * 10),
+                  dict(protocol='rtsp', user='x', password='t', token='t'),
+                  dict(protocol='webrtc', token='t', **cap), dict(protocol='hls', token='t', **cap),
+                  dict(protocol='webrtc', token='t'), dict(protocol='hls', token='t')]
+        for body in denied:
+            self.assertFalse(self.decide(action='read', path='speaker/hp', **body), body)
+        self.assertEqual(self.state.relayed, [])                   # l'app n'est jamais consultée
+        self.assertFalse(self.decide(action='playback', path='speaker/hp', **cap))
+
+
 class RelayTests(unittest.TestCase):
     """Relais réel vers un hook local : 200, refus, panne, lenteur, saturation."""
 

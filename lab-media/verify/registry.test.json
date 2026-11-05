@@ -1,20 +1,28 @@
 {
   "version": 1,
-  "_doc": "Registre de la pile de test de verify.sh : deux apps fictives aux préfixes distincts ; appa possède aussi le préfixe des webcams (rôle de peripheriques).",
+  "_doc": "Registre de la pile de test de verify.sh : deux apps fictives aux préfixes distincts ; appa possède aussi les préfixes des webcams et des haut-parleurs (rôle de peripheriques). Haut-parleurs sur faux matériel ALSA (verify/asound.test.conf) : hp-test joue dans un fichier, hp-mixeur et hp-sortie visent une carte absente (échec du mixeur, échec de la sortie).",
   "apps": {
     "appa": {
-      "prefixes": ["appa", "webcam"],
+      "prefixes": [
+        "appa",
+        "webcam",
+        "speaker"
+      ],
       "read_hook": "http://lmt-appa:8000/hook",
       "publish": true
     },
     "appb": {
-      "prefixes": ["appb"],
+      "prefixes": [
+        "appb"
+      ],
       "read_hook": "http://lmt-appb:8000/hook",
       "publish": true
     }
   },
   "sources": {
-    "capture": {"devices": true}
+    "capture": {
+      "devices": true
+    }
   },
   "devices": {
     "prefix": "webcam",
@@ -31,13 +39,48 @@
       "has_audio": true,
       "first_seen": "2026-10-10T17:57:12+00:00",
       "last_seen": "2026-10-14T20:30:00+00:00",
-      "paths": {"av": "webcam/av", "video": "webcam/video", "audio": "webcam/audio"}
+      "paths": {
+        "av": "webcam/av",
+        "video": "webcam/video",
+        "audio": "webcam/audio"
+      }
+    },
+    "speakers": {
+      "hp-test": {
+        "model": "Haut-parleur de test",
+        "pcm": "lmt_ok",
+        "mixer": null
+      },
+      "hp-mixeur": {
+        "model": "Carte absente (mixeur)",
+        "pcm": "plughw:CARD=Absente,DEV=0",
+        "mixer": {
+          "card": "Absente"
+        }
+      },
+      "hp-sortie": {
+        "model": "Carte absente (sortie)",
+        "pcm": "plughw:CARD=Absente,DEV=0",
+        "mixer": null
+      }
     }
   },
   "paths": {
-    "appa/cam": {"record": true, "segment": "1h", "delete_after": "7d"},
-    "appa/short": {"record": true, "segment": "5s", "delete_after": "20s"},
-    "appb/cam": {"record": true},
-    "appb/pulled": {"source_env": "LAB_MEDIA_PULL_TEST"}
+    "appa/cam": {
+      "record": true,
+      "segment": "1h",
+      "delete_after": "7d"
+    },
+    "appa/short": {
+      "record": true,
+      "segment": "5s",
+      "delete_after": "20s"
+    },
+    "appb/cam": {
+      "record": true
+    },
+    "appb/pulled": {
+      "source_env": "LAB_MEDIA_PULL_TEST"
+    }
   }
 }

@@ -177,7 +177,8 @@ class ManagerTests(Base):
         legacy = items[0]
         self.assertEqual((legacy['id'], legacy['state'], legacy['connected'], legacy['record']),
                          ('webcam-ancienne', 'legacy', False, False))
-        self.assertEqual(legacy['paths'], {'av': 'webcam/av', 'video': 'webcam/video', 'audio': 'webcam/audio'})
+        self.assertEqual(legacy['paths'], {'av': 'webcam/av', 'video': 'webcam/video', 'audio': 'webcam/audio',
+                                           'talk': None})
         with self.assertRaises(D.DeviceError) as ctx:
             m.set_record('webcam-ancienne', True)
         self.assertEqual((ctx.exception.status, ctx.exception.code), (409, 'legacy'))
@@ -205,7 +206,7 @@ class ManagerTests(Base):
                                       'usb-1b3f-0001-p9-2 9-2 0 webcam/usb-1b3f-0001-p9-2\n')
         cam2 = m.get('usb-1b3f-0001-p9-2', set())
         self.assertEqual(cam2['paths'], {'av': 'webcam/usb-1b3f-0001-p9-2/av',
-                                         'video': 'webcam/usb-1b3f-0001-p9-2/video', 'audio': None})
+                                         'video': 'webcam/usb-1b3f-0001-p9-2/video', 'audio': None, 'talk': None})
         self.assertFalse(cam2['has_audio'])
         self.clock.t += D.CAPTURE_GRACE_S + 1
         item = m.get('usb-1b3f-0001-p9-2', set())
@@ -345,6 +346,155 @@ class ManagerTests(Base):
         self.assertIn('  "webcam/av":\n    source: publisher\n    record: no\n    recordFormat: fmp4\n', out)
         self.assertIn('    recordDeleteAfter: 7d\n', out)
         self.assertIn('  "webcam/usb-1b3f-0001-p9-1/video":\n    source: publisher\n    record: no\n', out)
+
+
+SPK_REG = json.loads(json.dumps(REG))
+SPK_REG['apps']['appa']['prefixes'] = ['appa', 'webcam', 'speaker']
+SPK_REG['devices']['speakers'] = {
+    'hp-jack': {'model': 'Haut-parleur (prise jack)', 'pcm': 'plughw:CARD=PCH,DEV=0',
+                'mixer': {'card': 'PCH'}},
+    'hp-libre': {'model': 'Sans mixeur', 'pcm': 'null', 'mixer': None},
+}
+SPK_FIELDS = {'id', 'kind', 'model', 'vendor_id', 'product_id', 'serial', 'usb_port', 'has_audio', 'connected',
+              'state', 'record', 'first_seen', 'last_seen', 'paths'}
+
+
+class SpeakerTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.reg = R.load(json.dumps(SPK_REG), ENV)
+        self.status = os.path.join(self.tmp, 'speakers')
+        os.makedirs(self.status)
+
+    def manager(self, **env):
+        return super().manager(LAB_MEDIA_SPEAKER_STATUS_DIR=self.status, **env)
+
+    def write_status(self, ident, text, age=0.0):
+        path = os.path.join(self.status, ident)
+        with open(path, 'w') as fh:
+            fh.write(text + '\n')
+        os.utime(path, (self.clock.t - age, self.clock.t - age))
+
+    def read_state(self, name):
+        with open(os.path.join(self.state_dir, name)) as fh:
+            return fh.read()
+
+    def test_registry(self):
+        hp = self.reg.devices.speakers['hp-jack']
+        self.assertEqual((hp.pcm, hp.mixer.card, hp.mixer.control, hp.mixer.volume),
+                         ('plughw:CARD=PCH,DEV=0', 'PCH', 'Master', 80))       # défauts : Master, 80 %
+        self.assertIsNone(self.reg.devices.speakers['hp-libre'].mixer)
+
+    def test_bad_speakers(self):
+        def broken(mutate):
+            reg = json.loads(json.dumps(SPK_REG))
+            mutate(reg)
+            return reg
+        cases = [
+            lambda r: r['apps']['appa'].update(prefixes=['appa', 'webcam']),                 # préfixe absent
+            lambda r: r['apps']['app-b'].update(prefixes=['appb', 'speaker']) or
+            r['apps']['appa'].update(prefixes=['appa', 'webcam']),                             # autre app
+            lambda r: r['devices']['speakers'].update({'usb-1234-5678-p1-1': r['devices']['speakers']['hp-libre']}),
+            lambda r: r['devices']['speakers'].update({'webcam-x': r['devices']['speakers']['hp-libre']}),
+            lambda r: r['devices']['speakers'].update({'Hp': r['devices']['speakers']['hp-libre']}),
+            lambda r: r['devices']['speakers']['hp-jack'].update(pcm='plughw:0,0; reboot'),
+            lambda r: r['devices']['speakers']['hp-jack'].update(pcm='hw 0'),
+            lambda r: r['devices']['speakers']['hp-jack'].update(mixer={'card': 'PCH', 'volume': 101}),
+            lambda r: r['devices']['speakers']['hp-jack'].update(mixer={'card': 'PCH', 'volume': True}),
+            lambda r: r['devices']['speakers']['hp-jack'].update(mixer={'card': 'PCH', 'control': 'Line Out'}),
+            lambda r: r['devices']['speakers']['hp-jack'].update(mixer={'card': 'P C H'}),
+            lambda r: r['devices']['speakers']['hp-jack'].update(mixer={'control': 'Master'}),
+            lambda r: r['devices']['speakers']['hp-jack'].pop('mixer'),
+            lambda r: r['devices']['speakers']['hp-jack'].update(record=True),
+            lambda r: r['devices']['speakers']['hp-jack'].update(model='a\nb'),
+            lambda r: r['paths'].update({'speaker/x': {}}),
+        ]
+        for i, mutate in enumerate(cases):
+            with self.assertRaises(R.RegistryError, msg=str(i)):
+                R.load(json.dumps(broken(mutate)), ENV)
+
+    def test_paths_plan_and_render(self):
+        m = self.manager()
+        extra, publishable, _ = m.path_confs()
+        self.assertTrue(extra['speaker/hp-jack'].talk)
+        self.assertFalse(extra['speaker/hp-jack'].record)
+        self.assertNotIn('speaker/hp-jack', publishable)          # la source ne publie jamais dessus
+        reg = R.with_paths(self.reg, extra, publishable)
+        self.assertTrue(reg.is_talk('speaker/hp-jack'))
+        self.assertFalse(reg.is_talk('appa/cam'))
+        out = R.render_mediamtx('logLevel: info\n', reg)
+        self.assertIn('  "speaker/hp-jack":\n    source: publisher\n    record: no\n  "', out)
+        self.assertEqual(self.read_state('speakers'), 'hp-jack plughw:CARD=PCH,DEV=0 PCH Master 80\n'
+                                                      'hp-libre null - - -\n')
+        self.assertEqual(self.read_state('talk'), 'hp-jack 0 0\nhp-libre 0 0\n')
+
+    def test_states(self):
+        m = self.manager()
+        st = lambda ready=frozenset(): {i['id']: i for i in m.list(set(ready)) if i['kind'] == 'speaker'}
+        items = st()
+        self.assertEqual(list(items), ['hp-jack', 'hp-libre'])
+        hp = items['hp-jack']
+        self.assertEqual(set(hp), SPK_FIELDS)
+        self.assertEqual((hp['state'], hp['connected'], hp['record'], hp['has_audio']), ('offline', False, False, False))
+        self.assertEqual(hp['paths'], {'av': None, 'video': None, 'audio': None, 'talk': 'speaker/hp-jack'})
+        self.assertEqual((hp['vendor_id'], hp['product_id'], hp['serial'], hp['usb_port']), ('', '', '', ''))
+        self.write_status('hp-jack', 'idle')
+        self.assertEqual(st()['hp-jack']['state'], 'idle')
+        self.assertTrue(st()['hp-jack']['connected'])
+        self.assertEqual(st({'speaker/hp-jack'})['hp-jack']['state'], 'talking')
+        self.assertEqual(m.get('hp-jack', None)['state'], 'error')          # MediaMTX injoignable
+        self.write_status('hp-jack', 'error mixer')
+        hp = st()['hp-jack']
+        self.assertEqual((hp['state'], hp['error_detail']), ('error', D.SPEAKER_ERRORS['mixer']))
+        self.write_status('hp-jack', 'error output')
+        self.assertEqual(st({'speaker/hp-jack'})['hp-jack']['error_detail'], D.SPEAKER_ERRORS['output'])
+        self.write_status('hp-jack', 'idle', age=D.SPEAKER_STALE_S + 1)      # capture arrêtée
+        self.assertEqual(st()['hp-jack']['state'], 'offline')
+
+    def test_not_recordable_not_forgettable(self):
+        m = self.manager()
+        for call, code in ((lambda: m.set_record('hp-jack', True), 'not_recordable'),
+                           (lambda: m.set_record('hp-jack', False), 'not_recordable'),
+                           (lambda: m.check_recordable('hp-jack'), 'not_recordable'),
+                           (lambda: m.forget('hp-jack'), 'not_forgettable')):
+            with self.assertRaises(D.DeviceError) as ctx:
+                call()
+            self.assertEqual((ctx.exception.status, ctx.exception.code), (409, code))
+        self.assertEqual(m.get('hp-jack', set())['id'], 'hp-jack')
+
+    def test_first_seen_persists(self):
+        m = self.manager()
+        first = m.get('hp-jack', set())['first_seen']
+        self.clock.t += 3600
+        self.assertEqual(self.manager().get('hp-jack', set())['first_seen'], first)
+
+    def test_talk_triggers(self):
+        m = self.manager()
+        m.update_talk({'speaker/hp-jack'})         # au démarrage : une parole en cours est retrouvée
+        self.assertEqual(self.read_state('talk'), 'hp-jack 0 1\nhp-libre 0 0\n')
+        m.update_talk(set())                       # finie
+        self.assertFalse(m.talk['hp-jack']['active'])
+        self.clock.t += D.TALK_PENDING_S + 1
+        m.update_talk(set())
+        self.assertFalse(m.talk_active())          # plus rien d'attendu : MediaMTX n'est plus interrogé
+        m.talk_allowed('speaker/hp-jack')
+        gen = m.talk['hp-jack']['gen']
+        self.assertGreater(gen, 0)
+        self.assertEqual(self.read_state('talk'), f'hp-jack {gen} 0\nhp-libre 0 0\n')
+        self.assertTrue(m.talk_active())
+        m.update_talk(set())                       # pas encore arrivée : toujours attendue
+        self.assertTrue(m.talk_active())
+        m.update_talk({'speaker/hp-jack'})
+        self.assertEqual(self.read_state('talk'), f'hp-jack {gen} 1\nhp-libre 0 0\n')
+        m.update_talk(set())
+        self.assertFalse(m.talk_active())
+        self.assertEqual(self.read_state('talk'), f'hp-jack {gen} 0\nhp-libre 0 0\n')
+        m.talk_allowed('speaker/hp-jack')
+        self.assertGreater(m.talk['hp-jack']['gen'], gen)
+        m.talk_allowed('webcam/av')                # pas un haut-parleur : rien
+        self.clock.t += D.TALK_PENDING_S + 1
+        m.update_talk(set())                       # jamais arrivée
+        self.assertFalse(m.talk_active())
 
 
 class RegistryDevicesTests(unittest.TestCase):

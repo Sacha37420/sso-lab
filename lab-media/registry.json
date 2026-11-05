@@ -3,12 +3,17 @@
   "_doc": "Registre de lab-media (contrat lab-media I1/I4, chantier webcams I0/I1). Aucun secret ici : ils sont dans .env sous des noms dérivés (voir README.md). Lu au démarrage de lab-media-auth. Les chemins des webcams découvertes (webcam/<id>/…) ne sont pas écrits ici : lab-media-auth les calcule (section devices). L'entrée « webcam-ancienne » est la caméra Jieli d'avant la découverte : dates reprises des enregistrements (plus ancien segment encore présent) et du journal de lab-media-capture (débranchée le 2026-10-14 vers 20 h 30 UTC).",
   "apps": {
     "peripheriques": {
-      "prefixes": ["webcam"],
+      "prefixes": [
+        "webcam",
+        "speaker"
+      ],
       "read_hook": "http://peripheriques-backend:8000/api/media-auth/"
     }
   },
   "sources": {
-    "capture": {"devices": true}
+    "capture": {
+      "devices": true
+    }
   },
   "devices": {
     "prefix": "webcam",
@@ -25,7 +30,22 @@
       "has_audio": true,
       "first_seen": "2026-10-10T17:57:12+00:00",
       "last_seen": "2026-10-14T20:30:00+00:00",
-      "paths": {"av": "webcam/av", "video": "webcam/video", "audio": "webcam/audio"}
+      "paths": {
+        "av": "webcam/av",
+        "video": "webcam/video",
+        "audio": "webcam/audio"
+      }
+    },
+    "speakers": {
+      "hp-jack": {
+        "model": "Haut-parleur (prise jack)",
+        "pcm": "plughw:CARD=PCH,DEV=0",
+        "mixer": {
+          "card": "PCH",
+          "control": "Master",
+          "volume": 80
+        }
+      }
     }
   },
   "paths": {}

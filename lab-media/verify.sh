@@ -18,7 +18,10 @@
 # mineurs inexistants) branché et débranché à chaud ; la capture tourne par le compose de
 # production + verify/compose.test.yml, qui remplace /dev de l'hôte par ces faux nœuds et passe
 # en mode testsrc. La vraie caméra n'est ni montée ni ouverte.
-# Durée : environ 7 minutes. Code de sortie : 0 si tout est PASS.
+# Haut-parleurs (chantier haut-parleur) : faux matériel ALSA (verify/asound.test.conf : le lecteur
+# joue dans un fichier, aucune carte son n'est ouverte, aucun son ne sort) ; publication WHIP
+# par ffmpeg à travers le Caddy de test ; latence mesurée de bout en bout (verify/speakerprobe.py).
+# Durée : environ 12 minutes (hôte chargé). Code de sortie : 0 si tout est PASS.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
@@ -40,7 +43,7 @@ cleanup() {
   [[ -n "$ids" ]] && docker rm -f $ids >/dev/null 2>&1
   [[ -f "$RUN/test.env" ]] && compose down --volumes --remove-orphans >/dev/null 2>&1
   for n in lmt-dev lmt-sso lmt_internal; do docker network rm "$n" >/dev/null 2>&1; done
-  for v in lmt-recordings lmt-fixture lmt_config lmt_state lmt-fakesys lmt-fakedev lmt-fakesnd; do docker volume rm "$v" >/dev/null 2>&1; done
+  for v in lmt-recordings lmt-fixture lmt_config lmt_state lmt_speakers lmt-fakesys lmt-fakedev lmt-fakesnd lmt-speakerout; do docker volume rm "$v" >/dev/null 2>&1; done
   docker image rm lmt-auth lmt-media lmt-capture >/dev/null 2>&1
   rm -rf "$RUN"
 }
@@ -166,10 +169,11 @@ docker network create --internal lmt-dev >/dev/null
 docker network create lmt-sso >/dev/null
 docker volume create lmt-recordings >/dev/null
 docker volume create lmt-fixture >/dev/null
-for v in lmt-fakesys lmt-fakedev lmt-fakesnd; do docker volume create "$v" >/dev/null; done
-# Faux matériel : seul conteneur qui écrit le faux sysfs et crée les faux nœuds (mknod).
+for v in lmt-fakesys lmt-fakedev lmt-fakesnd lmt-speakerout; do docker volume create "$v" >/dev/null; done
+# Faux matériel : seul conteneur qui écrit le faux sysfs et crée les faux nœuds (mknod). Il lit
+# aussi ce que joue le faux haut-parleur (lmt-speakerout) et fournit le signal de la mesure de latence.
 docker run -d --name lmt-hw --network none -v "$HERE/verify:/v:ro" -v lmt-fakesys:/fakesys -v lmt-fakedev:/fakedev \
-  -v lmt-fakesnd:/fakesnd "$PY_IMG" sleep 3600 >/dev/null
+  -v lmt-fakesnd:/fakesnd -v lmt-speakerout:/speaker-out:ro "$PY_IMG" sleep 3600 >/dev/null
 # Le SEUL encodage de la source : 20 s de mire + bip, relus ensuite en copie de flux.
 docker run --rm --name lmt-encode --network none --cpus 1 -v lmt-fixture:/fixture --entrypoint ffmpeg lmt-media \
   -hide_banner -nostdin -loglevel error -f lavfi -i "testsrc2=size=320x240:rate=10" \
@@ -358,6 +362,75 @@ expect M42 "webcam oubliée : plus aucune publication sur ses chemins" "$r"
 docker exec lmt-media sh -c 'mkdir -p /recordings/webcam/av && cp "$(ls -d /recordings/appa/cam/*.mp4 | head -1)" /recordings/webcam/av/'
 phase m_legacy
 
+# ── 6 bis. Haut-parleurs (chantier haut-parleur) ─────────────────────────────
+note "Haut-parleurs : déclarés au registre, lecteur ALSA sur faux matériel"
+WHIP_URL="http://lmt-caddy/lab-media-webrtc/speaker/hp-test/whip"
+# Publieur WHIP : ffmpeg dans l'espace réseau de lmt-media (ICE sur la boucle locale, le seul
+# candidat qu'il essaie), signalisation par le Caddy de test comme un navigateur.
+whip_pub() {  # whip_pub <nom> <arguments d'entrée…> — publication WHIP détachée, jeton d'appa
+  local name="$1"; shift
+  docker run -d --name "$name" --network container:lmt-media --entrypoint ffmpeg lmt-media \
+    -hide_banner -loglevel warning "$@" -c:a libopus -b:a 32k -ac 2 -application lowdelay \
+    -f whip -authorization "$TOKEN_A" "$WHIP_URL" >/dev/null
+}
+spk_pid0="$(ffpids "$CAM2")"; cap_started0="$(docker inspect -f '{{.State.StartedAt}}' lmt-media-capture)"
+phase hp_start
+r="$(try_publish "appa-pub:$A_PUB" speaker/hp-test)"; [[ "$r" != accepté ]]
+expect HP23 "RTSP : publication sur speaker/* refusée avec les identifiants de publication de l'app propriétaire" "$r"
+r="$(try_publish "capture:$CAP" speaker/hp-test)"; [[ "$r" != accepté ]]
+expect HP24 "RTSP : publication sur speaker/* refusée avec les identifiants de la source capture" "$r"
+phase hp_whip
+
+note "Haut-parleurs : prise de parole réelle (WHIP), lecture, second publieur, latence"
+docker exec lmt-hw rm -f /tmp/hp-go
+docker exec -d lmt-hw python /v/speakerprobe.py watch /speaker-out/hp-test.raw 120 /tmp/hp-watch.json
+( docker exec -i lmt-hw python /v/speakerprobe.py feed 2>"$RUN/feed.json" \
+    | docker run -i --rm --name lmt-whip1 --network container:lmt-media --entrypoint ffmpeg lmt-media \
+        -hide_banner -loglevel warning -f s16le -ar 48000 -ac 1 -i pipe:0 \
+        -c:a libopus -b:a 32k -ac 2 -application lowdelay -f whip -authorization "$TOKEN_A" "$WHIP_URL" \
+        >"$RUN/whip1.log" 2>&1 ) &
+WHIP1=$!
+phase hp_talk
+docker exec lmt-hw touch /tmp/hp-go     # la publication est prête : les bips de mesure peuvent partir
+whip_pub lmt-whip2 -re -f lavfi -i "sine=frequency=330:sample_rate=48000" -t 6
+n=0; while [[ $n -lt 15 ]] && ! docker logs lmt-media 2>&1 | grep -q 'already publishing to path .speaker/hp-test'; do sleep 1; n=$((n + 1)); done
+r="$(docker logs lmt-media 2>&1 | grep 'already publishing to path .speaker/hp-test' | tail -1 | sed 's/^.*\] //')"
+[[ -n "$r" ]]; expect HP26 "second publieur WHIP sur un haut-parleur occupé : MediaMTX le refuse (overridePublisher: no)" "$r"
+phase hp_talk2
+r=""
+for cred in "x:$TOKEN_A" "appa-pub:$A_PUB" "appa-ctl:$A_CTL"; do
+  r+="$(BIN=ffprobe ff -hide_banner -loglevel error -rtsp_transport tcp -show_entries stream=codec_name -of csv=p=0 \
+        "rtsp://$cred@lmt-media:8554/speaker/hp-test" 2>&1 | grep -o -m1 -E '40[0-9] [A-Za-z ]+|opus' || echo '?') · "
+done
+[[ "$r" != *opus* && "$(grep -o '401' <<<"$r" | wc -l | tr -d ' ')" == 3 ]]
+expect HP25 "lecture RTSP de speaker/* refusée pendant la parole : jeton, identifiants de publication, identifiants de contrôle" "$r"
+phase hp_talk3
+docker rm -f lmt-whip2 >/dev/null 2>&1
+wait "$WHIP1"
+n=0; while [[ $n -lt 120 ]] && ! docker exec lmt-hw test -s /tmp/hp-watch.json; do sleep 1; n=$((n + 1)); done
+lat="$(docker exec lmt-hw cat /tmp/hp-watch.json 2>/dev/null | python3 -c '
+import json, sys
+w = json.load(sys.stdin); f = json.load(open(sys.argv[1]))
+tones, onsets = f["tones"], w["onsets"]
+lat = []
+for t in tones:
+    after = [o for o in onsets if o >= t]
+    if after: lat.append(round((after[0] - t) * 1000))
+print(json.dumps({"tones": len(tones), "onsets": len(onsets), "ms": lat}))' "$RUN/feed.json" 2>&1)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["tones"] == 3 and len(d["ms"]) == 3 else 1)' "$lat" 2>/dev/null
+expect HP27 "le lecteur reçoit et joue ce qui est publié : les 3 bips du publieur arrivent dans la sortie ALSA (faux matériel)" "$lat"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if len(d["ms"]) == 3 and max(d["ms"]) < 1000 else 1)' "$lat" 2>/dev/null
+expect HP28 "latence publieur → sortie ALSA < 1 s (Opus, WHIP, MediaMTX, RTSP, décodage, aplay ; hors tampon de la carte et réseau)" "$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); m=sorted(d["ms"]); print("mesures", d["ms"], "ms, médiane", m[len(m)//2] if m else None, "ms")' "$lat" 2>&1)"
+phase hp_after
+r="$(docker exec lmt-media sh -c 'ls -d /recordings/speaker 2>&1; ls /recordings' | tr '\n' ' ')"
+[[ "$r" == *"No such file"* ]]; expect HP29 "rien n'est enregistré sous speaker/ (aucun dossier dans /recordings)" "$r"
+whip_pub lmt-whip3 -re -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 60
+phase hp_kick
+docker rm -f lmt-whip3 >/dev/null 2>&1
+r="$(docker inspect -f '{{.State.Running}} {{.RestartCount}} {{.State.StartedAt}}' lmt-media-capture)"
+[[ "$r" == "true 0 $cap_started0" && -n "$spk_pid0" && "$(ffpids "$CAM2")" == "$spk_pid0" ]]
+expect HP30 "lecteurs en erreur ou en service : la capture n'a pas redémarré, le ffmpeg de la webcam est le même" "$r · pid ${spk_pid0}→ $(ffpids "$CAM2")"
+
 # ── 7. Arrêt de lab-media-auth ───────────────────────────────────────────────
 note "lab-media-auth ARRÊTÉ (cycle de vie)"
 started0="$(docker inspect -f '{{.State.StartedAt}}' lmt-media)"
@@ -441,6 +514,10 @@ for s in "$CAP" "$A_CTL" "$TOKEN_A" "$HOOK"; do grep -q -F -- "$s" <<<"$clogs" &
 expect J3 "journal de la capture : jamais le mot de passe de publication (masqué dans les messages de ffmpeg)" "$(wc -l <<<"$clogs") lignes, $cleak secret(s) trouvé(s)"
 [[ "$mleak" == 0 ]]
 expect J2 "journal de MediaMTX : aucun identifiant d'app ni jeton" "$mleak secret(s) d'app ; LAB_MEDIA_HOOK_KEY y apparaît $hookleak fois (limite connue, voir README)"
+
+note "Haut-parleurs : capture arrêtée"
+docker stop -t 5 lmt-media-capture >/dev/null
+phase hp_offline
 
 echo
 if [[ $FAILS -eq 0 ]]; then

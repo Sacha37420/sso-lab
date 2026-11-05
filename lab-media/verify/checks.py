@@ -156,7 +156,8 @@ def p_control():
     code, data = js('GET', f'{AUTH}/v1/paths', basic=A)
     names = sorted(i['path'] for i in (data or {}).get('items', []))
     check('C5', 'appa ne liste que ses chemins', code == 200 and names == [
-        'appa/cam', 'appa/short', 'webcam/audio', 'webcam/av', 'webcam/video'], f'{code} {names}')
+        'appa/cam', 'appa/short', 'speaker/hp-mixeur', 'speaker/hp-sortie', 'speaker/hp-test',
+        'webcam/audio', 'webcam/av', 'webcam/video'], f'{code} {names}')
     code, data = js('GET', f'{AUTH}/v1/paths', basic=B)
     names = sorted(i['path'] for i in (data or {}).get('items', []))
     check('C6', 'appb ne liste que ses chemins', code == 200 and names == ['appb/cam', 'appb/pulled'], f'{code} {names}')
@@ -241,6 +242,9 @@ def p_app_down():
           f'inboundBytes {before["inboundBytes"]} → {after["inboundBytes"]}, readyTime {after["readyTime"]}')
     code, _, _, _ = hls('appb/cam', TB)
     check('D3', '… et l\'autre app n\'est pas affectée', code == 200, f'HTTP {code}')
+    code, _, _, ms = whip('speaker/hp-test', TA)
+    check('HP11', 'haut-parleur, app autorité arrêtée (hook injoignable) : WHIP refusé (échec fermé)',
+          code == 401, f'HTTP {code} en {ms:.0f} ms')
 
 
 def _sessions(creds, **params):
@@ -392,6 +396,7 @@ CAM1 = 'usb-1b3f-0001-ssn01abtouchtmppwned'   # numéro de série hostile, rédu
 CAM2 = 'usb-1b3f-0002-p9-2'                    # sans numéro de série, sans micro
 CAM3 = 'usb-1b3f-0003-p9-3'
 LEGACY = 'webcam-ancienne'
+SPEAKERS = ['hp-mixeur', 'hp-sortie', 'hp-test']
 FIELDS = {'id', 'kind', 'model', 'vendor_id', 'product_id', 'serial', 'usb_port', 'has_audio', 'connected',
           'state', 'record', 'first_seen', 'last_seen', 'paths'}
 ISO = re.compile(r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$')
@@ -410,17 +415,23 @@ def by_id():
     return {d['id']: d for d in (devs()[1] or [])}
 
 
+def webcams():
+    return [d for d in (devs()[1] or []) if d.get('kind') == 'webcam']
+
+
 def states():
-    return {k: v['state'] for k, v in by_id().items()}
+    """États des WEBCAMS (les haut-parleurs ont leur propre section)."""
+    return {d['id']: d['state'] for d in webcams()}
 
 
 def p_m_start():
     code, data = devs()
-    check('M0', 'avant tout branchement : seule l\'entrée héritée, état legacy, chemins actuels webcam/*',
-          code == 200 and isinstance(data, list) and len(data) == 1 and data[0]['id'] == LEGACY
-          and data[0]['state'] == 'legacy' and data[0]['connected'] is False and data[0]['record'] is False
-          and data[0]['paths'] == {'av': 'webcam/av', 'video': 'webcam/video', 'audio': 'webcam/audio'}
-          and set(data[0]) == FIELDS, f'HTTP {code} {json.dumps(data)[:300]}')
+    cams = [d for d in data or [] if d.get('kind') == 'webcam']
+    check('M0', 'avant tout branchement : une seule webcam, l\'entrée héritée, état legacy, chemins actuels webcam/* (talk null)',
+          code == 200 and isinstance(data, list) and len(cams) == 1 and cams[0]['id'] == LEGACY
+          and cams[0]['state'] == 'legacy' and cams[0]['connected'] is False and cams[0]['record'] is False
+          and cams[0]['paths'] == {'av': 'webcam/av', 'video': 'webcam/video', 'audio': 'webcam/audio', 'talk': None}
+          and set(cams[0]) == FIELDS, f'HTTP {code} {json.dumps(cams)[:300]}')
     code_b, data_b = devs(B)
     code_l, _ = dev(LEGACY, B)
     check('M0b', 'appb (pas propriétaire du préfixe webcam) : liste vide, 404 sur un périphérique d\'appa',
@@ -442,18 +453,18 @@ def p_m_two():
           set(c1) == FIELDS and c1['kind'] == 'webcam' and c1['vendor_id'] == '1b3f' and c1['product_id'] == '0001'
           and c1['usb_port'] == '9-1' and c1['has_audio'] is True and c1['connected'] is True and c1['record'] is False
           and ISO.match(c1['first_seen']) and ISO.match(c1['last_seen'])
-          and c1['paths'] == {'av': f'webcam/{CAM1}/av', 'video': f'webcam/{CAM1}/video', 'audio': f'webcam/{CAM1}/audio'},
+          and c1['paths'] == {'av': f'webcam/{CAM1}/av', 'video': f'webcam/{CAM1}/video', 'audio': f'webcam/{CAM1}/audio', 'talk': None},
           json.dumps({k: c1.get(k) for k in ('id', 'serial', 'usb_port', 'has_audio', 'paths')}))
     check('M3', 'webcam sans micro ni numéro de série : identifiant par port, pas de chemin audio',
-          c2.get('has_audio') is False and c2.get('paths') == {'av': f'webcam/{CAM2}/av', 'video': f'webcam/{CAM2}/video', 'audio': None}
+          c2.get('has_audio') is False and c2.get('paths') == {'av': f'webcam/{CAM2}/av', 'video': f'webcam/{CAM2}/video', 'audio': None, 'talk': None}
           and c2.get('serial') == '' and c2.get('usb_port') == '9-2', json.dumps(c2.get('paths')))
     model = c1.get('model', '')
     check('M4', 'nom de produit hostile : rendu en texte, sans caractère de contrôle, borné à 100',
           isinstance(model, str) and 0 < len(model) <= 100 and not re.search(r'[\x00-\x1f\x7f\u202e]', model),
           f'{len(model)} caractères : {model[:60]!r}')
     order = [x['id'] for x in devs()[1]]
-    check('M5', 'liste par first_seen croissant (l\'héritée d\'abord)', order[:1] == [LEGACY] and set(order[1:]) == {CAM1, CAM2},
-          ' '.join(order))
+    check('M5', 'liste : webcams par first_seen croissant (l\'héritée d\'abord), puis les haut-parleurs par id',
+          order[:1] == [LEGACY] and set(order[1:3]) == {CAM1, CAM2} and order[3:] == SPEAKERS, ' '.join(order))
     _, p1 = path_of(A, f'webcam/{CAM1}/av')
     _, p1v = path_of(A, f'webcam/{CAM1}/video')
     _, p1a = path_of(A, f'webcam/{CAM1}/audio')
@@ -598,6 +609,187 @@ def p_m_persist():
           and (p2 or {}).get('readyTime') == load().get('cam2_ready'),
           f'record={d.get(CAM2, {}).get("record")}, oubliée absente : {CAM1 not in d}, readyTime inchangé : '
           f'{(p2 or {}).get("readyTime") == load().get("cam2_ready")}')
+
+
+# ── Haut-parleurs (chantier haut-parleur, I1 à I3) ───────────────────────────────────────
+HP = 'hp-test'
+TALK = f'speaker/{HP}'
+
+
+def whip(path, token, data=b'v=0\r\n'):
+    """WHIP « factice » : une offre SDP invalide. L'autorisation est tranchée AVANT l'analyse du
+    SDP : 401 = refusé par l'authentification ; 400 ou 406 (« no valid tracks found ») = autorisé,
+    puis SDP rejeté."""
+    return call('POST', f'{CADDY}/lab-media-webrtc/{path}/whip', data=data, ctype='application/sdp', bearer=token)
+
+
+def whep(path, token):
+    return call('POST', f'{CADDY}/lab-media-webrtc/{path}/whep', data=b'v=0\r\n', ctype='application/sdp', bearer=token)
+
+
+def spk(creds=A):
+    return {d['id']: d for d in (devs(creds)[1] or []) if d.get('kind') == 'speaker'}
+
+
+def p_hp_start():
+    want = {'hp-test': 'idle', 'hp-mixeur': 'error', 'hp-sortie': 'error'}
+    st = wait_for(lambda: (lambda d: {k: v['state'] for k, v in d.items()} == want and d)(spk()), 30)
+    d = st or spk()
+    hp = d.get(HP, {})
+    check('HP1', 'haut-parleur dans /v1/devices : forme I1 (kind speaker, chemins av/video/audio null, talk speaker/<id>, jamais enregistré)',
+          set(hp) == FIELDS and hp['kind'] == 'speaker' and hp['model'] == 'Haut-parleur de test'
+          and (hp['vendor_id'], hp['product_id'], hp['serial'], hp['usb_port']) == ('', '', '', '')
+          and hp['has_audio'] is False and hp['connected'] is True and hp['record'] is False
+          and ISO.match(hp['first_seen']) and ISO.match(hp['last_seen'])
+          and hp['paths'] == {'av': None, 'video': None, 'audio': None, 'talk': TALK}, json.dumps(hp))
+    m, o = d.get('hp-mixeur', {}), d.get('hp-sortie', {})
+    check('HP2', 'états : lecteur prêt ⇒ idle ; carte absente ⇒ error, error_detail distinct (mixeur / sortie), toujours connected',
+          bool(st) and 'error_detail' not in hp and m.get('connected') is True and o.get('connected') is True
+          and 'mixeur' in m.get('error_detail', '') and 'Sortie ALSA' in o.get('error_detail', ''),
+          json.dumps({k: (v['state'], v.get('error_detail', '')[:40]) for k, v in d.items()}, ensure_ascii=False))
+    code_l, data_l = devs(B)
+    code_g, data_g = dev(HP, B)
+    code_p, _ = path_of(B, TALK)
+    code_s, _ = _sessions(B, path=TALK)
+    check('HP3', 'appb : aucun haut-parleur listé ; 404 unknown_device, 404 sur le chemin et ses sessions',
+          code_l == 200 and data_l == [] and code_g == 404 and (data_g or {}).get('error') == 'unknown_device'
+          and code_p == 404 and code_s == 404, f'liste {data_l}, GET {code_g}, chemin {code_p}, sessions {code_s}')
+    patch = lambda body, creds=A: js('PATCH', f'{AUTH}/v1/devices/{HP}', basic=creds, data=body, ctype='application/json')
+    c1, d1 = patch(b'{"record": true}')
+    c2, _ = patch(b'{"record": false}')
+    c3, _ = patch(b'pas du json')
+    c4, _ = patch(b'{"record": true}', B)
+    c5, d5 = js('DELETE', f'{AUTH}/v1/devices/{HP}', basic=A)
+    check('HP4', 'PATCH d\'un haut-parleur → 409 not_recordable (quel que soit le corps) ; par appb → 404 ; DELETE → 409 not_forgettable',
+          (c1, c2, c3, c4, c5) == (409, 409, 409, 404, 409) and d1.get('error') == 'not_recordable'
+          and d5.get('error') == 'not_forgettable' and spk()[HP]['record'] is False, f'{c1} {d1} {c2} {c3} {c4} {c5} {d5}')
+    code, item = path_of(A, TALK)
+    code_r, data_r = js('GET', f'{AUTH}/v1/recordings?path={TALK}', basic=A)
+    code_g, _ = js('GET', f'{AUTH}/v1/recordings/get?path={TALK}&start=2026-01-01T00:00:00Z&duration=4', basic=A)
+    check('HP5', 'chemin du haut-parleur : connu d\'appa, jamais enregistré ; relecture → 404 (liste et plage)',
+          code == 200 and item['recorded'] is False and item['ready'] is False and code_r == 404 and code_g == 404,
+          f'{json.dumps(item)} recordings {code_r} {data_r}, get {code_g}')
+
+
+def p_hp_whip():
+    cam2 = f'webcam/{CAM2}/av'
+    clear_logs()
+    c1, _, _, _ = whip(cam2, TA)
+    c2, _, _, _ = whip('appa/cam', TA)
+    c3, _, _, _ = whip(f'webcam/{CAM2}/video', TA)
+    calls = hook_log(APPA) + hook_log(APPB)
+    check('HP6', 'WHIP avec le bon jeton sur des chemins de webcam et d\'app → 401, sans même consulter le hook (qui aurait dit 200)',
+          (c1, c2, c3) == (401, 401, 401) and not calls, f'HTTP {c1} {c2} {c3}, appels au hook {len(calls)}')
+    clear_logs()
+    c1, _, _, _ = whip(TALK, None)
+    c2, _, _, _ = whip(TALK, 'mauvais-jeton')
+    c3, _, _, _ = whip(TALK, TB)
+    la, lb = hook_log(APPA), hook_log(APPB)
+    check('HP7', 'WHIP sur speaker/* sans jeton, mauvais jeton, jeton d\'appb → 401 ; chaque fois relayé au hook d\'appa seul, qui refuse',
+          (c1, c2, c3) == (401, 401, 401) and len(la) == 3 and not lb and all(x['status'] == 401 for x in la),
+          f'HTTP {c1} {c2} {c3}, hook appa {[x["status"] for x in la]}, appb {len(lb)}')
+    clear_logs()
+    code, _, body, _ = whip(TALK, TA)
+    la = hook_log(APPA)
+    b = (la[-1] if la else {}).get('body') or {}
+    wanted = {'ip', 'user', 'password', 'token', 'action', 'path', 'protocol', 'id', 'query', 'userAgent'}
+    check('HP8', 'WHIP sur speaker/* avec le bon jeton : le hook d\'appa reçoit le corps de MediaMTX tel quel (publish, webrtc, jeton) et dit 200 ; l\'authentification passe (400/406 = SDP factice rejeté APRÈS)',
+          code in (400, 406) and bool(la) and la[-1]['key_ok'] and la[-1]['status'] == 200 and set(b) == wanted
+          and (b['action'], b['protocol'], b['path'], b['token']) == ('publish', 'webrtc', TALK, TA),
+          f'HTTP {code} {body[:60]!r}, corps {json.dumps({k: ("…" if k == "token" else v) for k, v in b.items()})}')
+    mode(APPA, '500')
+    c1, _, _, _ = whip(TALK, TA)
+    mode(APPA, 'hang')
+    c2, _, _, ms = whip(TALK, TA)
+    mode(APPA, 'ok')
+    check('HP9', 'WHIP sur speaker/*, hook en 500 ou qui PEND → 401 (échec fermé, en temps borné)',
+          c1 == 401 and c2 == 401 and ms < 9000, f'HTTP {c1}, puis {c2} en {ms:.0f} ms')
+
+
+def p_hp_talk():
+    """verify.sh publie en WHIP (ffmpeg, à travers le Caddy de test) sur speaker/hp-test."""
+    item = wait_for(lambda: (lambda i: i.get('ready') and i)(path_of(A, TALK)[1] or {}), 20, 0.5)
+    st = spk().get(HP, {}).get('state')
+    check('HP12', 'publication WHIP acceptée : chemin prêt (Opus), haut-parleur « talking »',
+          bool(item) and item['tracks'] == ['Opus'] and st == 'talking', f'{json.dumps(item)} état {st}')
+    sessions = (_sessions(A, path=TALK)[1] or {}).get('items', [])
+    pubs = [x for x in sessions if x['state'] == 'publish']
+    hook_ids = [x['body']['id'] for x in hook_log(APPA) if x['body'].get('action') == 'publish' and x['status'] == 200]
+    check('HP13', 'GET /v1/sessions?path=speaker/<id> : une session webrtc « publish », d\'id celui reçu par le hook',
+          len(pubs) == 1 and pubs[0]['protocol'] == 'webrtc' and pubs[0]['id'] in hook_ids,
+          f'{json.dumps(pubs)} ids du hook {hook_ids[-3:]}')
+    save(talk_ready=(item or {}).get('readyTime'), talk_session=pubs[0]['id'] if pubs else None)
+    clear_logs()
+    c1, _, _, _ = whep(TALK, TA)
+    c2, _, _, _ = hls(TALK, TA)
+    c3, _, _, _ = whep(TALK, None)
+    calls = hook_log(APPA) + hook_log(APPB)
+    check('HP14', 'pendant la parole : lecture WHEP (bon jeton, sans jeton) et HLS sur speaker/* → 401, le hook n\'est PAS appelé',
+          (c1, c2, c3) == (401, 401, 401) and not calls, f'WHEP {c1}, HLS {c2}, WHEP sans jeton {c3}, appels au hook {len(calls)}')
+    seen_b = [x['id'] for x in _sessions(B)[1]['items']]
+    code_k, _ = js('POST', f'{AUTH}/v1/sessions/webrtc/{pubs[0]["id"] if pubs else "x"}/kick', basic=B)
+    check('HP15', 'appb ne voit pas la session de parole et ne peut pas l\'expulser (404)',
+          bool(pubs) and pubs[0]['id'] not in seen_b and code_k == 404 and path_of(A, TALK)[1]['ready'],
+          f'vue par appb : {bool(pubs) and pubs[0]["id"] in seen_b}, kick {code_k}')
+    clear_logs()
+
+
+def p_hp_talk2():
+    """verify.sh a lancé un second publieur WHIP pendant la parole."""
+    item = path_of(A, TALK)[1] or {}
+    pubs = [x for x in (_sessions(A, path=TALK)[1] or {}).get('items', []) if x['state'] == 'publish']
+    check('HP17', 'second publieur WHIP (accepté par le hook) : MediaMTX le refuse ; le premier continue (même session, même readyTime)',
+          item.get('ready') and item.get('readyTime') == load().get('talk_ready') and [x['id'] for x in pubs] == [load().get('talk_session')],
+          f'readyTime {load().get("talk_ready")} → {item.get("readyTime")}, publieurs {[x["id"] for x in pubs]}')
+    clear_logs()
+
+
+def p_hp_talk3():
+    """verify.sh a tenté des lectures RTSP de speaker/hp-test."""
+    calls = [x for x in hook_log(APPA) + hook_log(APPB) if x['body'].get('action') == 'read']
+    check('HP16', 'lectures RTSP de speaker/* (jeton, identifiants de publication ou de contrôle d\'appa) : le hook n\'est pas appelé',
+          not calls, f'{len(calls)} appel(s) de lecture au hook')
+
+
+def p_hp_after():
+    """La publication WHIP de verify.sh est terminée (fin du flux)."""
+    st = wait_for(lambda: (lambda d: d.get(HP, {}).get('state') == 'idle' and d)(spk()), 15, 0.5)
+    item = path_of(A, TALK)[1] or {}
+    check('HP18', 'fin de parole : le haut-parleur revient à « idle », le chemin n\'est plus prêt',
+          bool(st) and item.get('ready') is False, f'état {spk().get(HP, {}).get("state")}, prêt {item.get("ready")}')
+
+
+def p_hp_kick():
+    """verify.sh a lancé une nouvelle publication WHIP, longue."""
+    item = wait_for(lambda: (lambda i: i.get('ready') and i)(path_of(A, TALK)[1] or {}), 20, 0.5)
+    pubs = [x for x in (_sessions(A, path=TALK)[1] or {}).get('items', []) if x['state'] == 'publish']
+    if not (item and pubs):
+        check('HP19', 'expulsion d\'un publieur de haut-parleur', False, f'aucune parole en cours : {json.dumps(item)} {pubs}')
+        return
+    sid = pubs[0]['id']
+    code_b, _ = js('POST', f'{AUTH}/v1/sessions/webrtc/{sid}/kick', basic=B)
+    code_k, _, body, _ = call('POST', f'{AUTH}/v1/sessions/webrtc/{sid}/kick', basic=A, data=b'')
+    gone = wait_for(lambda: (path_of(A, TALK)[1] or {}).get('ready') is False and ['ok'], 5, 0.2)
+    st = wait_for(lambda: spk().get(HP, {}).get('state') == 'idle' and ['ok'], 10, 0.5)
+    check('HP19', 'I3 : expulsion d\'un publieur sur speaker/* → 204 (appb → 404) ; la parole s\'arrête (chemin non prêt), état idle',
+          code_b == 404 and code_k == 204 and body == b'' and bool(gone) and bool(st),
+          f'appb {code_b}, appa {code_k}, chemin libéré {bool(gone)}, idle {bool(st)}')
+    pubs = [s for s in _sessions(A, protocol='rtsp')[1]['items'] if s['state'] == 'publish' and s['path'] == f'webcam/{CAM2}/av']
+    code_p = js('POST', f'{AUTH}/v1/sessions/rtsp/{pubs[0]["id"]}/kick', basic=A)[0] if pubs else None
+    check('HP20', 'I3 : un publieur de webcam reste non expulsable (409 not_a_reader)', code_p == 409,
+          f'{len(pubs)} publication(s) de webcam/{CAM2}/av, kick HTTP {code_p}')
+    _, cams = devs()
+    check('HP21', 'webcams non affectées par les haut-parleurs (dont deux en erreur) : la webcam capturée est toujours live',
+          {d['id']: d['state'] for d in cams if d['kind'] == 'webcam'}.get(CAM2) == 'live', json.dumps(states()))
+
+
+def p_hp_offline():
+    """verify.sh a ARRÊTÉ la capture."""
+    st = wait_for(lambda: (lambda d: all(v['state'] == 'offline' for v in d.values()) and d)(spk()), 20, 1)
+    hp = (st or spk()).get(HP, {})
+    check('HP22', 'capture arrêtée : les haut-parleurs passent « offline » (connected false) en moins de 20 s',
+          bool(st) and hp.get('connected') is False and ISO.match(hp.get('last_seen', '')),
+          json.dumps({k: v['state'] for k, v in spk().items()}))
 
 
 PHASES = {name[2:]: fn for name, fn in globals().items() if name.startswith('p_')}

@@ -2,10 +2,10 @@
 
 `lab-media` est le point d'entrée unique des flux audio et vidéo du lab, comme `postgres` l'est pour les données et `storage` pour les fichiers. Il reçoit des flux, les diffuse (WebRTC et HLS) et les enregistre. Il ne décide jamais qui peut lire : cette décision reste à l'app qui possède le flux.
 
-- Contrats : `chantiers/lab-media/CONTRAT.md` ; webcams : `chantiers/webcams/CONTRAT.md`.
+- Contrats : `chantiers/lab-media/CONTRAT.md` ; webcams : `chantiers/webcams/CONTRAT.md` ; haut-parleur : `chantiers/haut-parleur/CONTRAT.md`.
 - API des apps (fait foi) : [`API.md`](API.md).
 - Bascule depuis `peripheriques` : [`BASCULE.md`](BASCULE.md).
-- Preuve rejouable : `bash lab-media/verify.sh` (environ 7 minutes, pile isolée `lmt-*`, faux matériel, la vraie caméra n'est ni montée ni ouverte).
+- Preuve rejouable : `bash lab-media/verify.sh` (environ 12 minutes sur l'hôte chargé, pile isolée `lmt-*`, faux matériel : la vraie caméra n'est ni montée ni ouverte, aucune carte son n'est ouverte et aucun son ne sort).
 
 ## Les pièces
 
@@ -25,28 +25,32 @@
 |---|---|
 | `lab-media` | MediaMTX 1.21.1, épinglé par digest. `authMethod: http`, `authHTTPExclude` vide : chaque action passe par `lab-media-auth`. |
 | `lab-media-auth` | Python, bibliothèque standard seule. Répond au hook de MediaMTX, expose l'API de contrôle des apps, découvre les webcams (sysfs), tient leur inventaire et le plan de capture, et écrit la configuration de MediaMTX à partir du registre et de l'inventaire. |
-| `lab-media-capture` | Superviseur + un ffmpeg par webcam du plan (au plus `MEDIA_CAPTURE_MAX`) : ouvre la webcam (et son micro s'il y en a un), encode une fois, publie `webcam/<id>/{av,video[,audio]}`. Profil Compose `capture` : la brique tourne sans lui. |
+| `lab-media-capture` | Superviseur + un ffmpeg par webcam du plan (au plus `MEDIA_CAPTURE_MAX`) : ouvre la webcam (et son micro s'il y en a un), encode une fois, publie `webcam/<id>/{av,video[,audio]}`. Et un lecteur par haut-parleur déclaré : joue sur la sortie ALSA ce qui est publié sur `speaker/<id>`. Profil Compose `capture` : la brique tourne sans lui. |
 
 | Fichier | Rôle |
 |---|---|
-| `docker-compose.yml` | Les trois services, leurs trois réseaux, les volumes `config` et `state`. |
-| `registry.json` | Le registre : apps, préfixes, sources, chemins, section `devices` (préfixe des webcams, rétention, entrée héritée). Aucun secret. |
+| `docker-compose.yml` | Les trois services, leurs trois réseaux, les volumes `config`, `state` et `speakers`. |
+| `registry.json` | Le registre : apps, préfixes, sources, chemins, section `devices` (préfixe des webcams, rétention, entrée héritée, haut-parleurs déclarés). Aucun secret. |
 | `.env` (non versionné) | Secrets et réglages ; modèle : `.env.example`. |
 | `auth/labmediaauth/` | `registry.py` (registre, génération de `mediamtx.yml`), `server.py` (hook et API), `devices.py` (découverte des webcams, inventaire, plan). |
 | `auth/mediamtx.base.yml` | Partie fixe de la configuration de MediaMTX. |
-| `mediamtx/` | Image commune à MediaMTX et à la capture : `entrypoint.sh`, `capture.sh` (superviseur), `capture-one.sh` (une webcam). |
-| `verify.sh`, `verify/` | La preuve rejouable : apps fictives, sources synthétiques, faux matériel (`fakehw.py`, `compose.test.yml`). |
+| `mediamtx/` | Images de MediaMTX et de la capture (`Dockerfile` à étapes : la capture a en plus `alsa-utils`) : `entrypoint.sh`, `capture.sh` (superviseur), `capture-one.sh` (une webcam), `speaker-one.sh` (un haut-parleur). |
+| `verify.sh`, `verify/` | La preuve rejouable : apps fictives, sources synthétiques, faux matériel (`fakehw.py`, `compose.test.yml`, `asound.test.conf`), mesure de latence du haut-parleur (`speakerprobe.py`). |
 
 ## Qui décide quoi
 
 | Action | Décidée par | Règle |
 |---|---|---|
 | `publish` | `lab-media-auth` | Identifiants de publication de l'app propriétaire du préfixe, ou d'une source interne sur ses chemins. RTSP seulement. Chemin déclaré au registre. |
+| `publish` sur `speaker/<id>` | **l'app propriétaire du préfixe** | WebRTC (WHIP) seulement : `lab-media-auth` relaie le corps de MediaMTX à son hook, comme une lecture. Aucun identifiant n'ouvre une publication RTSP sur ces chemins. Un seul publieur à la fois (`overridePublisher: no`). |
 | `read` | **l'app propriétaire du préfixe** | `lab-media-auth` relaie le corps de MediaMTX à son hook. Seul un `200` reçu en moins de 3 s autorise. |
+| `read` sur `speaker/<id>` | `lab-media-auth` | Fermée à tous, sans consulter l'app, sauf au lecteur de la capture (RTSP, identifiants de la source `capture`). Personne n'écoute ce qui est dit ; rien n'est enregistré. |
 | `api`, `playback`, `metrics`, `pprof` | `lab-media-auth` | Identifiants internes, tirés au hasard à chaque démarrage, jamais écrits nulle part. |
 | Toute autre action | — | Refusée. |
 
 **Ne jamais utiliser `authHTTPExclude`.** Sur MediaMTX 1.21.1, une action exclue est autorisée sans aucun contrôle, WHIP compris (essai réel du 2026-10-11). Le générateur de configuration refuse de démarrer si la base en contient.
+
+La publication WHIP est joignable depuis Internet (Caddy sert tout `/lab-media-webrtc/*`) : elle n'est ouverte **que** sur les chemins de haut-parleur, et c'est le hook de l'app qui décide. Sur tout autre chemin, elle est refusée avant même de consulter l'app (contrôles HP6, P7, P8).
 
 ## Ajouter une app
 
@@ -91,6 +95,22 @@
   - `MEDIA_DEVICE_VIDEO` et `MEDIA_DEVICE_AUDIO` ne sont plus lues : présentes dans `.env`, elles sont ignorées.
   - `MEDIA_CAPTURE_MODE=testsrc` remplace chaque webcam du plan par une mire (et un bip si elle a un micro) : mêmes chemins, aucun périphérique ouvert.
   - Ce conteneur n'est que sur le réseau interne.
+- **Haut-parleurs** (`capture`, chantier haut-parleur) :
+  - **Déclarés** au registre, pas découverts (une prise jack n'a pas d'identité USB) : `devices.speakers`, et le préfixe `speaker` dans les `prefixes` de l'app qui possède celui des webcams (`lab-media-auth` refuse de démarrer sinon). Exemple (le haut-parleur réel du lab) :
+    ```json
+    "devices": {"…": "…",
+      "speakers": {"hp-jack": {"model": "Haut-parleur (prise jack)", "pcm": "plughw:CARD=PCH,DEV=0",
+                               "mixer": {"card": "PCH", "control": "Master", "volume": 80}}}}
+    ```
+    - identifiant `^[a-z][a-z0-9-]{1,40}$`, jamais `usb-…` ni `webcam…` ; chemin `speaker/<id>` (calculé, jamais déclaré dans `paths`) ;
+    - `pcm` : la sortie ALSA (`[A-Za-z0-9_:=,.-]`, sans espace). Nommer la carte par son **id** (`CARD=PCH`, `/proc/asound/cards`) plutôt que par son numéro : l'ordre des cartes (carte mère, HDMI de la carte graphique) peut changer au démarrage de l'hôte. `plughw` convertit format, fréquence et canaux ;
+    - `mixer` : `null` (le mixeur n'est pas touché) ou `{"card", "control" (défaut `Master`), "volume" (0 à 100, défaut 80)}` ;
+    - huit au plus.
+  - **Mixeur** : au démarrage du lecteur (et après chaque erreur de sortie), `amixer -c <card> sset <control> <volume>% unmute`. Rien d'autre : ni les entrées (micros), ni `Auto-Mute Mode`, ni les autres sorties. Sur la carte du lab (ALC662), `Master` est à 0 % et coupé par défaut, `Headphone`/`Line Out`/`Speaker` à 100 % : sans ce réglage, rien n'est audible. Avec `Auto-Mute Mode` actif, brancher un casque en façade coupe la prise arrière.
+  - **Lecteur** (`speaker-one.sh`, un par haut-parleur, supervisé par `capture.sh` comme les webcams) : `ffmpeg` lit `speaker/<id>` en RTSP (identifiants de la source `capture` : il est le seul lecteur permis), décode en PCM 48 kHz stéréo sans tampon (`-fflags nobuffer -flush_packets 1`), et `aplay` joue sur `pcm` avec un tampon ALSA borné (`MEDIA_SPEAKER_BUFFER_MS`, 160 ms par défaut ; lecture lancée à la moitié). Latence publieur → sortie ALSA mesurée par `verify.sh` (HP28) : 218 à 290 ms sur deux exécutions (médianes 226 et 260 ms, encodage Opus et WHIP compris) ; s'y ajoutent le tampon de la carte (lecture lancée à 80 ms, 160 ms au plus) et le trajet réseau du navigateur.
+  - **Quand se connecte-t-il ?** Jamais en continu : `lab-media-auth` écrit `/state/talk` (`<id> <génération> <prêt>`). Une publication WHIP autorisée change la génération : le lecteur tente sa connexion toutes les 0,3 s pendant 15 s au plus. Pendant une parole, `lab-media-auth` suit l'état « prêt » de MediaMTX (toutes les 2 s) ; hors de ces moments, il n'interroge pas MediaMTX et le lecteur n'appelle pas le hook. La carte son n'est ouverte qu'au premier échantillon reçu.
+  - **État** (`API.md` §1.5) : le lecteur écrit `idle`, `error mixer` ou `error output` dans le volume `speakers` (`/speakers/<id>`), toutes les 2 s ; `lab-media-auth` le lit. Statut de plus de 10 s : `offline` (capture absente). Un échec ALSA (carte absente, contrôle inconnu, sortie occupée) passe à `error` et fait réessayer toutes les 5 s, avec à chaque essai 0,1 s de silence envoyé à la sortie pour l'éprouver : jamais d'arrêt de la capture vidéo (contrôle HP30).
+  - Jamais enregistré (`record: no` forcé dans `mediamtx.yml`, quel que soit le registre ; relecture → `404`).
 - **Publiée par une app** : RTSP vers `lab-media:8554`, identifiants de publication de l'app.
 - **Tirée** : `source_env` au registre.
 
@@ -111,7 +131,7 @@ Les deux conteneurs sont séparés. MediaMTX ne dépend de `lab-media-auth` qu'a
 | `lab-media-auth` arrêté | Publications en cours, enregistrement, lecteurs WebRTC déjà ouverts (octets toujours émis) | Toute nouvelle lecture, toute nouvelle publication (ffmpeg ne peut pas se reconnecter), l'API de contrôle : ni état, ni **expulsion** |
 | `lab-media-auth` redémarré | Tout ce qui précède ; MediaMTX ne redémarre pas | Rien de plus ; la lecture reprend dès son retour |
 | `lab-media-auth` arrêté ou recréé (webcams) | La capture des webcams du plan (le plan est sur disque ; même ffmpeg, prouvé X8, G4), l'inventaire et les réglages d'enregistrement (volume `state`, prouvé M30) | La découverte : un branchement n'est vu, et l'API `/v1/devices` ne répond, qu'à son retour. Une webcam débranchée pendant l'arrêt perd son flux (ffmpeg échoue, le travailleur attend son retour sur le port) |
-| `lab-media-capture` arrêté | Inventaire, découverte, API | Toute publication de webcam ; après 20 s, les webcams branchées passent en `error` |
+| `lab-media-capture` arrêté | Inventaire, découverte, API | Toute publication de webcam ; après 20 s, les webcams branchées passent en `error`. Les haut-parleurs passent `offline` en 10 s ; une parole publiée n'est plus jouée |
 | MediaMTX redémarré | — | Toutes les sessions. Les publications reviennent d'elles-mêmes (`capture.sh` boucle ; une app qui publie doit faire de même) |
 
 Conséquence : pendant un arrêt de `lab-media-auth`, une révocation de droit ne peut pas couper un lecteur déjà ouvert. Garder cet arrêt court (un redémarrage prend quelques secondes).
@@ -121,7 +141,7 @@ Conséquence : pendant un arrêt de `lab-media-auth`, une révocation de droit n
 - `lab-media` : `internal`, `dev-net`, `sso-net`. Seul port publié sur l'hôte : ICE 8189, UDP et TCP.
 - L'API (9997) et la relecture (9996) de MediaMTX n'écoutent que sur l'adresse du réseau `internal` : depuis `dev-net` et `sso-net`, la connexion est refusée.
 - `lab-media-auth` : `internal` (hook, port 9000, lié à cette seule adresse) et `dev-net` (API de contrôle, port 9100). Il n'est pas sur `sso-net` et ne porte aucun label Caddy.
-- `lab-media-capture` : `internal` seulement.
+- `lab-media-capture` : `internal` seulement. Il est le seul à ouvrir une carte son (micros des webcams en entrée, haut-parleurs en sortie).
 
 ## Journaux
 
@@ -140,3 +160,6 @@ Conséquence : pendant un arrêt de `lab-media-auth`, une révocation de droit n
 - Basculer `record` d'un chemin dans le fichier ne coupe ni la publication ni le lecteur (essai réel) ; un chemin à `record: no` avec `recordDeleteAfter` voit quand même ses anciens segments purgés. `recordDeleteAfter` doit être ≥ `recordSegmentDuration`, sinon MediaMTX refuse de démarrer.
 - ffmpeg cite l'URL de publication, mot de passe compris, dans ses messages d'erreur (`Slave '…rtsp://capture:<mot de passe>@…'`). La capture fait passer son journal par un filtre qui le masque (contrôles J3, J4).
 - Caddy (`caddy-docker-proxy`) lit les labels de **tous** les conteneurs de l'hôte : une pile de test ne doit porter aucun label `caddy`. `verify.sh` renomme le label en `lmtcaddy`, lu par un Caddy de test.
+- Un client WHIP qui ne tente que le **premier** candidat ICE de la réponse (ffmpeg 8.1) échoue quand MediaMTX annonce les adresses de ses interfaces : la première est `127.0.0.1`. `verify.sh` fait tourner son publieur dans l'espace réseau de `lmt-media` (`--network container:lmt-media`) ; un navigateur essaie tous les candidats.
+- Un **second publieur** WHIP sur un chemin occupé passe l'authentification (le hook de l'app est consulté) et reçoit sa réponse SDP : c'est MediaMTX qui ferme la session juste après l'établissement de la connexion (« someone is already publishing »). Le client voit une connexion fermée, pas un code HTTP d'erreur.
+- `ffmpeg -f alsa` choisit le plus grand tampon ALSA permis (jusqu'à 131072 trames, 2,7 s à 48 kHz) : une rafale après une coupure réseau y resterait comme retard. D'où `aplay`, dont le tampon se règle (`--buffer-time`).

@@ -1,6 +1,7 @@
 """App fictive de verify.sh : le hook de lecture d'une app (forme du contrat peripheriques I2).
 
-POST /hook?key=<clé>   corps MediaMTX → 200 ssi action == "read" et token == GOOD_TOKEN, sinon 401
+POST /hook?key=<clé>   corps MediaMTX → 200 ssi action ∈ {read, publish} et token == GOOD_TOKEN,
+                       sinon 401 (publish : chantier haut-parleur, WHIP sur speaker/*)
                        (mode « 500 » : répond 500 ; mode « hang » : ne répond pas avant 60 s)
 GET  /_log             tout ce que le hook a reçu : [{"key_ok": bool, "body": {...}, "status": int}]
 POST /_mode?m=ok|500|hang      POST /_clear
@@ -55,7 +56,7 @@ class H(BaseHTTPRequestHandler):
         elif mode == '500':
             status = 500
         else:
-            ok = key_ok and isinstance(body, dict) and body.get('action') == 'read' and body.get('token') == GOOD
+            ok = key_ok and isinstance(body, dict) and body.get('action') in ('read', 'publish') and body.get('token') == GOOD
             status = 200 if ok else 401
         with lock:
             state['log'].append({'key_ok': key_ok, 'body': body, 'raw': raw.decode('utf-8', 'replace'),

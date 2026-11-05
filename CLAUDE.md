@@ -1290,6 +1290,22 @@ conteneurs `lab-media` (MediaMTX), `lab-media-auth` (mini-service d'authentifica
   droit Micro est refusé (400) sur une webcam sans micro. Le hook retrouve le périphérique par ses
   chemins exacts ; l'expulsion à la révocation compare des chemins exacts (un préfixe `webcam/`
   aurait expulsé les lecteurs de toutes les webcams).
+- **Haut-parleur** (2026-11-05, chantier `chantiers/haut-parleur/`) : déclaré au registre, pas
+  découvert (`devices.speakers.hp-jack`, prise jack de la carte mère, `plughw:CARD=PCH,DEV=0` —
+  carte nommée, pas numérotée ; mixeur `PCH Master` remis à 80 % et activé par le lecteur à chaque
+  démarrage, il était à 0 % coupé). Chemin `speaker/hp-jack`, préfixe de `peripheriques`. **Seule
+  publication WebRTC (WHIP) ouverte du lab** : sur `speaker/*` uniquement, relayée au hook de l'app
+  (échec fermé) ; WHIP partout ailleurs et RTSP sur `speaker/*` restent refusés ; **personne ne lit
+  `speaker/*`** sauf le lecteur de la capture (RTSP), jamais enregistré, un seul publieur
+  (`overridePublisher: no` — le second reçoit 201 puis est fermé : MediaMTX consulte le hook avant
+  de le refuser). Le lecteur (`mediamtx/speaker-one.sh`, ffmpeg → `aplay`, tampon 160 ms) vit dans
+  `lab-media-capture`. Côté peripheriques : droit « Parler » (`Grant.speaker`), bouton sur Direct,
+  coupure et révocation expulsent les publieurs ; le pont rend `speakers`. Avec `Auto-Mute Mode`,
+  un casque en façade coupe la prise arrière.
+- Redéployer `lab-media-auth`/`lab-media-capture` sans MediaMTX :
+  `docker compose -f lab-media/docker-compose.yml --profile capture build auth capture` puis
+  `… up -d --no-deps auth capture` (webcams coupées ~15 s). Ne pas recréer `media` par la même
+  occasion : son image vient d'une autre étape du Dockerfile.
 - Vérification rejouable sans matériel : `bash lab-media/verify.sh` (sources synthétiques, deux
   apps fictives, 149 contrôles dont multi-caméras sur faux matériel). MediaMTX écrit l'URL du hook, donc sa clé, dans son journal quand
   le hook est injoignable : limite connue.

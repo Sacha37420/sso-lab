@@ -14,6 +14,12 @@ Section "devices" (chantier webcams) : les webcams USB découvertes par lab-medi
 ne sont PAS écrits ici. Le registre ne déclare que le préfixe, la durée des segments et la
 rétention, et l'entrée héritée (« webcam-ancienne ») avec ses chemins.
 
+Sous-section "devices.speakers" (chantier haut-parleur) : les haut-parleurs sont DÉCLARÉS, pas
+découverts (une prise jack n'a pas d'identité USB). Chacun a un chemin `speaker/<id>`, sur
+lequel on ne publie qu'en WebRTC (WHIP, décision relayée au hook de l'app) et que seul le
+lecteur interne de la source des webcams lit, en RTSP. Le préfixe `speaker` doit appartenir à
+la même app que `devices.prefix`.
+
 Toute incohérence arrête le service au démarrage : jamais de défaut silencieux
 sur un secret, jamais de chemin sans propriétaire.
 """
@@ -32,6 +38,15 @@ PULL_RE = re.compile(r'^rtsps?://[^\s"\'\\]+$')
 MIN_SECRET = 16
 
 RECORD_PATH = '/recordings/%path/%Y-%m-%d_%H-%M-%S-%f'
+
+SPEAKER_PREFIX = 'speaker'
+SPEAKER_ID_RE = re.compile(r'^[a-z][a-z0-9-]{1,40}$')
+# Nom de PCM ALSA (« plughw:CARD=PCH,DEV=0 », « hw:0,0 », un nom défini dans asound.conf) :
+# il passe par le plan de capture et en argument d'aplay — jeu de caractères fermé, sans espace.
+ALSA_PCM_RE = re.compile(r'^[A-Za-z0-9_:=,.-]{1,64}$')
+ALSA_CARD_RE = re.compile(r'^[A-Za-z0-9_]{1,32}$')        # id de carte (« PCH ») ou numéro
+ALSA_CONTROL_RE = re.compile(r'^[A-Za-z0-9_-]{1,44}$')    # contrôle simple du mixeur, sans espace
+DEFAULT_SPEAKER_VOLUME = 80
 
 
 class RegistryError(ValueError):
@@ -78,12 +93,35 @@ class Legacy:
 
 
 @dataclass(frozen=True)
+class Mixer:
+    """Réglage appliqué au mixeur de la carte au démarrage du lecteur : `control` réactivé
+    (unmute) et mis à `volume` %. Les entrées (micros) ne sont jamais touchées."""
+    card: str
+    control: str = 'Master'
+    volume: int = DEFAULT_SPEAKER_VOLUME
+
+
+@dataclass(frozen=True)
+class Speaker:
+    """Haut-parleur déclaré (chantier haut-parleur, I1)."""
+    id: str
+    model: str
+    pcm: str                      # sortie ALSA
+    mixer: Mixer | None           # None : le mixeur n'est pas touché
+
+    @property
+    def path(self) -> str:
+        return f'{SPEAKER_PREFIX}/{self.id}'
+
+
+@dataclass(frozen=True)
 class DevicesConf:
     prefix: str
     source: str                   # nom de la source qui publie leurs flux
     segment: str
     delete_after: str
     legacy: Legacy | None
+    speakers: dict = field(default_factory=dict)    # id → Speaker
 
 
 @dataclass(frozen=True)
@@ -97,6 +135,8 @@ class PathConf:
     # Écrire les réglages d'enregistrement même quand `record` est faux : MediaMTX purge alors
     # quand même les anciens segments au bout de `delete_after` (essai réel sur 1.21.1).
     retain: bool = False
+    # Chemin de haut-parleur (`speaker/<id>`) : publication WHIP seule, jamais lu ni enregistré.
+    talk: bool = False
 
 
 @dataclass
@@ -124,6 +164,10 @@ class Registry:
 
     def app_paths(self, app: App) -> list[str]:
         return sorted(p for p in self.paths if self.owns(app, p))
+
+    def is_talk(self, path) -> bool:
+        conf = self.paths.get(path) if isinstance(path, str) else None
+        return conf is not None and conf.talk
 
     def app_by_control_user(self, user: str) -> App | None:
         for app in self.apps.values():
@@ -299,8 +343,8 @@ def _when(value, what: str) -> float:
 def _load_devices(conf, reg: Registry) -> DevicesConf | None:
     if conf is None:
         return None
-    if not isinstance(conf, dict) or set(conf) - {'prefix', 'source', 'segment', 'delete_after', 'legacy'}:
-        raise RegistryError('devices : clés attendues prefix, source, segment, delete_after, legacy')
+    if not isinstance(conf, dict) or set(conf) - {'prefix', 'source', 'segment', 'delete_after', 'legacy', 'speakers'}:
+        raise RegistryError('devices : clés attendues prefix, source, segment, delete_after, legacy, speakers')
     prefix = conf.get('prefix')
     if not isinstance(prefix, str) or not PATH_RE.match(prefix) or reg.owner(prefix) is None:
         raise RegistryError('devices : "prefix" doit être un chemin possédé par une app')
@@ -343,8 +387,48 @@ def _load_devices(conf, reg: Registry) -> DevicesConf | None:
                         product_id=raw['product_id'], serial=raw['serial'], usb_port=raw['usb_port'],
                         has_audio=raw['has_audio'], first_seen=_when(raw['first_seen'], 'first_seen'),
                         last_seen=_when(raw['last_seen'], 'last_seen'), paths=dict(paths))
+    speakers = _load_speakers(conf.get('speakers'), reg, prefix, legacy)
     return DevicesConf(prefix=prefix, source=source, segment=conf['segment'],
-                       delete_after=conf['delete_after'], legacy=legacy)
+                       delete_after=conf['delete_after'], legacy=legacy, speakers=speakers)
+
+
+def _load_speakers(raw, reg: Registry, prefix: str, legacy) -> dict:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or len(raw) > 8:
+        raise RegistryError('devices.speakers : objet attendu (8 haut-parleurs au plus)')
+    if raw and (reg.owner(SPEAKER_PREFIX) is None or reg.owner(SPEAKER_PREFIX) is not reg.owner(prefix)):
+        raise RegistryError(f'devices.speakers : le préfixe « {SPEAKER_PREFIX} » doit être un préfixe '
+                            'de l\'app qui possède celui des webcams')
+    if any(p == SPEAKER_PREFIX or p.startswith(SPEAKER_PREFIX + '/') for p in reg.paths):
+        raise RegistryError(f'devices.speakers : aucun chemin statique ne doit être sous « {SPEAKER_PREFIX} »')
+    out = {}
+    for ident, item in raw.items():
+        where = f'devices.speakers « {ident} »'
+        if (not isinstance(ident, str) or not SPEAKER_ID_RE.match(ident) or ident.startswith('usb-')
+                or ident.startswith('webcam') or (legacy is not None and ident == legacy.id)):
+            raise RegistryError(f'{where} : identifiant invalide (^[a-z][a-z0-9-]{{1,40}}$, ni usb-…, ni webcam…)')
+        if not isinstance(item, dict) or set(item) != {'model', 'pcm', 'mixer'}:
+            raise RegistryError(f'{where} : clés attendues model, pcm, mixer')
+        if not isinstance(item['model'], str) or not 0 < len(item['model']) <= 100 or re.search(r'[\x00-\x1f\x7f]', item['model']):
+            raise RegistryError(f'{where} : "model" texte de 1 à 100 caractères')
+        if not isinstance(item['pcm'], str) or not ALSA_PCM_RE.match(item['pcm']):
+            raise RegistryError(f'{where} : "pcm" nom de PCM ALSA ([A-Za-z0-9_:=,.-], 64 au plus)')
+        mixer = item['mixer']
+        if mixer is not None:
+            if not isinstance(mixer, dict) or 'card' not in mixer or set(mixer) - {'card', 'control', 'volume'}:
+                raise RegistryError(f'{where} : "mixer" null ou {{"card", "control"?, "volume"?}}')
+            card, control = mixer['card'], mixer.get('control', 'Master')
+            volume = mixer.get('volume', DEFAULT_SPEAKER_VOLUME)
+            if not isinstance(card, str) or not ALSA_CARD_RE.match(card):
+                raise RegistryError(f'{where} : "mixer.card" id ou numéro de carte ALSA')
+            if not isinstance(control, str) or not ALSA_CONTROL_RE.match(control):
+                raise RegistryError(f'{where} : "mixer.control" nom de contrôle sans espace')
+            if not isinstance(volume, int) or isinstance(volume, bool) or not 0 <= volume <= 100:
+                raise RegistryError(f'{where} : "mixer.volume" entier de 0 à 100')
+            mixer = Mixer(card=card, control=control, volume=volume)
+        out[ident] = Speaker(id=ident, model=item['model'], pcm=item['pcm'], mixer=mixer)
+    return out
 
 
 def with_paths(base: Registry, extra: dict[str, PathConf], source_paths: frozenset[str]) -> Registry:
@@ -384,6 +468,10 @@ def render_mediamtx(base_yml: str, reg: Registry, retained: dict[str, PathConf] 
     for name in sorted(every):
         conf = every[name]
         out.append(f'  {json.dumps(name)}:')
+        if conf.talk:
+            # Haut-parleur : jamais enregistré, quoi que dise le reste du registre.
+            out += ['    source: publisher', '    record: no']
+            continue
         if conf.pull_url:
             out.append(f'    source: {json.dumps(conf.pull_url)}')
             out.append('    rtspTransport: tcp')

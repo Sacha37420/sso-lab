@@ -12,6 +12,18 @@ Ce module tient trois choses, et lab-media-auth est leur SEUL écrivain :
     plus MEDIA_CAPTURE_MAX. Une ligne par webcam : `<id> <port USB> <micro 0|1> <base>`,
     rien d'autre — aucune chaîne venue du matériel (nom, numéro de série) n'y entre.
 
+Chantier haut-parleur : les haut-parleurs sont DÉCLARÉS au registre (`devices.speakers`), pas
+découverts. Ce module tient aussi pour eux :
+
+  * le PLAN des lecteurs (`<état>/speakers`) : une ligne par haut-parleur,
+    `<id> <pcm> <carte du mixeur|-> <contrôle|-> <volume|->`, rien d'autre ;
+  * les DÉCLENCHEURS de lecture (`<état>/talk`) : `<id> <génération> <prêt 0|1>`. La génération
+    change quand une publication WHIP vient d'être autorisée (le lecteur se branche aussitôt) ;
+    « prêt » suit MediaMTX tant qu'une prise de parole est en cours ou attendue. Hors de ces
+    moments, rien n'interroge MediaMTX et le lecteur ne se connecte pas ;
+  * l'ÉTAT : lu dans le fichier que le lecteur de la capture tient à jour
+    (`<statut>/<id>` : `idle`, `error mixer` ou `error output`, réécrit toutes les 2 s).
+
 Le nom de produit et le numéro de série sont des données HOSTILES : un appareil USB les choisit
 librement. Ils ne servent qu'à l'affichage (`model`, `serial`, nettoyés et bornés) et, pour le
 numéro de série, à l'identifiant après réduction à [a-z0-9]. Ils ne vont jamais dans un chemin,
@@ -42,6 +54,13 @@ STATES = ('live', 'waiting', 'starting', 'error', 'offline', 'legacy')
 CAPTURE_GRACE_S = 20       # au-delà, une webcam planifiée mais non publiée est « error »
 LAST_SEEN_PERSIST_S = 60   # last_seen d'une webcam branchée : écrit au plus une fois par minute
 MAX_CAPTURE_LIMIT = 8      # MEDIA_CAPTURE_MAX est borné à [0, 8] (2 vCPU)
+SPEAKER_STALE_S = 10       # statut du lecteur plus ancien : source capture absente (« offline »)
+TALK_PENDING_S = 15        # après une publication autorisée, attente de son arrivée au plus
+SPEAKER_ERRORS = {
+    'mixer': 'Réglage du mixeur impossible (carte son absente ou contrôle inconnu) : voir le journal '
+             'de lab-media-capture.',
+    'output': 'Sortie ALSA impossible à ouvrir ou en échec : voir le journal de lab-media-capture.',
+}
 
 
 class DeviceError(Exception):
@@ -200,8 +219,19 @@ class Manager:
         self.pending: dict[str, int] = {}        # id nouveau → passages consécutifs où il est vu
         self.assigned: list[str] = []
         self._persisted_last_seen = 0.0
+        self.speakers = dict(conf.speakers)      # id → registry.Speaker
+        self.speaker_first_seen: dict[str, float] = {}
+        self.status_dir = env.get('LAB_MEDIA_SPEAKER_STATUS_DIR', '/speakers')
         self._load()
         self.assigned = [i for i in self._read_plan() if i in self.devices and not self.devices[i].legacy]
+        # Prise de parole : génération (ms), prêt, attendue depuis, déjà vue prête. Au démarrage,
+        # chaque haut-parleur est « attendu » une fois : une parole en cours pendant un
+        # redémarrage de lab-media-auth est retrouvée au premier passage.
+        now = self.clock()
+        self.talk = {i: {'gen': 0, 'ready': False, 'active': True, 'since': now, 'seen': False}
+                     for i in self.speakers}
+        self._write_speakers()
+        self._write_talk()
 
     # ── persistance ──────────────────────────────────────────────────────────
     @property
@@ -239,6 +269,15 @@ class Manager:
             if reg_mod.PATH_RE.match(path) and isinstance(until, (int, float)):
                 self.retained[path] = float(until)
         self.legacy_forgotten = bool(data.get('legacy_forgotten'))
+        stored = data.get('speakers') if isinstance(data.get('speakers'), dict) else {}
+        missing = False
+        for ident in self.speakers:
+            row = stored.get(ident)
+            if isinstance(row, dict) and isinstance(row.get('first_seen'), (int, float)):
+                self.speaker_first_seen[ident] = float(row['first_seen'])
+            else:
+                self.speaker_first_seen[ident] = self.clock()
+                missing = True
         legacy = self.conf.legacy
         if legacy is not None and not self.legacy_forgotten:
             self.devices[legacy.id] = Device(
@@ -246,6 +285,8 @@ class Manager:
                 product_id=legacy.product_id, serial=legacy.serial, usb_port=legacy.usb_port,
                 has_audio=legacy.has_audio, record=False, first_seen=legacy.first_seen,
                 last_seen=legacy.last_seen, legacy=True, legacy_paths=dict(legacy.paths))
+        if missing:
+            self._save()
 
     def _save(self) -> None:
         data = {
@@ -254,6 +295,7 @@ class Manager:
                         for d in self.devices.values() if not d.legacy},
             'retained': self.retained,
             'legacy_forgotten': self.legacy_forgotten,
+            'speakers': {i: {'first_seen': self.speaker_first_seen[i]} for i in sorted(self.speakers)},
         }
         self._atomic(self.inventory_file, json.dumps(data, indent=1, sort_keys=True), 0o640)
         self._persisted_last_seen = self.clock()
@@ -279,6 +321,28 @@ class Manager:
         except (OSError, UnicodeDecodeError):
             pass
         self._atomic(self.plan_file, content, 0o644)
+
+    def _write_if_changed(self, path: str, content: str) -> None:
+        try:
+            with open(path, encoding='ascii') as fh:
+                if fh.read() == content:
+                    return
+        except (OSError, UnicodeDecodeError):
+            pass
+        self._atomic(path, content, 0o644)
+
+    def _write_speakers(self) -> None:
+        lines = []
+        for ident in sorted(self.speakers):
+            spk = self.speakers[ident]
+            m = spk.mixer
+            mix = f'{m.card} {m.control} {m.volume}' if m is not None else '- - -'
+            lines.append(f'{ident} {spk.pcm} {mix}\n')
+        self._write_if_changed(os.path.join(self.dir, 'speakers'), ''.join(lines))
+
+    def _write_talk(self) -> None:
+        lines = [f'{i} {t["gen"]} {1 if t["ready"] else 0}\n' for i, t in sorted(self.talk.items())]
+        self._write_if_changed(os.path.join(self.dir, 'talk'), ''.join(lines))
 
     @staticmethod
     def _atomic(path: str, content: str, mode: int) -> None:
@@ -309,6 +373,9 @@ class Manager:
                                                retain=av)
                 if not dev.legacy:
                     publishable.add(path)
+        for spk in self.speakers.values():
+            # Jamais publiable par la source (seul WHIP, décidé par l'app), jamais enregistré.
+            extra[spk.path] = reg_mod.PathConf(name=spk.path, talk=True)
         retained = {p: reg_mod.PathConf(name=p, segment=conf.segment, delete_after=conf.delete_after, retain=True)
                     for p in self.retained if p not in extra}
         return extra, frozenset(publishable), retained
@@ -365,6 +432,7 @@ class Manager:
             if saved or (stale and any(d.connected for d in self.devices.values())):
                 self._save()
             self._write_plan()
+            self._write_speakers()
 
     def _replan(self, now: float) -> None:
         """Les webcams déjà capturées gardent leur place (jamais de préemption) ; les places
@@ -399,7 +467,7 @@ class Manager:
             'connected': dev.connected, 'state': None, 'record': dev.record and not dev.legacy,
             'first_seen': iso(dev.first_seen),
             'last_seen': iso(now if dev.connected else dev.last_seen),
-            'paths': paths,
+            'paths': {**paths, 'talk': None},
         }
         if dev.legacy:
             item['state'] = 'legacy'
@@ -419,21 +487,107 @@ class Manager:
                 '(voir le journal de lab-media-capture).')
         return item
 
+    # ── haut-parleurs (chantier haut-parleur, I1) ────────────────────────────
+    def speaker_status(self, ident: str, now: float) -> tuple[str | None, float | None]:
+        """(contenu du statut écrit par le lecteur, date de ce statut) ; (None, date) s'il est
+        trop ancien, (None, None) s'il n'existe pas."""
+        path = os.path.join(self.status_dir, ident)
+        try:
+            mtime = os.stat(path).st_mtime
+            with open(path, 'rb') as fh:
+                raw = fh.read(64).decode('ascii', 'replace').strip()
+        except OSError:
+            return None, None
+        if now - mtime > SPEAKER_STALE_S:
+            return None, mtime
+        return raw, mtime
+
+    def describe_speaker(self, spk, ready: set | None, now: float) -> dict:
+        status, seen = self.speaker_status(spk.id, now)
+        first = self.speaker_first_seen.get(spk.id, now)
+        item = {
+            'id': spk.id, 'kind': 'speaker', 'model': clean_text(spk.model, MODEL_MAX),
+            'vendor_id': '', 'product_id': '', 'serial': '', 'usb_port': '', 'has_audio': False,
+            'connected': status is not None, 'state': None, 'record': False,
+            'first_seen': iso(first),
+            'last_seen': iso(now if status is not None else max(first, seen or first)),
+            'paths': {'av': None, 'video': None, 'audio': None, 'talk': spk.path},
+        }
+        if status is None:
+            item['state'] = 'offline'
+        elif status.startswith('error'):
+            item['state'] = 'error'
+            item['error_detail'] = SPEAKER_ERRORS.get(status[6:], SPEAKER_ERRORS['output'])
+        elif ready is None:
+            item['state'] = 'error'
+            item['error_detail'] = 'Serveur média injoignable.'
+        elif spk.path in ready:
+            item['state'] = 'talking'
+        else:
+            item['state'] = 'idle'
+        return item
+
+    def speaker_of(self, path) -> str | None:
+        for ident, spk in self.speakers.items():
+            if spk.path == path:
+                return ident
+        return None
+
+    def talk_allowed(self, path: str) -> None:
+        """Une publication WHIP sur `path` vient d'être autorisée : le lecteur se branche."""
+        ident = self.speaker_of(path)
+        if ident is None:
+            return
+        with self.lock:
+            now = self.clock()
+            t = self.talk[ident]
+            t.update(gen=max(t['gen'] + 1, int(now * 1000)), active=True, since=now, seen=False)
+            self._write_talk()
+
+    def talk_active(self) -> bool:
+        return any(t['active'] for t in self.talk.values())
+
+    def update_talk(self, ready: set | None) -> None:
+        """Suit l'état « prêt » des haut-parleurs attendus ou en cours ; s'arrête dès que la
+        parole est finie (ou n'est pas venue en TALK_PENDING_S)."""
+        if ready is None:
+            return
+        with self.lock:
+            now = self.clock()
+            for ident, t in self.talk.items():
+                if not t['active']:
+                    continue
+                t['ready'] = self.speakers[ident].path in ready
+                if t['ready']:
+                    t['seen'] = True
+                elif t['seen'] or now - t['since'] > TALK_PENDING_S:
+                    t['active'] = False
+            self._write_talk()
+
+    # ── liste et réglages ────────────────────────────────────────────────────
     def list(self, ready: set | None) -> list[dict]:
         now = self.clock()
         with self.lock:
             devs = sorted(self.devices.values(), key=lambda d: (d.first_seen, d.id))
-            return [self.describe(d, ready, now) for d in devs]
+            items = [self.describe(d, ready, now) for d in devs]
+            return items + [self.describe_speaker(self.speakers[i], ready, now) for i in sorted(self.speakers)]
 
     def get(self, ident: str, ready: set | None) -> dict:
         with self.lock:
+            if ident in self.speakers:
+                return self.describe_speaker(self.speakers[ident], ready, self.clock())
             dev = self.devices.get(ident)
             if dev is None:
                 raise DeviceError(404, 'unknown_device', 'Périphérique inconnu pour cette app.')
             return self.describe(dev, ready, self.clock())
 
+    def check_recordable(self, ident: str) -> None:
+        if ident in self.speakers:
+            raise DeviceError(409, 'not_recordable', 'Un haut-parleur ne s\'enregistre jamais.')
+
     def set_record(self, ident: str, record: bool) -> None:
         with self.lock:
+            self.check_recordable(ident)
             dev = self.devices.get(ident)
             if dev is None:
                 raise DeviceError(404, 'unknown_device', 'Périphérique inconnu pour cette app.')
@@ -447,6 +601,9 @@ class Manager:
 
     def forget(self, ident: str) -> None:
         with self.lock:
+            if ident in self.speakers:
+                raise DeviceError(409, 'not_forgettable',
+                                  'Un haut-parleur est déclaré au registre : il ne s\'oublie qu\'en l\'en retirant.')
             dev = self.devices.get(ident)
             if dev is None:
                 raise DeviceError(404, 'unknown_device', 'Périphérique inconnu pour cette app.')
