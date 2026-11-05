@@ -21,6 +21,8 @@
 # Haut-parleurs (chantier haut-parleur) : faux matériel ALSA (verify/asound.test.conf : le lecteur
 # joue dans un fichier, aucune carte son n'est ouverte, aucun son ne sort) ; publication WHIP
 # par ffmpeg à travers le Caddy de test ; latence mesurée de bout en bout (verify/speakerprobe.py).
+# Publication WebRTC relayée (chantier ecran) : appc, URL de hook lue dans le .env de test
+# ("read_hook_env"), chemin appc/a ("whip") ; publication WHIP vidéo réelle (mire H.264).
 # Durée : environ 12 minutes (hôte chargé). Code de sortie : 0 si tout est PASS.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
@@ -98,8 +100,8 @@ fi
 $KEEP || trap cleanup EXIT
 
 mkdir -p "$RUN"
-A_CTL=$(rnd); B_CTL=$(rnd); A_PUB=$(rnd); B_PUB=$(rnd); CAP=$(rnd)
-TOKEN_A="tokA-$(rnd)"; TOKEN_B="tokB-$(rnd)"; KEY_A=$(rnd); KEY_B=$(rnd); HOOK=$(rnd)
+A_CTL=$(rnd); B_CTL=$(rnd); A_PUB=$(rnd); B_PUB=$(rnd); CAP=$(rnd); C_CTL=$(rnd); C_PUB=$(rnd)
+TOKEN_A="tokA-$(rnd)"; TOKEN_B="tokB-$(rnd)"; TOKEN_C="tokC-$(rnd)"; KEY_A=$(rnd); KEY_B=$(rnd); KEY_C=$(rnd); HOOK=$(rnd)
 cp "$HERE/verify/registry.test.json" "$RUN/registry.json"
 cat > "$RUN/test.env" <<ENV
 LAB_MEDIA_PREFIX=lmt-media
@@ -126,6 +128,12 @@ LAB_MEDIA_APP_APPB_CONTROL_USER=appb-ctl
 LAB_MEDIA_APP_APPB_CONTROL_PASSWORD=$B_CTL
 LAB_MEDIA_APP_APPB_PUBLISH_USER=appb-pub
 LAB_MEDIA_APP_APPB_PUBLISH_PASSWORD=$B_PUB
+LAB_MEDIA_APP_APPC_HOOK_KEY=$KEY_C
+LAB_MEDIA_APP_APPC_HOOK_URL=http://lmt-appc:8000/hook
+LAB_MEDIA_APP_APPC_CONTROL_USER=appc-ctl
+LAB_MEDIA_APP_APPC_CONTROL_PASSWORD=$C_CTL
+LAB_MEDIA_APP_APPC_PUBLISH_USER=appc-pub
+LAB_MEDIA_APP_APPC_PUBLISH_PASSWORD=$C_PUB
 LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER=capture
 LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD=$CAP
 LAB_MEDIA_PULL_TEST=rtsp://lmt-src:8554/ext
@@ -184,6 +192,7 @@ expect F1 "source synthétique encodée une fois" "mire 320x240 10 i/s + bip, 20
 
 docker run -d --name lmt-appa --network lmt-dev -v "$HERE/verify:/v:ro" -e HOOK_KEY="$KEY_A" -e GOOD_TOKEN="$TOKEN_A" "$PY_IMG" python /v/fakeapp.py >/dev/null
 docker run -d --name lmt-appb --network lmt-dev -v "$HERE/verify:/v:ro" -e HOOK_KEY="$KEY_B" -e GOOD_TOKEN="$TOKEN_B" "$PY_IMG" python /v/fakeapp.py >/dev/null
+docker run -d --name lmt-appc --network lmt-dev -v "$HERE/verify:/v:ro" -e HOOK_KEY="$KEY_C" -e GOOD_TOKEN="$TOKEN_C" "$PY_IMG" python /v/fakeapp.py >/dev/null
 compose up -d --no-build auth media >/dev/null 2>&1
 expect F2 "docker compose up (le compose de production, projet lmt)" "$(docker ps --filter name='^lmt-media' --format '{{.Names}}:{{.Status}}' | tr '\n' ' ')"
 docker run -d --name lmt-caddy --network lmt-sso -e CADDY_INGRESS_NETWORKS=lmt-sso -e CADDY_DOCKER_LABEL_PREFIX=lmtcaddy \
@@ -194,6 +203,7 @@ docker run -d --name lmt-client --network lmt-dev -v "$HERE/verify:/v:ro" \
   -e AUTH_URL=http://lmt-media-auth:9100 -e CADDY_URL=http://lmt-caddy -e MEDIA_HOST=lmt-media \
   -e A_USER=appa-ctl -e A_PASS="$A_CTL" -e B_USER=appb-ctl -e B_PASS="$B_CTL" \
   -e A_PUB_USER=appa-pub -e A_PUB_PASS="$A_PUB" -e TOKEN_A="$TOKEN_A" -e TOKEN_B="$TOKEN_B" \
+  -e C_USER=appc-ctl -e C_PASS="$C_CTL" -e TOKEN_C="$TOKEN_C" \
   "$PY_IMG" sleep 3600 >/dev/null
 docker network connect lmt-sso lmt-client
 sleep 4
@@ -431,6 +441,37 @@ r="$(docker inspect -f '{{.State.Running}} {{.RestartCount}} {{.State.StartedAt}
 [[ "$r" == "true 0 $cap_started0" && -n "$spk_pid0" && "$(ffpids "$CAM2")" == "$spk_pid0" ]]
 expect HP30 "lecteurs en erreur ou en service : la capture n'a pas redémarré, le ffmpeg de la webcam est le même" "$r · pid ${spk_pid0}→ $(ffpids "$CAM2")"
 
+# ── 6 ter. Publication WebRTC relayée (chantier ecran) ───────────────────────
+note "Chemin whip : URL du hook lue dans .env, publication WHIP décidée par le hook de l'app"
+WP_URL="http://lmt-caddy/lab-media-webrtc/appc/a/whip"
+wp_pub() {  # wp_pub <nom> <durée s> — publication WHIP vidéo seule (mire H.264), jeton d'appc
+  docker run -d --name "$1" --network container:lmt-media --cpus 0.5 --entrypoint ffmpeg lmt-media \
+    -hide_banner -loglevel warning -re -f lavfi -i "testsrc2=size=160x120:rate=10" -t "$2" \
+    -c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline -pix_fmt yuv420p -g 10 -bf 0 -b:v 100k \
+    -f whip -authorization "$TOKEN_C" "$WP_URL" >/dev/null
+}
+phase wp_start
+r="$(try_publish "appc-pub:$C_PUB" appc/a)"; [[ "$r" != accepté ]]
+expect WP5 "RTSP : publication sur le chemin whip refusée avec les identifiants de publication de son app" "$r"
+r="$(try_publish "capture:$CAP" appc/a)"; [[ "$r" != accepté ]]
+expect WP5b "RTSP : publication sur le chemin whip refusée avec les identifiants de la source capture" "$r"
+phase wp_rtsp
+wp_pub lmt-wp1 90
+phase wp_live
+r="$(BIN=ffprobe ff -hide_banner -loglevel error -rtsp_transport tcp -show_entries stream=codec_name -of csv=p=0 "rtsp://x:$TOKEN_C@lmt-media:8554/appc/a" 2>&1 | tr '\n' ' ')"
+[[ "$r" == *h264* ]]; expect WP10 "lecture RTSP du chemin whip par jeton : relayée au hook d'appc, qui l'accepte (H.264)" "$r"
+wp_pub lmt-wp2 8
+n=0; while [[ $n -lt 15 ]] && ! docker logs lmt-media 2>&1 | grep -q 'already publishing to path .appc/a'; do sleep 1; n=$((n + 1)); done
+r="$(docker logs lmt-media 2>&1 | grep 'already publishing to path .appc/a' | tail -1 | sed 's/^.*\] //')"
+[[ -n "$r" ]]; expect WP12 "second publieur WHIP sur le chemin whip occupé : MediaMTX le refuse (overridePublisher: no)" "$r"
+phase wp_second
+phase wp_kick
+docker rm -f lmt-wp1 lmt-wp2 >/dev/null 2>&1
+r="$(docker exec lmt-media sh -c 'ls -d /recordings/appc 2>&1' | tr '\n' ' ')"
+[[ "$r" == *"No such file"* ]]; expect WP14 "rien n'est enregistré sous appc/ (aucun dossier dans /recordings)" "$r"
+r="$(docker exec lmt-media-auth cat /config/mediamtx.yml | grep -A3 '^  "appc/a":' | tr '\n' ' ')"
+[[ "$r" == *"record: no"*"overridePublisher: no"* ]]; expect WP15 "mediamtx.yml : appc/a en publisher, record: no, overridePublisher: no" "$r"
+
 # ── 7. Arrêt de lab-media-auth ───────────────────────────────────────────────
 note "lab-media-auth ARRÊTÉ (cycle de vie)"
 started0="$(docker inspect -f '{{.State.StartedAt}}' lmt-media)"
@@ -487,14 +528,14 @@ expect V3 "segments horaires : pas de découpe intempestive (un fichier par publ
 note "Journaux"
 logs="$(docker logs lmt-media-auth 2>&1)"
 leak=0
-for s in "$A_CTL" "$B_CTL" "$A_PUB" "$B_PUB" "$CAP" "$TOKEN_A" "$TOKEN_B" "$KEY_A" "$KEY_B" "$HOOK"; do
+for s in "$A_CTL" "$B_CTL" "$C_CTL" "$A_PUB" "$B_PUB" "$C_PUB" "$CAP" "$TOKEN_A" "$TOKEN_B" "$TOKEN_C" "$KEY_A" "$KEY_B" "$KEY_C" "$HOOK" "lmt-appc"; do
   grep -q -F -- "$s" <<<"$logs" && leak=$((leak + 1))
 done
 [[ "$leak" == 0 && "$(grep -c '"event":"hook"' <<<"$logs")" -gt 10 ]]
 expect J1 "journal de lab-media-auth : décisions présentes, aucun mot de passe, jeton ni clé" "$(grep -c '"event"' <<<"$logs") lignes, $leak secret(s) trouvé(s)"
 mleak=0
 mlogs="$(docker logs lmt-media 2>&1)"
-for s in "$A_CTL" "$B_CTL" "$A_PUB" "$B_PUB" "$CAP" "$TOKEN_A" "$TOKEN_B" "$KEY_A" "$KEY_B"; do
+for s in "$A_CTL" "$B_CTL" "$C_CTL" "$A_PUB" "$B_PUB" "$C_PUB" "$CAP" "$TOKEN_A" "$TOKEN_B" "$TOKEN_C" "$KEY_A" "$KEY_B" "$KEY_C"; do
   grep -q -F -- "$s" <<<"$mlogs" && mleak=$((mleak + 1))
 done
 hookleak="$(grep -c -F -- "$HOOK" <<<"$mlogs" || true)"

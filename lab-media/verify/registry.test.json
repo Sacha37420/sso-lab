@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_doc": "Registre de la pile de test de verify.sh : deux apps fictives aux préfixes distincts ; appa possède aussi les préfixes des webcams et des haut-parleurs (rôle de peripheriques). Haut-parleurs sur faux matériel ALSA (verify/asound.test.conf) : hp-test joue dans un fichier, hp-mixeur et hp-sortie visent une carte absente (échec du mixeur, échec de la sortie).",
+  "_doc": "Registre de la pile de test de verify.sh : deux apps fictives aux préfixes distincts ; appa possède aussi les préfixes des webcams et des haut-parleurs (rôle de peripheriques). Haut-parleurs sur faux matériel ALSA (verify/asound.test.conf) : hp-test joue dans un fichier, hp-mixeur et hp-sortie visent une carte absente (échec du mixeur, échec de la sortie). appc : URL du hook lue dans .env (read_hook_env), chemin appc/a en publication WebRTC relayée (whip) ; \"publish\": true pour prouver que ses identifiants n'y ouvrent rien.",
   "apps": {
     "appa": {
       "prefixes": [
@@ -16,6 +16,13 @@
         "appb"
       ],
       "read_hook": "http://lmt-appb:8000/hook",
+      "publish": true
+    },
+    "appc": {
+      "prefixes": [
+        "appc"
+      ],
+      "read_hook_env": true,
       "publish": true
     }
   },
@@ -81,6 +88,9 @@
     },
     "appb/pulled": {
       "source_env": "LAB_MEDIA_PULL_TEST"
+    },
+    "appc/a": {
+      "whip": true
     }
   }
 }

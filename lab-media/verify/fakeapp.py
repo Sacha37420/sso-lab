@@ -3,7 +3,8 @@
 POST /hook?key=<clé>   corps MediaMTX → 200 ssi action ∈ {read, publish} et token == GOOD_TOKEN,
                        sinon 401 (publish : chantier haut-parleur, WHIP sur speaker/*)
                        (mode « 500 » : répond 500 ; mode « hang » : ne répond pas avant 60 s)
-GET  /_log             tout ce que le hook a reçu : [{"key_ok": bool, "body": {...}, "status": int}]
+GET  /_log             tout ce que le hook a reçu : [{"key_ok": bool, "header_ok": bool, "body": {...}, "status": int}]
+                       (header_ok : l'en-tête X-Lab-Media-Key porte la même clé — chantier ecran, I1)
 POST /_mode?m=ok|500|hang      POST /_clear
 """
 import json
@@ -46,6 +47,7 @@ class H(BaseHTTPRequestHandler):
         if url.path != '/hook':
             return self.reply(404)
         key_ok = query.get('key', [''])[0] == KEY
+        header_ok = self.headers.get('X-Lab-Media-Key', '') == KEY
         try:
             body = json.loads(raw)
         except ValueError:
@@ -59,7 +61,7 @@ class H(BaseHTTPRequestHandler):
             ok = key_ok and isinstance(body, dict) and body.get('action') in ('read', 'publish') and body.get('token') == GOOD
             status = 200 if ok else 401
         with lock:
-            state['log'].append({'key_ok': key_ok, 'body': body, 'raw': raw.decode('utf-8', 'replace'),
+            state['log'].append({'key_ok': key_ok, 'header_ok': header_ok, 'body': body, 'raw': raw.decode('utf-8', 'replace'),
                                  'status': status, 'mode': mode})
         if mode == 'hang':
             time.sleep(60)

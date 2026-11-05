@@ -2,10 +2,10 @@
 
 `lab-media` est le point d'entrée unique des flux audio et vidéo du lab, comme `postgres` l'est pour les données et `storage` pour les fichiers. Il reçoit des flux, les diffuse (WebRTC et HLS) et les enregistre. Il ne décide jamais qui peut lire : cette décision reste à l'app qui possède le flux.
 
-- Contrats : `chantiers/lab-media/CONTRAT.md` ; webcams : `chantiers/webcams/CONTRAT.md` ; haut-parleur : `chantiers/haut-parleur/CONTRAT.md`.
+- Contrats : `chantiers/lab-media/CONTRAT.md` ; webcams : `chantiers/webcams/CONTRAT.md` ; haut-parleur : `chantiers/haut-parleur/CONTRAT.md` ; chemins « publication WebRTC relayée » et URL de hook hors du dépôt : chantier `ecran` (I1).
 - API des apps (fait foi) : [`API.md`](API.md).
 - Bascule depuis `peripheriques` : [`BASCULE.md`](BASCULE.md).
-- Preuve rejouable : `bash lab-media/verify.sh` (environ 12 minutes sur l'hôte chargé, pile isolée `lmt-*`, faux matériel : la vraie caméra n'est ni montée ni ouverte, aucune carte son n'est ouverte et aucun son ne sort).
+- Preuve rejouable : `bash lab-media/verify.sh` (environ 13 minutes sur l’hôte chargé, 194 contrôles, pile isolée `lmt-*`, faux matériel : la vraie caméra n'est ni montée ni ouverte, aucune carte son n'est ouverte et aucun son ne sort).
 
 ## Les pièces
 
@@ -43,14 +43,17 @@
 |---|---|---|
 | `publish` | `lab-media-auth` | Identifiants de publication de l'app propriétaire du préfixe, ou d'une source interne sur ses chemins. RTSP seulement. Chemin déclaré au registre. |
 | `publish` sur `speaker/<id>` | **l'app propriétaire du préfixe** | WebRTC (WHIP) seulement : `lab-media-auth` relaie le corps de MediaMTX à son hook, comme une lecture. Aucun identifiant n'ouvre une publication RTSP sur ces chemins. Un seul publieur à la fois (`overridePublisher: no`). |
-| `read` | **l'app propriétaire du préfixe** | `lab-media-auth` relaie le corps de MediaMTX à son hook. Seul un `200` reçu en moins de 3 s autorise. |
+| `publish` sur un chemin `"whip": true` | **l'app propriétaire du préfixe** | WebRTC (WHIP) seulement, relayé à son hook comme une lecture (même échec fermé). Aucun identifiant — de l'app, d'une source, de contrôle, internes — n'ouvre une publication sur ce chemin, en aucun protocole : ils ne sont même pas comparés. Un seul publieur (`overridePublisher: no`). |
+| `read` | **l'app propriétaire du préfixe** | `lab-media-auth` relaie le corps de MediaMTX à son hook. Seul un `200` reçu en moins de 3 s autorise. Vaut aussi pour un chemin `"whip": true` (l'app impose elle-même le protocole qu'elle veut). |
 | `read` sur `speaker/<id>` | `lab-media-auth` | Fermée à tous, sans consulter l'app, sauf au lecteur de la capture (RTSP, identifiants de la source `capture`). Personne n'écoute ce qui est dit ; rien n'est enregistré. |
 | `api`, `playback`, `metrics`, `pprof` | `lab-media-auth` | Identifiants internes, tirés au hasard à chaque démarrage, jamais écrits nulle part. |
 | Toute autre action | — | Refusée. |
 
 **Ne jamais utiliser `authHTTPExclude`.** Sur MediaMTX 1.21.1, une action exclue est autorisée sans aucun contrôle, WHIP compris (essai réel du 2026-10-11). Le générateur de configuration refuse de démarrer si la base en contient.
 
-La publication WHIP est joignable depuis Internet (Caddy sert tout `/lab-media-webrtc/*`) : elle n'est ouverte **que** sur les chemins de haut-parleur, et c'est le hook de l'app qui décide. Sur tout autre chemin, elle est refusée avant même de consulter l'app (contrôles HP6, P7, P8).
+La publication WHIP est joignable depuis Internet (Caddy sert tout `/lab-media-webrtc/*`) : elle n'est ouverte **que** sur les chemins de haut-parleur et les chemins déclarés `"whip": true`, et c'est le hook de l'app qui décide. Sur tout autre chemin, elle est refusée avant même de consulter l'app (contrôles HP6, P7, P8).
+
+Le relais au hook porte la clé de l'app **deux fois** : en query (`?key=`, comme depuis l'origine) et dans l'en-tête `X-Lab-Media-Key` (chantier ecran), pour toutes les apps. Une app peut ne lire que l'en-tête et garder la query hors de ses journaux d'accès. Vers un hook `https://`, le certificat et le nom d'hôte sont vérifiés (magasin de certificats de l'image) ; aucune redirection n'est suivie : tout ce qui n'est pas `200` refuse.
 
 ## Ajouter une app
 
@@ -60,7 +63,8 @@ La publication WHIP est joignable depuis Internet (Caddy sert tout `/lab-media-w
    ```
    - `prefixes` : un chemin appartient à l'app s'il est égal à un préfixe ou s'il commence par `<préfixe>/`. Deux apps ne peuvent pas avoir de préfixes emboîtés.
    - `read_hook` : URL du hook de lecture, sans query (forme : `API.md` §2).
-   - `publish` : `true` seulement si l'app pousse elle-même des flux.
+   - `read_hook_env: true` (à la place de `read_hook`, jamais les deux) : l'URL du hook n'est pas écrite au registre — versionné, public — mais lue dans `.env` sous `LAB_MEDIA_APP_<NOM>_HOOK_URL`. Pour une app joignable seulement par une adresse publique qui n'a pas à figurer dans le dépôt. Même règle de forme (http(s), sans query ni fragment) ; absente, vide, à `CHANGE_ME` ou invalide : `lab-media-auth` refuse de démarrer, sans jamais recopier l'URL dans son journal.
+   - `publish` : `true` seulement si l'app pousse elle-même des flux (RTSP).
 2. Dans `registry.json`, ses chemins sous `paths` (tout chemin non déclaré est refusé) :
    ```json
    "mon-app/cam": {"record": true, "segment": "1h", "delete_after": "7d"},
@@ -68,15 +72,17 @@ La publication WHIP est joignable depuis Internet (Caddy sert tout `/lab-media-w
    ```
    - `record`, `segment`, `delete_after` : enregistrement en fMP4 sous `/recordings/<chemin>/`.
    - `source_env` : le chemin est **tiré** depuis une caméra IP ; la clé nommée porte l'URL `rtsp://…` dans `.env`. `on_demand: true` ne tire que lorsqu'un lecteur est là.
+   - `"whip": true` (chantier ecran) : **publication WebRTC relayée**. Un client publie en WHIP (`…/lab-media-webrtc/<chemin>/whip`, jeton `Bearer`) et c'est le hook de l'app qui décide, avec le corps de MediaMTX tel quel ; la lecture lui est relayée comme partout. Jamais enregistré (`record: no` écrit dans `mediamtx.yml`), absent de la relecture (`404`), un seul publieur. Incompatible avec `record`, `segment`, `delete_after`, `source_env` et `on_demand` (refus au chargement, même `"record": false`) ; aucune source ne peut le lister dans ses `paths`. Exemple : `"ecran/a": {"whip": true}`.
 3. Dans `.env`, ses secrets, sous des noms dérivés du nom de l'app (majuscules, `-` devient `_`) :
    ```
-   LAB_MEDIA_APP_MON_APP_HOOK_KEY=…            clé présentée au hook de l'app (?key=)
+   LAB_MEDIA_APP_MON_APP_HOOK_KEY=…            clé présentée au hook de l'app (?key= et X-Lab-Media-Key)
+   LAB_MEDIA_APP_MON_APP_HOOK_URL=https://…    seulement si "read_hook_env": true (URL du hook, sans query)
    LAB_MEDIA_APP_MON_APP_CONTROL_USER=…        identifiants de l'API de contrôle
    LAB_MEDIA_APP_MON_APP_CONTROL_PASSWORD=…
    LAB_MEDIA_APP_MON_APP_PUBLISH_USER=…        seulement si "publish": true
    LAB_MEDIA_APP_MON_APP_PUBLISH_PASSWORD=…
    ```
-   Secrets : `[A-Za-z0-9_-]`, 16 caractères au moins. Un nom d'utilisateur ne sert qu'à une entrée.
+   Secrets : `[A-Za-z0-9_-]`, 16 caractères au moins. Un nom d'utilisateur ne sert qu'à une entrée. `HOOK_URL` n'est pas un secret de cette forme : c'est une URL, validée comme `read_hook`.
 4. Appliquer : `docker compose -f lab-media/docker-compose.yml up -d --no-build --force-recreate --no-deps auth` (seul `lab-media-auth` est recréé). MediaMTX recharge sa configuration à chaud ; les publications et l'enregistrement en cours ne sont pas coupés (prouvé : contrôles G1 à G3).
 
 `lab-media-auth` refuse de démarrer, en disant pourquoi dans son journal, si le registre est incohérent : chemin sans propriétaire, préfixes en conflit, secret absent, trop court ou resté à `CHANGE_ME`, clé inconnue.
@@ -112,6 +118,7 @@ La publication WHIP est joignable depuis Internet (Caddy sert tout `/lab-media-w
   - **État** (`API.md` §1.5) : le lecteur écrit `idle`, `error mixer` ou `error output` dans le volume `speakers` (`/speakers/<id>`), toutes les 2 s ; `lab-media-auth` le lit. Statut de plus de 10 s : `offline` (capture absente). Un échec ALSA (carte absente, contrôle inconnu, sortie occupée) passe à `error` et fait réessayer toutes les 5 s, avec à chaque essai 0,1 s de silence envoyé à la sortie pour l'éprouver : jamais d'arrêt de la capture vidéo (contrôle HP30).
   - Jamais enregistré (`record: no` forcé dans `mediamtx.yml`, quel que soit le registre ; relecture → `404`).
 - **Publiée par une app** : RTSP vers `lab-media:8554`, identifiants de publication de l'app.
+- **Publiée en WHIP, décidée par l'app** (`"whip": true`, chantier ecran) : un client extérieur (navigateur, téléphone) publie sur un chemin déclaré ; le hook de l'app autorise ou refuse chaque ouverture. L'app peut expulser ce publieur par l'API de contrôle (`API.md` §1.2) : c'est elle qui l'a laissé entrer.
 - **Tirée** : `source_env` au registre.
 
 ## Enregistrements

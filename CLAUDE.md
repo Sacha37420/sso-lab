@@ -1302,6 +1302,16 @@ conteneurs `lab-media` (MediaMTX), `lab-media-auth` (mini-service d'authentifica
   `lab-media-capture`. Côté peripheriques : droit « Parler » (`Grant.speaker`), bouton sur Direct,
   coupure et révocation expulsent les publieurs ; le pont rend `speakers`. Avec `Auto-Mute Mode`,
   un casque en façade coupe la prise arrière.
+- **Chemins `whip`** (2026-11-05, app `ecran`, chemin `ecran/a`) : clé de chemin `"whip": true`
+  au registre ⇒ publication **WebRTC seule, relayée au hook de l'app** (aucun identifiant n'y
+  publie, en aucun protocole), lecture relayée, jamais enregistré, un seul publieur ; le
+  publieur est expulsable par son app (`/v1/sessions/webrtc/<id>/kick`). Clé d'app
+  `"read_hook_env": true` : l'URL du hook vient de `LAB_MEDIA_APP_<NOM>_HOOK_URL` (`.env`), pour
+  une app dont l'adresse ne doit pas figurer dans ce dépôt — le relais part alors en **https par
+  l'adresse publique** (certificat vérifié). Le relais pose la clé en `?key=` **et** en en-tête
+  `X-Lab-Media-Key`. Poser registre et `.env` **avant** de recréer `auth` : l'ancienne image
+  refuse ces clés, la nouvelle refuse une clé `.env` manquante — dans les deux cas plus rien ne
+  s'authentifie. Essais : `auth/tests/test_whip.py`, contrôles WP1-WP15 de `verify.sh`.
 - Redéployer `lab-media-auth`/`lab-media-capture` sans MediaMTX :
   `docker compose -f lab-media/docker-compose.yml --profile capture build auth capture` puis
   `… up -d --no-deps auth capture` (webcams coupées ~15 s). Ne pas recréer `media` par la même

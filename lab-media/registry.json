@@ -8,6 +8,12 @@
         "speaker"
       ],
       "read_hook": "http://peripheriques-backend:8000/api/media-auth/"
+    },
+    "ecran": {
+      "prefixes": [
+        "ecran"
+      ],
+      "read_hook_env": true
     }
   },
   "sources": {
@@ -48,5 +54,9 @@
       }
     }
   },
-  "paths": {}
+  "paths": {
+    "ecran/a": {
+      "whip": true
+    }
+  }
 }

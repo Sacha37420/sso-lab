@@ -21,6 +21,11 @@ B = (E['B_USER'], E['B_PASS'])
 A_PUB = (E['A_PUB_USER'], E['A_PUB_PASS'])
 TA, TB = E['TOKEN_A'], E['TOKEN_B']
 APPA, APPB = 'http://lmt-appa:8000', 'http://lmt-appb:8000'
+# appc : app fictive à l'URL de hook lue dans .env ("read_hook_env") et au chemin « whip » appc/a.
+C = (E['C_USER'], E['C_PASS'])
+TC = E['TOKEN_C']
+APPC = 'http://lmt-appc:8000'
+WP = 'appc/a'
 STATE = '/tmp/lmt-state.json'
 failed = []
 
@@ -77,7 +82,7 @@ def hook_log(app):
 
 
 def clear_logs():
-    for app in (APPA, APPB):
+    for app in (APPA, APPB, APPC):
         call('POST', f'{app}/_clear')
 
 
@@ -790,6 +795,96 @@ def p_hp_offline():
     check('HP22', 'capture arrêtée : les haut-parleurs passent « offline » (connected false) en moins de 20 s',
           bool(st) and hp.get('connected') is False and ISO.match(hp.get('last_seen', '')),
           json.dumps({k: v['state'] for k, v in spk().items()}))
+
+
+# ── Chemin « publication WebRTC relayée » (registre "whip": true, chantier ecran) ──────────────
+
+def p_wp_start():
+    code, item = path_of(C, WP)
+    code_a, _ = path_of(A, WP)
+    code_r, _ = js('GET', f'{AUTH}/v1/recordings?path={WP}', basic=C)
+    code_g, _ = js('GET', f'{AUTH}/v1/recordings/get?path={WP}&start=2026-01-01T00:00:00Z&duration=4', basic=C)
+    names = [i['path'] for i in (js('GET', f'{AUTH}/v1/paths', basic=C)[1] or {}).get('items', [])]
+    check('WP1', 'chemin whip : connu de son app seule (appa → 404), jamais enregistré, relecture → 404 (liste et plage)',
+          code == 200 and item['recorded'] is False and item['ready'] is False and names == [WP]
+          and code_a == 404 and (code_r, code_g) == (404, 404),
+          f'{json.dumps(item)} · appa {code_a} · recordings {code_r}, get {code_g} · liste {names}')
+    clear_logs()
+    c1, _, _, _ = whip(WP, None)
+    c2, _, _, _ = whip(WP, 'mauvais-jeton')
+    c3, _, _, _ = whip(WP, TA)
+    lc, others = hook_log(APPC), hook_log(APPA) + hook_log(APPB)
+    check('WP2', 'WHIP sur le chemin whip sans jeton, mauvais jeton, jeton d\'appa → 401 ; chaque fois relayé au hook d\'appc seul (URL lue dans .env), qui refuse',
+          (c1, c2, c3) == (401, 401, 401) and len(lc) == 3 and not others and all(x['status'] == 401 for x in lc),
+          f'HTTP {c1} {c2} {c3}, hook appc {[x["status"] for x in lc]}, autres {len(others)}')
+    clear_logs()
+    code, _, body, _ = whip(WP, TC)
+    lc = hook_log(APPC)
+    b = (lc[-1] if lc else {}).get('body') or {}
+    wanted = {'ip', 'user', 'password', 'token', 'action', 'path', 'protocol', 'id', 'query', 'userAgent'}
+    check('WP3', 'WHIP avec le bon jeton : le hook reçoit le corps tel quel (publish, webrtc), la clé en query ET en en-tête X-Lab-Media-Key, et dit 200 (400/406 = SDP factice rejeté APRÈS)',
+          code in (400, 406) and bool(lc) and lc[-1]['key_ok'] and lc[-1]['header_ok'] and lc[-1]['status'] == 200
+          and set(b) == wanted and (b['action'], b['protocol'], b['path'], b['token']) == ('publish', 'webrtc', WP, TC),
+          f'HTTP {code} {body[:60]!r}, key_ok {lc[-1]["key_ok"] if lc else None}, header_ok {lc[-1]["header_ok"] if lc else None}')
+    mode(APPC, '500')
+    c1, _, _, _ = whip(WP, TC)
+    mode(APPC, 'hang')
+    c2, _, _, ms = whip(WP, TC)
+    mode(APPC, 'ok')
+    check('WP4', 'WHIP sur le chemin whip, hook en 500 ou qui PEND → 401 (échec fermé, en temps borné)',
+          c1 == 401 and c2 == 401 and ms < 9000, f'HTTP {c1}, puis {c2} en {ms:.0f} ms')
+    clear_logs()
+
+
+def p_wp_rtsp():
+    """verify.sh a tenté des publications RTSP sur appc/a (identifiants d'appc, de la source capture)."""
+    calls = [x for x in hook_log(APPC) + hook_log(APPA) + hook_log(APPB) if (x['body'] or {}).get('action') == 'publish']
+    check('WP6', 'publications RTSP sur le chemin whip : le hook n\'est même pas consulté', not calls, f'{len(calls)} appel(s)')
+
+
+def p_wp_live():
+    """verify.sh publie en WHIP (vidéo H.264, ffmpeg, à travers le Caddy de test) sur appc/a."""
+    item = wait_for(lambda: (lambda i: i.get('ready') and i)(path_of(C, WP)[1] or {}), 25, 0.5)
+    pubs = [x for x in (_sessions(C, path=WP)[1] or {}).get('items', []) if x['state'] == 'publish']
+    hook_ids = [x['body']['id'] for x in hook_log(APPC) if x['body'].get('action') == 'publish' and x['status'] == 200]
+    check('WP7', 'publication WHIP réelle acceptée : chemin prêt (H264), une session webrtc « publish » d\'id celui reçu par le hook',
+          bool(item) and item['tracks'] == ['H264'] and len(pubs) == 1 and pubs[0]['protocol'] == 'webrtc'
+          and pubs[0]['id'] in hook_ids, f'{json.dumps(item)} publieurs {json.dumps(pubs)}')
+    save(wp_ready=(item or {}).get('readyTime'), wp_session=pubs[0]['id'] if pubs else None)
+    clear_logs()
+    c1, _, _, _ = whep(WP, TC)
+    c2, _, _, _ = whep(WP, TA)
+    lc = hook_log(APPC)
+    reads = [x for x in lc if x['body'].get('action') == 'read']
+    check('WP8', 'lecture WHEP du chemin whip relayée au hook d\'appc (clé en query et en en-tête) : bon jeton → autorisé (400/406 = SDP factice), jeton d\'appa → 401',
+          c1 in (400, 406) and c2 == 401 and len(reads) == 2 and all(x['key_ok'] and x['header_ok'] for x in reads)
+          and [x['status'] for x in reads] == [200, 401], f'HTTP {c1} {c2}, hook {[x["status"] for x in reads]}')
+    seen_b = [x['id'] for x in _sessions(B)[1]['items']]
+    check('WP9', 'appb ne voit pas la session de publication du chemin whip', bool(pubs) and pubs[0]['id'] not in seen_b,
+          f'vue par appb : {bool(pubs) and pubs[0]["id"] in seen_b}')
+    clear_logs()
+
+
+def p_wp_second():
+    """verify.sh a lancé un second publieur WHIP (accepté par le hook) pendant la publication."""
+    item = path_of(C, WP)[1] or {}
+    pubs = [x for x in (_sessions(C, path=WP)[1] or {}).get('items', []) if x['state'] == 'publish']
+    check('WP11', 'second publieur WHIP : MediaMTX le refuse ; le premier continue (même session, même readyTime)',
+          item.get('ready') and item.get('readyTime') == load().get('wp_ready') and [x['id'] for x in pubs] == [load().get('wp_session')],
+          f'readyTime {load().get("wp_ready")} → {item.get("readyTime")}, publieurs {[x["id"] for x in pubs]}')
+
+
+def p_wp_kick():
+    pubs = [x for x in (_sessions(C, path=WP)[1] or {}).get('items', []) if x['state'] == 'publish']
+    if not pubs:
+        check('WP13', 'expulsion du publieur du chemin whip', False, 'aucune publication en cours')
+        return
+    sid = pubs[0]['id']
+    code_a, _ = js('POST', f'{AUTH}/v1/sessions/webrtc/{sid}/kick', basic=A)
+    code_c, _, body, _ = call('POST', f'{AUTH}/v1/sessions/webrtc/{sid}/kick', basic=C, data=b'')
+    gone = wait_for(lambda: (path_of(C, WP)[1] or {}).get('ready') is False and ['ok'], 5, 0.2)
+    check('WP13', 'expulsion du publieur du chemin whip par son app → 204, le flux entrant s\'arrête ; par une autre app → 404',
+          code_a == 404 and code_c == 204 and body == b'' and bool(gone), f'appa {code_a}, appc {code_c}, chemin libéré {bool(gone)}')
 
 
 PHASES = {name[2:]: fn for name, fn in globals().items() if name.startswith('p_')}

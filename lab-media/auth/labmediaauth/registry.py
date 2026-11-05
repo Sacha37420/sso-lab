@@ -4,6 +4,7 @@ Le registre est un fichier JSON sans aucun secret. Les secrets viennent de
 l'environnement (lab-media/.env), sous des noms DÉRIVÉS du nom de l'entrée :
 
     app « mon-app »      LAB_MEDIA_APP_MON_APP_HOOK_KEY
+                         LAB_MEDIA_APP_MON_APP_HOOK_URL                           (si "read_hook_env": true)
                          LAB_MEDIA_APP_MON_APP_CONTROL_USER / _CONTROL_PASSWORD
                          LAB_MEDIA_APP_MON_APP_PUBLISH_USER / _PUBLISH_PASSWORD   (si "publish": true)
     source « capture »   LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER / _PUBLISH_PASSWORD
@@ -19,6 +20,17 @@ découverts (une prise jack n'a pas d'identité USB). Chacun a un chemin `speake
 lequel on ne publie qu'en WebRTC (WHIP, décision relayée au hook de l'app) et que seul le
 lecteur interne de la source des webcams lit, en RTSP. Le préfixe `speaker` doit appartenir à
 la même app que `devices.prefix`.
+
+Clé d'app "read_hook_env": true (chantier ecran, I1) : l'URL du hook n'est pas écrite au
+registre (versionné, public) mais lue dans .env sous LAB_MEDIA_APP_<NOM>_HOOK_URL. Exclusive de
+"read_hook", même règle de forme (http(s), sans query ni fragment). Absente ou invalide : refus
+de démarrer, comme un secret manquant.
+
+Clé de chemin "whip": true (chantier ecran, I1) : publication WebRTC (WHIP) seule, décidée par
+le hook de l'app (comme une lecture) ; aucun identifiant d'app ou de source n'ouvre de
+publication sur ce chemin, en aucun protocole ; lecture relayée au hook comme partout ; jamais
+enregistré ; un seul publieur. Incompatible avec tout réglage d'enregistrement ("record",
+"segment", "delete_after") et avec "source_env", "on_demand". Aucune source ne peut le lister.
 
 Toute incohérence arrête le service au démarrage : jamais de défaut silencieux
 sur un secret, jamais de chemin sans propriétaire.
@@ -36,6 +48,7 @@ SECRET_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 DURATION_RE = re.compile(r'^[1-9][0-9]{0,5}(s|m|h|d)$')
 PULL_RE = re.compile(r'^rtsps?://[^\s"\'\\]+$')
 MIN_SECRET = 16
+HOOK_URL_RE = re.compile(r'^https?://[^\s?#]+$')
 
 RECORD_PATH = '/recordings/%path/%Y-%m-%d_%H-%M-%S-%f'
 
@@ -137,6 +150,9 @@ class PathConf:
     retain: bool = False
     # Chemin de haut-parleur (`speaker/<id>`) : publication WHIP seule, jamais lu ni enregistré.
     talk: bool = False
+    # Chemin « publication WebRTC relayée » (registre "whip": true) : publication WHIP seule,
+    # décidée par le hook de l'app ; lecture relayée comme partout ; jamais enregistré.
+    whip: bool = False
 
 
 @dataclass
@@ -168,6 +184,14 @@ class Registry:
     def is_talk(self, path) -> bool:
         conf = self.paths.get(path) if isinstance(path, str) else None
         return conf is not None and conf.talk
+
+    def is_whip(self, path) -> bool:
+        conf = self.paths.get(path) if isinstance(path, str) else None
+        return conf is not None and conf.whip
+
+    def never_recorded(self, path) -> bool:
+        """Chemin sans relecture possible : haut-parleur ou publication WebRTC relayée."""
+        return self.is_talk(path) or self.is_whip(path)
 
     def app_by_control_user(self, user: str) -> App | None:
         for app in self.apps.values():
@@ -218,7 +242,7 @@ def load(text: str, env: dict) -> Registry:
             raise RegistryError(f'app « {name} » : nom invalide')
         if not isinstance(conf, dict):
             raise RegistryError(f'app « {name} » : objet attendu')
-        unknown = set(conf) - {'prefixes', 'read_hook', 'publish'}
+        unknown = set(conf) - {'prefixes', 'read_hook', 'read_hook_env', 'publish'}
         if unknown:
             raise RegistryError(f'app « {name} » : clés inconnues {sorted(unknown)}')
         prefixes = conf.get('prefixes')
@@ -227,9 +251,23 @@ def load(text: str, env: dict) -> Registry:
         for prefix in prefixes:
             if not isinstance(prefix, str) or not PATH_RE.match(prefix):
                 raise RegistryError(f'app « {name} » : préfixe invalide {prefix!r}')
-        hook_url = conf.get('read_hook')
-        if (not isinstance(hook_url, str) or not re.match(r'^https?://[^\s?#]+$', hook_url)):
-            raise RegistryError(f'app « {name} » : "read_hook" doit être une URL http(s) sans query')
+        from_env = conf.get('read_hook_env', False)
+        if not isinstance(from_env, bool):
+            raise RegistryError(f'app « {name} » : "read_hook_env" booléen attendu')
+        if from_env and 'read_hook' in conf:
+            raise RegistryError(f'app « {name} » : "read_hook" et "read_hook_env" s\'excluent')
+        if from_env:
+            # L'URL n'est jamais recopiée dans un message : elle n'a pas à être publique.
+            key = _env_key('APP', name, 'HOOK_URL')
+            hook_url = env.get(key, '')
+            if (not isinstance(hook_url, str) or 'CHANGE_ME' in hook_url
+                    or not HOOK_URL_RE.fullmatch(hook_url)):
+                raise RegistryError(f'app « {name} » : {key} absente ou invalide dans .env '
+                                    '(URL http(s) sans query attendue)')
+        else:
+            hook_url = conf.get('read_hook')
+            if not isinstance(hook_url, str) or not HOOK_URL_RE.fullmatch(hook_url):
+                raise RegistryError(f'app « {name} » : "read_hook" doit être une URL http(s) sans query')
         publish = conf.get('publish', False)
         if not isinstance(publish, bool):
             raise RegistryError(f'app « {name} » : "publish" booléen attendu')
@@ -260,9 +298,17 @@ def load(text: str, env: dict) -> Registry:
             raise RegistryError(f'chemin « {name} » : aucun préfixe d\'app ne le possède')
         if not isinstance(conf, dict):
             raise RegistryError(f'chemin « {name} » : objet attendu')
-        unknown = set(conf) - {'record', 'segment', 'delete_after', 'source_env', 'on_demand'}
+        unknown = set(conf) - {'record', 'segment', 'delete_after', 'source_env', 'on_demand', 'whip'}
         if unknown:
             raise RegistryError(f'chemin « {name} » : clés inconnues {sorted(unknown)}')
+        whip = conf.get('whip', False)
+        if not isinstance(whip, bool):
+            raise RegistryError(f'chemin « {name} » : "whip" booléen attendu')
+        if whip:
+            clash = sorted(set(conf) & {'record', 'segment', 'delete_after', 'source_env', 'on_demand'})
+            if clash:
+                raise RegistryError(f'chemin « {name} » : "whip" incompatible avec {clash} '
+                                    '(jamais enregistré, jamais tiré)')
         for key in ('segment', 'delete_after'):
             if key in conf and not (isinstance(conf[key], str) and DURATION_RE.match(conf[key])):
                 raise RegistryError(f'chemin « {name} » : "{key}" de la forme 30s, 10m, 1h, 7d')
@@ -284,6 +330,7 @@ def load(text: str, env: dict) -> Registry:
             delete_after=conf.get('delete_after', '7d'),
             pull_url=pull_url,
             on_demand=conf.get('on_demand', False),
+            whip=whip,
         )
 
     for name, conf in (raw.get('sources') or {}).items():
@@ -302,6 +349,9 @@ def load(text: str, env: dict) -> Registry:
                 raise RegistryError(f'source « {name} » : chemin « {path} » non déclaré dans "paths"')
             if reg.paths[path].pull_url:
                 raise RegistryError(f'source « {name} » : « {path} » est un chemin tiré, personne n\'y publie')
+            if reg.paths[path].whip:
+                raise RegistryError(f'source « {name} » : « {path} » est un chemin "whip", '
+                                    'seul le hook de l\'app y ouvre une publication')
         reg.sources[name] = Source(name=name, paths=frozenset(paths),
                                    publish=_creds(env, 'SOURCE', name, 'PUBLISH'), devices=devices)
 
@@ -471,6 +521,11 @@ def render_mediamtx(base_yml: str, reg: Registry, retained: dict[str, PathConf] 
         if conf.talk:
             # Haut-parleur : jamais enregistré, quoi que dise le reste du registre.
             out += ['    source: publisher', '    record: no']
+            continue
+        if conf.whip:
+            # Publication WebRTC relayée : jamais enregistrée, un seul publieur (écrit ici en plus
+            # de pathDefaults : ce chemin ne doit pas dépendre de la base).
+            out += ['    source: publisher', '    record: no', '    overridePublisher: no']
             continue
         if conf.pull_url:
             out.append(f'    source: {json.dumps(conf.pull_url)}')

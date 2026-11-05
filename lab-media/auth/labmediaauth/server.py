@@ -5,6 +5,8 @@
     l'app propriétaire du préfixe, corps transmis tel quel, en échec fermé. Chemins de
     haut-parleur (`speaker/<id>`, chantier haut-parleur) : c'est la PUBLICATION WebRTC qui est
     relayée au hook de l'app, et la lecture est fermée à tous sauf au lecteur de la capture.
+    Chemins « whip » du registre (chantier ecran) : la PUBLICATION WebRTC est relayée au hook de
+    l'app, et la lecture lui est relayée comme partout ; aucun identifiant n'y publie.
   * CONTRÔLE (dev-net, port 9100) : l'API I3 des apps — voir lab-media/API.md — et les
     routes /v1/devices (webcams, chantier webcams I1).
   * DÉCOUVERTE des webcams (devices.py) : un fil qui lit sysfs, tient l'inventaire et le plan
@@ -195,6 +197,14 @@ def decide(state: State, raw: bytes) -> tuple[bool, dict]:
             if ok and state.devices is not None:
                 state.devices.talk_allowed(path)
             return ok, {**info, 'reason': why}
+        if registry.is_whip(path):
+            # Publication WebRTC relayée (chantier ecran, I1) : WHIP seulement, l'app décide (même
+            # relais, même échec fermé que pour une lecture). Aucun identifiant (app, source,
+            # internes) n'ouvre une publication sur ce chemin : ils ne sont même pas comparés.
+            if protocol != 'webrtc':
+                return False, {**info, 'reason': f'chemin whip : publication {protocol} fermée (WHIP seul)'}
+            ok, why = relay_read(state, app, raw)
+            return ok, {**info, 'reason': why}
         if registry.paths[path].pull_url:
             return False, {**info, 'reason': 'chemin tiré : personne n\'y publie'}
         who = None
@@ -205,7 +215,7 @@ def decide(state: State, raw: bytes) -> tuple[bool, dict]:
             if creds_ok(body, source.publish) and path in source.paths:
                 who = who or f'source {source.name}'
         # RTSP seulement : la publication WebRTC (WHIP, joignable par Caddy donc depuis
-        # Internet) n'est ouverte que sur les chemins de haut-parleur, ci-dessus.
+        # Internet) n'est ouverte que sur les chemins de haut-parleur et « whip », ci-dessus.
         if who and protocol != 'rtsp':
             return False, {**info, 'reason': f'{who} : publication {protocol} fermée (RTSP seul)'}
         if who:
@@ -237,8 +247,12 @@ def _post_hook(app, raw: bytes, timeout: float, slot) -> int:
         cls = http.client.HTTPSConnection if url.scheme == 'https' else http.client.HTTPConnection
         conn = cls(url.hostname, url.port, timeout=timeout)
         try:
+            # La clé part deux fois (chantier ecran, I1) : en query, comme toujours, et dans
+            # l'en-tête X-Lab-Media-Key, qu'une app peut préférer (une query finit dans les
+            # journaux d'accès). En https, certificat et nom d'hôte sont vérifiés (contexte par
+            # défaut de http.client) ; aucune redirection n'est suivie (≠ 200 ⇒ refus).
             conn.request('POST', f'{url.path or "/"}?{urlencode({"key": app.hook_key})}', body=raw,
-                         headers={'Content-Type': 'application/json'})
+                         headers={'Content-Type': 'application/json', 'X-Lab-Media-Key': app.hook_key})
             return conn.getresponse().status
         finally:
             conn.close()
@@ -554,8 +568,12 @@ class ControlHandler(_Base):
             self.error(404, 'unknown_session', 'Session inconnue pour cette app.')
             return self.done(app, 404, route='sessions/kick', protocol=protocol, id=session_id[:64],
                              reason='session inconnue ou hors de ses préfixes')
-        if mine.get('state') == 'publish' and not self.state.registry.is_talk(mine.get('path')):
-            # Une publication n'est expulsable que sur un haut-parleur (I3) : la parole s'arrête.
+        if mine.get('state') == 'publish' and not (self.state.registry.is_talk(mine.get('path'))
+                                                   or self.state.registry.is_whip(mine.get('path'))):
+            # Une publication n'est expulsable que là où l'app l'a elle-même autorisée par son
+            # hook : haut-parleur (la parole s'arrête) ou chemin « whip » (chantier ecran : une
+            # séance terminée ou un appareil révoqué coupe le flux entrant). Les publications
+            # des sources et des apps en RTSP ne sont jamais coupées par l'API.
             self.error(409, 'not_a_reader', 'Seule une session de lecture peut être expulsée.')
             return self.done(app, 409, route='sessions/kick', protocol=protocol, id=session_id)
         code, _ = self.state.mtx_json('POST', f'/v3/{SESSION_ENDPOINTS[protocol]}/kick/{session_id}')
@@ -570,7 +588,7 @@ class ControlHandler(_Base):
 
     def recordings_list(self, app, query):
         path = query.get('path')
-        if not self._own_path(app, path) or self.state.registry.is_talk(path):   # jamais enregistré
+        if not self._own_path(app, path) or self.state.registry.never_recorded(path):   # jamais enregistré
             return self._not_yours(app, 'recordings', path)
         params = {'path': path}
         for key in ('start', 'end'):
@@ -597,7 +615,7 @@ class ControlHandler(_Base):
 
     def recordings_get(self, app, query):
         path = query.get('path')
-        if not self._own_path(app, path) or self.state.registry.is_talk(path):
+        if not self._own_path(app, path) or self.state.registry.never_recorded(path):
             return self._not_yours(app, 'recordings/get', path)
         if not RFC3339.match(query.get('start', '')) or not DURATION.match(query.get('duration', '')):
             self.error(400, 'bad_request', 'Requis : start (RFC 3339 avec fuseau) et duration (secondes).')
