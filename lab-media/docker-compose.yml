@@ -154,6 +154,12 @@ services:
       MEDIA_CAPTURE_MAX: "${MEDIA_CAPTURE_MAX:-2}"
       MEDIA_CAPTURE_FPS: "${MEDIA_CAPTURE_FPS:-15}"
       MEDIA_CAPTURE_MODE: "${MEDIA_CAPTURE_MODE:-device}"
+      # Gain automatique des webcams (capture-one.sh) : cible de luminosité moyenne (0-255),
+      # gain maximal (au-delà, surtout du bruit), gamma posé au démarrage (vide = inchangé).
+      MEDIA_CAPTURE_AUTOGAIN: "${MEDIA_CAPTURE_AUTOGAIN:-0}"
+      MEDIA_CAPTURE_TARGET_Y: "${MEDIA_CAPTURE_TARGET_Y:-105}"
+      MEDIA_CAPTURE_GAIN_MAX: "${MEDIA_CAPTURE_GAIN_MAX:-80}"
+      MEDIA_CAPTURE_GAMMA: "${MEDIA_CAPTURE_GAMMA:-}"
       # Tampon ALSA des haut-parleurs, en ms (40 à 1000) : la latence ajoutée par la carte.
       MEDIA_SPEAKER_BUFFER_MS: "${MEDIA_SPEAKER_BUFFER_MS:-160}"
       # MEDIA_DEVICE_VIDEO / MEDIA_DEVICE_AUDIO ne sont plus lues (la découverte les remplace) :

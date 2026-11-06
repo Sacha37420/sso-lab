@@ -31,11 +31,12 @@ RUN="${MEDIA_CAPTURE_RUN:-/tmp/lab-capture}"
 # « lab-media-rtsp » : alias de MediaMTX sur le réseau interne de lab-media.
 URL="rtsp://${LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_USER}:${LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD}@${MEDIA_CAPTURE_RTSP_HOST:-lab-media-rtsp}:8554/${BASE_PATH}"
 VID="$(echo "$ID" | cut -d- -f2)"; PID_="$(echo "$ID" | cut -d- -f3)"
-ff=""
+ff=""; ag=""
 
 log() { echo "[capture] $ID : $*" >&2; }
 
 stop() {
+  if [ -n "$ag" ]; then kill "$ag" 2>/dev/null; fi
   if [ -n "$ff" ]; then kill -TERM "$ff" 2>/dev/null; wait "$ff" 2>/dev/null; fi
   rm -f "$RUN/$ID.ff"
   exit 0
@@ -102,9 +103,71 @@ masked_log() {
   rm -f "$FIFO"; mkfifo -m 600 "$FIFO" || return 1
   PW="$LAB_MEDIA_SOURCE_CAPTURE_PUBLISH_PASSWORD"   # [A-Za-z0-9_-] : sans danger dans sed
   ( while IFS= read -r l; do
+      case "$l" in
+        lavfi.signalstats.YAVG=*) printf '%s\n' "${l#*=}" > "$YFILE.tmp" && mv -f "$YFILE.tmp" "$YFILE"; continue;;
+        "frame:"*" pts_time:"*) continue;;   # en-tête de chaque mesure (filtre metadata)
+      esac
       case "$l" in *"$PW"*) l="$(printf '%s' "$l" | sed "s#$PW#***#g")";; esac
       echo "[ffmpeg $ID] $l" >&2
     done < "$FIFO" ) &
+}
+
+# ── Gain automatique (MEDIA_CAPTURE_AUTOGAIN=1, mode device seulement) ─────────────────────
+# Les webcams UVC du lab ont une exposition automatique mais un gain MANUEL, à 0 par défaut :
+# dans une pièce peu éclairée l'image reste sombre (luminosité moyenne mesurée ≈ 25/255).
+# ffmpeg mesure la luminosité moyenne (signalstats YAVG) d'UNE image toutes les 2 s sur une
+# branche à part (coût négligeable) et l'écrit sur sa sortie d'erreur ; masked_log la range
+# dans $RUN/<id>.yavg au lieu de la journaliser. Une boucle ajuste le gain matériel pour viser
+# MEDIA_CAPTURE_TARGET_Y, avec une zone neutre (±12) contre les oscillations. Un réglage
+# absent sur une caméra est ignoré : rien ne doit empêcher la capture.
+AUTOGAIN="${MEDIA_CAPTURE_AUTOGAIN:-0}"
+TARGET_Y="${MEDIA_CAPTURE_TARGET_Y:-105}"
+GAIN_MAX="${MEDIA_CAPTURE_GAIN_MAX:-80}"
+GAMMA="${MEDIA_CAPTURE_GAMMA:-}"
+case "$TARGET_Y" in ''|*[!0-9]*) TARGET_Y=105;; esac
+case "$GAIN_MAX" in ''|*[!0-9]*) GAIN_MAX=80;; esac
+case "$GAMMA" in *[!0-9]*) GAMMA="";; esac
+[ "$TARGET_Y" -lt 40 ] || [ "$TARGET_Y" -gt 200 ] && TARGET_Y=105
+ag=""
+YFILE="$RUN/$ID.yavg"
+
+autogain_on() {
+  [ "$AUTOGAIN" = 1 ] && [ "$MODE" = device ] && command -v v4l2-ctl >/dev/null 2>&1
+}
+
+ctl_get() {   # ctl_get <réglage> : valeur entière, ou rien
+  v4l2-ctl -d "$VIDEO_IN" --get-ctrl="$1" 2>/dev/null | sed -n 's/^[a-z_]*: *\(-\{0,1\}[0-9][0-9]*\).*/\1/p'
+}
+ctl_set() { v4l2-ctl -d "$VIDEO_IN" --set-ctrl="$1=$2" 2>/dev/null; }
+
+autogain_prepare() {   # réglages fixes posés à chaque (re)lancement de ffmpeg
+  autogain_on || return 0
+  ctl_set backlight_compensation 2 || true
+  [ -n "$GAMMA" ] && { ctl_set gamma "$GAMMA" || true; }
+  rm -f "$YFILE"
+}
+
+autogain_loop() {   # en arrière-plan pendant que ffmpeg tourne
+  gain="$(ctl_get gain)"
+  case "$gain" in ''|*[!0-9]*) log "gain automatique : réglage « gain » absent, désactivé"; return 0;; esac
+  log "gain automatique : cible $TARGET_Y, gain de départ $gain (max $GAIN_MAX)"
+  while :; do
+    sleep 4
+    [ -s "$YFILE" ] || continue
+    y="$(cut -d. -f1 "$YFILE" 2>/dev/null)"
+    case "$y" in ''|*[!0-9]*) continue;; esac
+    diff=$((y - TARGET_Y)); adiff=${diff#-}
+    [ "$adiff" -le 12 ] && continue
+    if [ "$adiff" -gt 40 ]; then step=16; else step=6; fi
+    if [ "$diff" -lt 0 ]; then new=$((gain + step)); else new=$((gain - step)); fi
+    [ "$new" -gt "$GAIN_MAX" ] && new="$GAIN_MAX"
+    [ "$new" -lt 0 ] && new=0
+    [ "$new" = "$gain" ] && continue
+    if ctl_set gain "$new"; then
+      log "gain automatique : luminosité $y → gain $gain → $new"
+      gain="$new"
+    fi
+  done
 }
 
 run_ffmpeg() {   # run_ffmpeg <essai> : en arrière-plan, pid dans $ff
@@ -129,18 +192,28 @@ run_ffmpeg() {   # run_ffmpeg <essai> : en arrière-plan, pid dans $ff
     # Essai pair : MJPEG 1280x720 (la plupart des webcams UVC ; décodage MJPEG + x264, aucun
     # H.264 natif supposé). Essai impair, après un échec rapide : format par défaut du pilote.
     if [ $(($1 % 2)) -eq 0 ]; then FMT="-input_format mjpeg -video_size 1280x720"; else FMT=""; fi
+    # Avec le gain automatique : une branche mesure une image toutes les 2 s (nullsink).
+    # (Trois variables toujours passées entre guillemets : « [enc] » non quoté serait un motif
+    # de fichier pour le shell.)
+    if autogain_on; then
+      VF_OPT="-filter_complex"
+      VF_ARG="[0:v]fps=${FPS},format=yuv420p,split[enc][mes];[mes]fps=1/2,signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG:file=/dev/stderr:direct=1,nullsink"
+      MAPV="[enc]"
+    else
+      VF_OPT="-vf"; VF_ARG="fps=${FPS},format=yuv420p"; MAPV="0:v:0"
+    fi
     # shellcheck disable=SC2086
     if [ $with_audio = 1 ]; then
       ffmpeg -hide_banner -nostdin -loglevel warning \
         -thread_queue_size 64 -f v4l2 $FMT -timestamps mono2abs -i "$VIDEO_IN" \
         -thread_queue_size 1024 -f alsa -channels 1 -sample_rate 48000 -i "$AUDIO_IN" \
-        -map 0:v:0 -map 1:a:0 -vf "fps=${FPS},format=yuv420p" \
+        -map "$MAPV" -map 1:a:0 $VF_OPT "$VF_ARG" \
         $ENC_V -b:v 1000k -maxrate 1000k -bufsize 2000k $ENC_A \
         -f tee "${OUT_V}|${OUT_A}|${OUT_AV}" 2>"$FIFO" &
     else
       ffmpeg -hide_banner -nostdin -loglevel warning \
         -thread_queue_size 64 -f v4l2 $FMT -timestamps mono2abs -i "$VIDEO_IN" \
-        -map 0:v:0 -vf "fps=${FPS},format=yuv420p" \
+        -map "$MAPV" $VF_OPT "$VF_ARG" \
         $ENC_V -b:v 1000k -maxrate 1000k -bufsize 2000k \
         -f tee "${OUT_V}|${OUT_AV}" 2>"$FIFO" &
     fi
@@ -156,9 +229,12 @@ while :; do
     [ "$AUDIO" = 1 ] && [ -z "$AUDIO_IN" ] && log "micro introuvable sur le port $PORT : vidéo seule pour cet essai"
     log "ffmpeg (essai $attempt, mode $MODE, micro $([ -n "$AUDIO_IN" ] && echo oui || echo non))"
     t0="$(date +%s)"
+    autogain_prepare
     run_ffmpeg "$attempt"
+    if autogain_on; then autogain_loop & ag=$!; fi
     wait "$ff"; code=$?
     ff=""; rm -f "$RUN/$ID.ff"
+    if [ -n "$ag" ]; then kill "$ag" 2>/dev/null; wait "$ag" 2>/dev/null; ag=""; fi
     ran=$(( $(date +%s) - t0 ))
     log "ffmpeg terminé (code $code après ${ran} s), nouvelle tentative dans ${RETRY} s"
     # Un échec rapide fait alterner le format d'entrée ; un ffmpeg qui a tourné garde le sien.

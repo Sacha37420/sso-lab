@@ -1302,6 +1302,11 @@ conteneurs `lab-media` (MediaMTX), `lab-media-auth` (mini-service d'authentifica
   `lab-media-capture`. Côté peripheriques : droit « Parler » (`Grant.speaker`), bouton sur Direct,
   coupure et révocation expulsent les publieurs ; le pont rend `speakers`. Avec `Auto-Mute Mode`,
   un casque en façade coupe la prise arrière.
+- **Gain automatique des webcams** (2026-11-06, `MEDIA_CAPTURE_AUTOGAIN=1` dans `lab-media/.env`) :
+  leur gain matériel était à 0, l'exposition automatique seule laissait l'image sombre. La capture
+  mesure la luminosité (une image / 2 s) et règle `gain` (`v4l2-ctl`, ajouté à l'image) vers une
+  cible ; réglages et mesures détaillés dans `lab-media/README.md`. Un réglage unique pour toutes
+  les webcams ne marche pas (la mieux éclairée sature) : c'est la boucle par webcam qui le tient.
 - **Chemins `whip`** (2026-11-05, app `ecran`, chemin `ecran/a`) : clé de chemin `"whip": true`
   au registre ⇒ publication **WebRTC seule, relayée au hook de l'app** (aucun identifiant n'y
   publie, en aucun protocole), lecture relayée, jamais enregistré, un seul publieur ; le

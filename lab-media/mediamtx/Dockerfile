@@ -11,7 +11,8 @@ ENTRYPOINT ["/bin/sh", "/opt/lab-media/entrypoint.sh"]
 
 FROM base AS capture
 # Alpine 3.24 (celle de l'image épinglée) : alsa-utils 1.2.15.
-RUN apk add --no-cache 'alsa-utils~1.2.15'
+# v4l-utils : v4l2-ctl, pour le gain automatique des webcams (capture-one.sh).
+RUN apk add --no-cache 'alsa-utils~1.2.15' 'v4l-utils~1.32'
 COPY capture.sh capture-one.sh speaker-one.sh /opt/lab-media/
 
 FROM base AS media
