@@ -21,6 +21,10 @@ commande de test.
 
 ---
 
+> **Nuit du 2026-11-08** : rapport `rapports-auto/nuit-2026-11-08.md` ; lignes ajoutées cette nuit
+> marquées « 2026-11-08 ». Ce qui est fait sur une branche `claude/nuit-2026-11-08` n'est en
+> service qu'après fusion de sa PR (et, pour une app, après son déploiement).
+
 ## Tests à mener par le propriétaire (liste tenue à jour)
 
 Ne restent ici que les vérifications que la machine ne peut pas faire : un compte humain, de vraies
@@ -68,6 +72,13 @@ test est fait, et coché dans la feuille de route de l'app.
 
 **Dans les apps** (détail dans leur feuille de route)
 - [ ] peripheriques : direct H.264, WebRTC depuis le WAN, révocation pendant une lecture, HD USB Camera.
+- [ ] 2026-11-08 — peripheriques : les lots 5 (coupure, pont google-agenda) et 6 (haut-parleur) tournent
+      depuis le 2026-11-05 (conteneurs recréés 3 min après `d6ea9e7`) [D], mais `deployed/peripheriques.json`
+      garde `2080f19` : ce déploiement n'a pas été enregistré. Parcours réels à faire.
+- [ ] 2026-11-08 — peripheriques : la déconnexion échoue (`LOGOUT_ERROR invalid_redirect_uri`, 3 fois en
+      72 h dans le journal de Keycloak) : le frontend renvoie vers `https://<DOMAIN>` (racine), qui n'est pas
+      dans les URI de retour du client depuis `--prune-uris` [C]. À corriger côté frontend (retour sous
+      `/peripheriques/`) ; vérifier les autres apps au même geste.
 - [ ] code-route : les 8 scénarios de `route-robot.md` (lot 2).
 - [ ] traitement-de-fichiers-compils : partage à un destinataire puis retrait ; recadrage, filtres, PDF (lot 3).
 - [ ] carto-lab : QGIS ouvre une couche publiée (lot 2).
@@ -218,6 +229,10 @@ en service ».
   - `[service-account]` : restauration (vrais rôles, U4), et peripheriques et lab-admin ;
   - storage `[volume]` (volume `external` d'`infra`, à dessein) ; lab-admin `[bind]` (dépôt monté, à dessein).
   Sans refus : app-builder, oauth-hub.
+- [ ] 2026-11-08 : `deploiement/carto-lab/setup-ogc-auth.sh:25` cherche `scripts/` et `sso-lab/` dans
+      `deploiement/` et ne marche plus depuis la bascule (carto-lab, lot 2).
+- [ ] 2026-11-08 : `.keycloak-client-opts` reste suivi par git dans conciergerie, analyse-lora et
+      arbre-genealogique (`git ls-files`) — la case de conciergerie était cochée à tort, décochée.
 - [ ] Ligne `.owners` `<app>:sacha` pour les 12 apps historiques, une fois chacune conforme. Elles
       passent alors au chemin à portes : build pendant que l'ancienne version tourne, tests, puis
       `up -d --no-build`.
@@ -230,12 +245,36 @@ en service ».
 ### T2 — Un point d'entrée unique et une installation sans surprise · P2 · S–M
 
 - [ ] **`install.sh --check` ne conclut pas « rien à faire » sur la machine en service** [C] : il veut déployer `test-video`. Il déploierait en plus l'arbre de travail d'un projet privé sans `app-sync`.
+      2026-11-08 : toujours vrai (seule action annoncée). `~/dev/deploiement/test-video` est encore à `30a678b`,
+      `origin/main` à `c2f21bb` (lot 2 fait, jamais testé ni déployé). Ⓟ : mettre à jour et déployer, ou poser
+      `.no-autodeploy`.
+- [x] 2026-11-08 **P1 [C] Une installation neuve ne pouvait pas démarrer Keycloak 26** : `install.sh` démarrait
+      `sso-lab` (étape 7) avant `infra` (étape 8), sans `dev-db.sh ensure-keycloak` et sans
+      `keycloak-nonce-compat.sh` (boucle de connexion dans toutes les apps). Corrigé (nuit 2026-11-08, PR « Nuit 2026-11-08 » de sso-lab, à fusionner) : l'étape 7
+      prépare la base `keycloak` (infra démarrée pour elle, `reset_url.sh`) puis pose le scope ; contrôles en
+      `--check`. `dev-db.sh status keycloak` ajouté ; `dev-db.sh ensure-all` rejoue aussi la base `keycloak`.
+      Non joué en vrai (pas de machine neuve) : `--check` seulement, sur une racine jetable.
+- [x] 2026-11-08 [C] Témoin « sso-lab déjà initialisé » = volume `sso-lab_keycloak-data` (H2 de Keycloak 22,
+      plus monté, que Compose ne crée plus) : remplacé par le volume de l'annuaire (nuit 2026-11-08, PR « Nuit 2026-11-08 » de sso-lab, à fusionner).
+- [x] 2026-11-08 **P1 [C] Le gabarit `init.ldif.example` remettait `e2e_member` dans `admins`** (donc `/code`,
+      donc l'hôte, sur toute installation neuve) et recréait `dom` et `harem` : retirés (nuit 2026-11-08, PR « Nuit 2026-11-08 » de sso-lab, à fusionner).
+- [x] 2026-11-08 [C] Le superutilisateur par défaut (utilisateur Unix courant) n'existait pas dans le gabarit
+      de l'annuaire, qui ne connaît que `sacha` : `install.sh` le signale maintenant (compte, `admins`,
+      `developers`) (nuit 2026-11-08, PR « Nuit 2026-11-08 » de sso-lab, à fusionner).
+- [ ] 2026-11-08 [C] `install.sh` dit « client Keycloak de pgAdmin (infra) présent » alors qu'il est désactivé :
+      il le dit désormais (note, pas un manque) (nuit 2026-11-08, PR « Nuit 2026-11-08 » de sso-lab, à fusionner). La décision reste à prendre (voir en tête).
+- [ ] 2026-11-08 [C] `lab-media` : aucun client Keycloak `lab-media` n'existe aujourd'hui (le service a été
+      déployé à la main), mais `setup_unit.sh:186` appelle `create-app-client.sh` sans condition et
+      `lab-media/` n'a pas de `.keycloak-client-opts` : une installation neuve créerait un client public sans
+      groupe. Le point ci-dessous reste ouvert.
 - [ ] **`lab-media` est traité comme une app** par `install.sh` (l. 510-520) et par `setup2.sh --yes` [C/D] : risque qu'un client Keycloak sans groupe soit créé pour lui. Le corriger soit par `lab-media/.no-autodeploy`, soit par un `units.conf` (nom, type infra/cadriciel/app, priorité, RAM, Keycloak oui/non) lu par `install.sh`, `setup2.sh` et `app-priorities.conf`.
 - [ ] **Répartiteur `scripts/lab`**, sans supprimer aucun script :
   - `install [--check]`
   - `deploy <app>|--all`
   - `status [<app>]`
   - `doctor` : `install --check`, `hba-status`, `storage-shares --check`, santé de la dernière sauvegarde, jokers Keycloak, cloisonnement jamais joué
+    — 2026-11-08 : écrit à part, `scripts/lab-doctor.sh` (lecture seule, code 1 si un problème ; ajoute PKCE,
+    scope nonce, ports hors `127.0.0.1`, conteneurs oubliés, disque) (nuit 2026-11-08, PR « Nuit 2026-11-08 » de sso-lab, à fusionner). Le répartiteur `lab` reste à faire.
   - `backup`
   - `restore`
   - `test <app>`
@@ -243,10 +282,17 @@ en service ».
   - `help`, généré depuis les en-têtes `# Usage`
 - [ ] **Découper `setup2.sh`** (611 lignes, trois rôles) : déploiement d'une app, déploiement de tout le lab, opérations destructrices (`--restart-sso-lab`, `--rotate-secrets`). Garder `setup2.sh` comme enveloppe compatible, le moteur l'appelle.
 - [ ] **`install.sh`** :
-  - [ ] poser le cron de `backup.sh` et vérifier ses prérequis (`~/.lab-backup-nas`, image `lab-backup`) ;
+  - [x] poser le cron de `backup.sh` et vérifier ses prérequis (`~/.lab-backup-nas`, image `lab-backup`) ;
+        2026-11-08 : `scripts/backup-cron.sh [--check]`, appelé à l'étape 11 d'`install.sh` (nuit 2026-11-08, PR « Nuit 2026-11-08 » de sso-lab, à fusionner) ;
   - [x] corriger le message faux « rien n'est planifié » (`install.sh`, README) — 2026-11-01.
 - [ ] **Routeur** : Freebox par défaut dans la doc. Renommer `bbox.env` en `router.env` (renommage différé, plusieurs scripts le lisent).
 - [ ] **Essais rejouables de l'installation** : `install.sh --check` sur un clone jetable, et `validate-app.sh` sur des dépôts piégés (`scripts/tests/`).
+- [ ] 2026-11-08 `shellcheck` n'est pas installé sur l'hôte : les scripts de la nuit ne sont passés que par
+      `bash -n`. Ⓟ installer `shellcheck` (paquet Debian) et le jouer sur `scripts/`.
+- **Note d'installation au 2026-11-08 : quelques obstacles** (détail : `rapports-auto/nuit-2026-11-08.md`,
+  mission 1). Les deux bloquants (Keycloak 26 sans base, superutilisateur absent de l'annuaire) sont
+  corrigés sur la branche de la nuit ; restent les gestes humains (domaine, DDNS, box, fiche GitHub
+  d'oauth-hub, SMTP) et les points ouverts de cette section.
 - **Test.**
   - `lab doctor` rend 0 sur la machine en service.
   - `lab help` liste chaque `scripts/*.sh`.
@@ -264,6 +310,13 @@ en service ».
 | Polices en URL absolue `url("/assets/…")`, donc 404 derrière Caddy | corrigé | analyse-lora, arbre, tdfc, restauration, atelier-3d, bilan-thermique, carto-lab, conciergerie, code-route, craft-lab, robot-lab, oauth-hub, test-video |
 | `pkceMethod: 'S256'` absent | oui | toutes |
 | `django-only` en retard sur `django-angular/backend` : pas de `PyJWKClientError` (500 sur un `kid` forgé), noms en dur « Test Django », pas de `FORCE_SCRIPT_NAME` | oui | aucune app ne l'utilise ; utilisé par le type 3 de `new-app.sh` |
+
+- [x] 2026-11-08 : redirectUri, polices, `tokenBases()` et PKCE sont reportés dans analyse-lora,
+      arbre-genealogique, atelier-3d, bilan-thermique, carto-lab, code-route, conciergerie, craft-lab
+      (feuilles de route, chantier « failles ») — le tableau ci-dessus est l'état du 2026-10-31.
+- [ ] 2026-11-08 [C] : `KEYCLOAK_REALM`, `KEYCLOAK_REQUIRED_GROUPS` et `CORS_ALLOWED_ORIGINS` sont dans chaque
+      `.env` mais dans aucun `.env.example` (17 apps) : à ajouter au gabarit.
+- [ ] 2026-11-08 [C] : le client d'essai `dev-sacha` (public, créé par `app-preview.sh`) n'exige pas PKCE.
 
 **Ordre de travail**
 - [ ] Ordre : `_templates/` d'abord, puis un même diff reporté app par app, puis `--pkce` client par
@@ -284,8 +337,8 @@ en service ».
 
 ### T4 — Sortir le jeton des URL (`?token=`) · P1 · ⚙ chantier (interface de storage, 9 consommateurs)
 
-- [ ] [C] `storage` accepte `?token=` sur **toutes** les routes et méthodes (`api/authentication.py:105`), alors que seuls des `GET …/content/` en ont besoin. Première étape sans casse : [storage](storage/FEUILLE_DE_ROUTE.md), lot 2.
-- [ ] Consommateurs qui le mettent dans des `<img src>` : arbre-genealogique (`core/api.service.ts:48-56`), atelier-3d (`:361`) et craft-lab (`:397-401`). Le JWT complet part dans l'historique et le `Referer`.
+- [x] (2026-11-08 : fait le 2026-11-01, `?token=` refusé partout) [C] `storage` accepte `?token=` sur **toutes** les routes et méthodes (`api/authentication.py:105`), alors que seuls des `GET …/content/` en ont besoin. Première étape sans casse : [storage](storage/FEUILLE_DE_ROUTE.md), lot 2.
+- [x] (2026-11-08 : `fetch` + `Blob` dans les trois, plus de `token=` dans `frontend/src` — lots 5, 4 et 2 de leurs feuilles de route) Consommateurs qui le mettent dans des `<img src>` : arbre-genealogique (`core/api.service.ts:48-56`), atelier-3d (`:361`) et craft-lab (`:397-401`). Le JWT complet part dans l'historique et le `Referer`.
 - [ ] Cible : ticket court à usage unique, ou `fetch` + `Blob` (déjà prévu dans le lot 5 de storage).
 - **Test.**
   - Aucune requête d'image ne porte `token=`.
@@ -294,9 +347,14 @@ en service ».
 ### T5 — Sauvegarde et restauration · P1 · M–L
 
 - [x] U2 : NAS de retour (2026-10-31) ; reste à voir une nuit complète « ✓ Sauvegarde complète ».
-- [ ] `install.sh --check` / `lab doctor` signalent un `RAPPORT.txt` en défaut ou plus vieux que 26 h.
+- [x] `install.sh --check` / `lab doctor` signalent un `RAPPORT.txt` en défaut ou plus vieux que 26 h.
+      2026-11-08 : `lab-doctor.sh` le fait (et signale l'absence de chiffrement) (nuit 2026-11-08, PR « Nuit 2026-11-08 » de sso-lab, à fusionner).
+- [x] 2026-11-08 [C] : nuits complètes « ✓ Sauvegarde complète » du 2026-11-01 au 2026-11-07, copie NAS déposée
+      et vérifiée (`RAPPORT.txt` du 2026-11-07 : 21 fichiers). Toujours **en clair**, `.env` compris.
 - [ ] **`scripts/restore.sh`** (`--list`, `--check <date>`, `<date> --only base:<nom>|ldap|volume:<v>|config`), avec restauration à blanc dans des conteneurs jetables (réutiliser `chantiers/tests/essai.sh`).
 - [ ] Première restauration de Keycloak (copie à chaud d'une base H2), jamais jouée.
+      2026-11-08 : périmé dans sa forme — depuis Keycloak 26 le realm est dans la base `keycloak` de
+      `dev-postgres`, sauvegardée par `pg_dump` ; c'est sa restauration qu'il faut éprouver.
 - [ ] Ⓟ **Chiffrement** : `seal()` est vide (`scripts/backup.sh:144`). Il faut une clé publique sur l'hôte et la clé privée chez le propriétaire (`age` conseillé).
 - [ ] Ⓟ Côté NAS : le compte `saver` lisait le partage `Videos` au 2026-10-12, à restreindre.
 - **Test.**
@@ -310,21 +368,29 @@ en service ».
 guides par public.
 
 **Corrections du README**
-- [ ] §2.1 décrit encore la synchronisation du catalogue E2E (supprimée), un pipeline qui commence
+- [x] §2.1 décrit encore la synchronisation du catalogue E2E (supprimée), un pipeline qui commence
       toujours par `clean2.sh`, et la « Méthode IA avancée » par `/code`, réservé à `admins`.
-      Réécrire §2.1 autour de « lab-admin → Nouveau projet », avec la voie manuelle en annexe.
-- [ ] Table des sous-modules :
+      Réécrire §2.1 autour de « lab-admin → Nouveau projet », avec la voie manuelle en annexe. (2026-11-08, branche de la nuit)
+- [x] Table des sous-modules (2026-11-08, branche de la nuit) :
   - « éditeur de code, catalogue E2E » pour lab-admin ;
   - « media ICE » pour peripheriques ;
   - `test-video` absent ;
   - « `dev/<app>/` ».
-- [ ] La table des scripts omet `install.sh`, `backup.sh`, `dev-db.sh`, `lab-lock.sh`, tous les
+- [x] (2026-11-08, branche de la nuit) Aussi : architecture (Keycloak 22, `devdb`, apps à la racine), accès après installation
+      (8080/8081/5050 « LAN » → `127.0.0.1` + tunnel), `DOMAIN` à recopier à la main dans `sso-lab/.env`
+      (fait par `reset_url.sh`), `~/edge-router/` « à reconstituer à la main » (gabarit versionné),
+      code-server « `developers,admins` », tests E2E (« huit apps sans spec », catalogue, page Debug),
+      réseaux (`code-net`, `lws`), `…_SHARES` au lieu de `…_PREFIXES`, utilisateurs LDAP, « 00_schemas.sql
+      MODIFIER ICI ».
+- [x] (2026-11-08, branche de la nuit) La table des scripts omet `install.sh`, `backup.sh`, `dev-db.sh`, `lab-lock.sh`, tous les
       `app-*.sh`, `storage-shares.sh`, `workspace-image.sh` et `edge-router-install.sh`. Aucune
       mention de `backup.sh`, `app-preview` ni `/dev-<uid>`.
 
 **Phrases fausses ou périmées de CLAUDE.md** [C]
-- [ ] « Créer une nouvelle application », étapes 1 à 4 : `dev/<app>/`, `00_schemas.sql`,
+- [x] « Créer une nouvelle application », étapes 1 à 4 : `dev/<app>/`, `00_schemas.sql`,
       `gh repo create` à la main, `postgres (devdb)`. Les remplacer par un renvoi au README §2.
+      (2026-11-08, branche de la nuit) : corrigés sur place (chemins, base du propriétaire, `app-register.sh`, deux ordres de
+      `setup_unit.sh`) plutôt que remplacés par un renvoi.
 - [x] « Les apps historiques partagent encore le rôle `devuser` » : faux depuis la bascule.
 - [ ] « Le même défaut [redirectUri] est dans `_templates/` et dans toutes les autres apps » :
       corrigé dans le gabarit et dans 11 apps (voir T3).
@@ -337,9 +403,25 @@ guides par public.
       Debug sont des redirections.
 - [x] Constats « page Apps du lab redondante » et « deux lanceurs » (l. 66-68) : réglés.
 - [x] § Tests E2E « un seul fichier » : storage a aussi `e2e/gestes.spec.ts`, autorisé par la décision Q6.
-- [ ] Tableau des sous-modules : `test-video` absent.
+- [x] Tableau des sous-modules : `test-video` absent. (2026-11-08, branche de la nuit)
 - [ ] Les doublons README/CLAUDE.md (base de données, cloisonnement, Foyer, vitrine, E2E) sont
       rédigés deux fois. Garder un texte, l'autre renvoie.
+
+- [x] (2026-11-08, branche de la nuit) CLAUDE.md : « atelier-3d (encore à migrer) », volume `carto-media` de carto-lab (n'existe
+      plus), `peripheriques` « + `media/` ».
+- [ ] 2026-11-08 — phrases périmées **non changées** cette nuit (doute ou réécriture trop large) :
+  - CLAUDE.md « Lab multi-développeurs » : « mis en service le 2026-10-10 », « État de la bascule » et
+    renvois à `chantiers/multi-dev/BASCULE.md` — à relire avec ce fichier (non versionné) ;
+  - CLAUDE.md « Keycloak 26 » : « retour arrière possible jusqu'au 2026-11-08 » et le **gel** : la date est
+    atteinte aujourd'hui ; à réécrire une fois la décision prise (retirer le volume H2, les images
+    `keycloak-export22:bascule` et `quay.io/keycloak/keycloak:22.0`) ;
+  - CLAUDE.md « Infrastructure partagée » : « `PORT_HTTP`/`PORT_HTTPS` … `open-bbox-ports2.sh` /
+    `open-freebox-ports.sh` » — non vérifié ;
+  - README §2.3 (rotation) et CLAUDE.md « Rotation des secrets » : rédigés deux fois (doublon, pas faux) ;
+  - README §4 « devuser (base devdb, vide) » : vrai, mais le passage « Pourquoi deux instances » parle
+    encore du « PG16 de `devdb` » — historique, laissé.
+- [ ] 2026-11-08 : `.env.example` racine : « reporter DOMAIN/ACME_EMAIL dans sso-lab/.env » était faux
+      (`reset_url.sh:338,348` le fait) — corrigé (2026-11-08, branche de la nuit).
 
 **Guides à créer**
 - [ ] `docs/developpeur.md` : compte → première connexion → projet → espace → essai `/dev-<uid>` → push → déployer → lire les verdicts.
@@ -368,6 +450,8 @@ guides par public.
 ### T8 — Ménage · P3 · S
 
 - [ ] Ⓟ **26 images `rollback/*:prev`**, dont 2 × 12,5 Go pour atelier-3d, et l'image orpheline `lab-admin-worker:latest`.
+      2026-11-08 [C] : **38** images `rollback/*` ; cache de construction 73 Go dont 34 Go récupérables
+      (`docker system df`) ; disque à 59 %.
 - [ ] Code mort « legacy devdb » :
   - `new-app.sh:249,336,343-375` ;
   - `ensure-schemas.sh:90` ;
@@ -415,6 +499,59 @@ Ces points ont été écrits et testés sur des doubles, jamais en réel.
 
 ---
 
+## Propositions nuit 2026-11-08 (mission 4, analyse des services en lecture seule)
+
+État constaté le 2026-11-08 vers 0 h 20 [C] : 73 conteneurs, tous `running`, aucun redémarrage, aucun
+`unhealthy` ; ports de ce lab tous liés à `127.0.0.1` sauf `edge-router` (80/443) et `lab-media` (8189) ;
+`pg_hba` verrouillé sur les deux instances ; `code-server` seul avec `oauth2-proxy-code` sur `code-net`,
+`OAUTH2_PROXY_ALLOWED_GROUPS=admins` ; `docker.sock` monté par `caddy`, `caddy2`, `code-server` et
+`lab-mcp` seulement ; box : seuls 80, 443 et 8189 redirigés ; certificat Let's Encrypt valable jusqu'au
+2027-01-23 ; console Keycloak et realm `master` en 404 ; sauvegardes complètes chaque nuit, NAS compris.
+Détail et commandes : `rapports-auto/nuit-2026-11-08.md`, mission 4. Coût : S (< 1 h), M (une demi-journée), L.
+
+**P1 — sécurité, perte de données**
+- [ ] Ⓟ [C] **Fin de la fenêtre de retour arrière de Keycloak aujourd'hui** : décider de la clore (retirer le
+      volume `sso-lab_keycloak-data` du compose et de `backup.sh`, les images `keycloak-export22:bascule` et
+      `quay.io/keycloak/keycloak:22.0`), puis lever le gel et faire tourner le mot de passe PostgreSQL
+      (déjà en tête). Gain : fin du gel ; `install.sh` ne dépend plus de ce volume (corrigé cette nuit). S.
+- [ ] Ⓟ [C] **Keycloak dépend maintenant de `dev-postgres`** : une panne ou une rotation ratée de PostgreSQL
+      coupe l'authentification de tout le lab, et une restauration de la base `keycloak` n'a jamais été
+      jouée (T5). Gain : savoir remonter l'identité. Coût M (restauration à blanc avec `essai.sh`).
+- [ ] [C] Sauvegardes **en clair** sur le NAS, `.env`, `infra/dev-roles.env` et `init.ldif` compris (T5, Ⓟ
+      chiffrement) — rappel : c'est la proposition la plus rentable du lot. Coût S–M (`age`).
+
+**P2 — fonctionnement**
+- [ ] [C] Images **non épinglées** : `lucaslorentz/caddy-docker-proxy:ci-alpine` (tag de CI, `caddy`,
+      `caddy2`, `lab-ws-gateway`), `pramsey/pg_featureserv:latest`, `nginx:alpine` (`edge-router`, `fallback`,
+      `lab-pg-relay`). Un `pull` ou une recréation change le logiciel sans commit. Gain : déploiements
+      reproductibles. Coût S (épingler la version en service, `docker image inspect`).
+- [ ] [C] Images **anciennes** : `oauth2-proxy v7.6.0` (seule porte de `code-server`, donc de l'hôte),
+      `osixia/openldap:1.5.0` et `osixia/phpldapadmin:0.9.0` (projets sans version depuis 2021), Playwright
+      1.48 du runner (R2). Gain : correctifs de sécurité. Coût M (oauth2-proxy), L (annuaire : changer
+      d'image).
+- [ ] [C] **Point unique de panne `edge-router`** (`nginx:alpine`, ni healthcheck, ni journal d'erreur
+      surveillé, hors dépôt) : il coupe les deux cadriciels. Gain : détection. Coût S (healthcheck dans le
+      gabarit `edge-router.example/` et contrôle dans `lab-doctor.sh`).
+- [ ] Ⓟ [C] **`dev2/` publie sur toutes les interfaces** LDAP (1389), Keycloak (9080), phpLDAPadmin (9081),
+      pgAdmin (9050) et google-agenda (8085/4203) : la règle F1 (`127.0.0.1`) n'y a pas été reportée. Pas
+      redirigé par la box (LAN seulement). À faire dans `dev2/`, hors de ce dépôt. Coût S.
+- [ ] [C] `lab-media-capture` : « No such device » sur les trois webcams `usb-32e4-9230-p3-*` dans les 72 h
+      (ré-énumérations USB) ; la capture repart d'elle-même. À surveiller (câble, hub) ; aucune action.
+- [ ] [D] Les dix règles `lws` du pare-feu des espaces ne se vérifient pas sans root ; `lab-doctor.sh` ne
+      peut pas les voir. Gain : preuve après redémarrage de l'hôte (T10). Coût S (le moteur les compte dans
+      sa route de santé).
+
+**P3 — confort**
+- [ ] Ⓟ [C] Conteneur oublié `upbeat_wozniak` (image `lab-media-capture`, ffmpeg d'essai WHIP du chantier
+      « haut-parleur », sans réseau) tourne depuis le 2026-11-05 : `docker rm -f upbeat_wozniak`. S.
+- [ ] [C] Ni `Strict-Transport-Security` ni `Content-Security-Policy` sur les pages servies par Caddy
+      (seulement `nosniff` et `SAMEORIGIN`). Gain : défense en profondeur. Coût M (CSP à éprouver app par app).
+- [ ] [C] `lab-admin/.env` porte encore `E2E_RUNNER_URL` et `SETUP_CATALOG_KEY`, que plus aucun code ne
+      lit (secteur B). S.
+- [ ] [C] Clients Keycloak désactivés `front-cadriciel` et `infra` (ce dernier : pgAdmin partagé, voir en
+      tête) : réactiver ou supprimer. S, après le gel.
+- [ ] Brancher `lab-doctor.sh` sur le cron (le lendemain de la sauvegarde) avec email si code 1. Coût S.
+
 ## 3. Services du cadriciel sans dépôt propre
 
 Ce sont des dossiers du dépôt parent, sans sous-module, donc sans feuille de route à eux : leurs lots
@@ -424,13 +561,18 @@ sont ici.
 
 État : en service ; les 34 routes correspondent à `API.md` ; pas de TODO dans le code [C].
 
-- [ ] **M1 · P3** : doc vraie (bandeau d'`API.md` corrigé le 2026-11-01 ; reste le README).
+- [x] **M1 · P3** : doc vraie (bandeau d'`API.md` corrigé le 2026-11-01 ; reste le README).
+      2026-11-08 (secteur C, branche de la nuit) : bandeau d'`API.md` juste ; README corrigé (`LAB_PREVIEW_TTL_H`
+      transmise, « non déployé », liste des routes, clés réellement transmises, point 3 « Caddy » prouvé) ;
+      `API.md` : `POST /me/smtp` rend 201, `GET /mcp/healthz` décrite. Restent en doute : 37 routes (pas 34),
+      point 2 « reste à vérifier » (test-video créé par GitHub le 2026-10-14, jamais déployé).
   - Le bandeau d'`API.md` (l. 12-17) dit encore « oauth-hub ne fait confiance ni à lab-mcp ni à lab-admin » et « moteur non déployé ». Les deux sont faux.
   - `README.md:285` : `LAB_PREVIEW_TTL_H` est bien transmise.
   - `README.md:338-344` : « reste à vérifier » partiellement fait.
 - [ ] **M2 · P2** : suite cœur rejouable `tests/core/run.sh` (`harness.py` + `compare.py`, sur des doubles). Il n'existe pas de non-régression pour le déploiement, les droits et le SQL. Test : deux exécutions vertes de suite, rien laissé derrière.
 - [ ] **M3 · Ⓟ** : preuves réelles (T10).
-- [ ] P2 : `LAB_TICKET_REPO` vaut par défaut `Sacha37420/sso-lab` en dur (`labmcp/config.py:108`) : vérifier que ce dépôt existe, sinon le rendre obligatoire.
+- [x] P2 : `LAB_TICKET_REPO` vaut par défaut `Sacha37420/sso-lab` en dur (`labmcp/config.py:108`) : vérifier que ce dépôt existe, sinon le rendre obligatoire.
+      2026-11-08 : le dépôt existe (`gh repo view`). Pour un autre installateur, README §1.2 le dit.
 
 ### workspace — espaces VS Code
 
@@ -460,6 +602,12 @@ sont ici.
 État : la brique la mieux prouvée (`verify.sh` à 149 contrôles, tests unitaires).
 
 - [ ] **LM1 · P3** (2026-11-01 : capture réelle notée prouvée, réglages du lab dans le README ; restent H.264 en navigateur, l'archivage de §5 et de `BASCULE.md`) :
+  - 2026-11-08 (secteur C) : « 3 webcams / 8 i/s » est au README (l. 95), capture réelle notée prouvée
+    (`API.md:441`) ; titre du §5 marqué « historique », `peripheriques-media` retiré, 15 i/s en dur corrigé,
+    réglages du gain automatique ajoutés (commentés) à `.env.example` — branche de la nuit.
+    Ⓟ aucune trace écrite que le H.264 a été vu dans un vrai navigateur (lot 3 de peripheriques « à faire ») :
+    « validé par le propriétaire » ci-dessous n'est pas appuyé. Ⓟ où archiver `BASCULE.md` et le §5.
+    [D] CLAUDE.md dit 149 contrôles pour `verify.sh`, le README de lab-media 194 (non rejoué).
   - `API.md` §6 indique encore « non prouvé » pour H.264 en navigateur et pour la capture réelle, alors que c'est validé par le propriétaire ;
   - archiver `API.md` §5 et `lab-media/BASCULE.md` (procédures terminées) ;
   - dire dans le README que le service tourne à `MEDIA_CAPTURE_MAX=3` et `FPS=8`, contre 2 et 15 par défaut.
@@ -495,6 +643,23 @@ sous-module. La commande de test est celle qu'`app-test.sh` emploie déjà : rie
 | storage | fichiers du lab (9 consommateurs) | `?token=` sur toutes les routes, API sans tests hors contenu | [FEUILLE_DE_ROUTE.md](storage/FEUILLE_DE_ROUTE.md) · analyse et décisions : [to_do_storage.md](storage/to_do_storage.md) |
 | oauth-hub | jetons OAuth des sites externes | — | [FEUILLE_DE_ROUTE.md](oauth-hub/FEUILLE_DE_ROUTE.md) |
 | app-builder | spécifications → projets | clés IA en `localStorage` | [FEUILLE_DE_ROUTE.md](app-builder/FEUILLE_DE_ROUTE.md) |
+
+**Relu le 2026-11-08** (secteurs A et B de la nuit, preuves dans `chantiers/nuit-2026-11-08/rapports/`) :
+- la phrase « Fichiers créés ou complétés le 2026-10-31, non commités » est périmée : toutes les feuilles
+  de route sont commitées et poussées ;
+- colonne « P1 ouverts » périmée : réglés et en service pour analyse-lora (U3, clé d'ingestion),
+  arbre-genealogique (montage, `?token=`, taille), atelier-3d (`?token=` ; restent les jobs orphelins),
+  conciergerie (URL iCal, DNS), craft-lab (relais, `?token=`), restauration (U4, montage ; reste
+  `manage-users`), robot-lab (U1, engine), lab-admin (mot de passe, ports), app-builder (coffre des clés),
+  storage (`?token=` ; restent les tests de contrat) ;
+- test-video : la feuille de route est dans son dépôt (`deploiement/test-video/FEUILLE_DE_ROUTE.md`,
+  lot 2 en cours, `c2f21bb`), plus dans `~/lab-work` ; jamais déployée ;
+- statuts corrigés cette nuit (branches `claude/nuit-2026-11-08` des apps) : passés à « livré » sur preuve —
+  arbre lot 5, atelier-3d lot 4, craft-lab lot 2, peripheriques lot 4, tdfc lot 4, oauth-hub lots 2 et 3,
+  storage lot 2, lab-admin lot 4 ; arbre lot 6 remis « à faire » (trois lots « en cours ») ; conciergerie
+  lot 5 « en cours » ; storage lot 4 « en cours » ;
+- Ⓟ deux apps gardent plusieurs lots « en cours », faute de preuve pour trancher : peripheriques (5 et 6)
+  et app-builder (7, 8 et 10).
 
 Les anciens `to_do_*.md` de la racine sont **déplacés dans leur app**, sous le même nom. Leur contenu
 n'a pas été modifié ; les points encore ouverts sont repris dans la feuille de route de l'app.

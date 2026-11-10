@@ -11,7 +11,7 @@
 #       ├── uid=sabrina
 #       ├── uid=bruno
 #       ├── uid=marie
-#       ├── uid=e2e_member      ← compte de test E2E, membre de TOUS les groupes
+#       ├── uid=e2e_member      ← compte de test E2E, membre de tous les groupes SAUF admins
 #       ├── uid=e2e_outsider    ← compte de test E2E, membre d'AUCUN groupe
 #       └── uid=e2edev          ← compte de test E2E du parcours développeur, membre de developers seul
 #   └── ou=groups               ← unité organisationnelle : groupes
@@ -19,8 +19,6 @@
 #       ├── cn=admins           ← sacha
 #       ├── cn=famille          ← sacha, lea, elodie, marie
 #       ├── cn=amis             ← sacha, hassan, lea
-#       ├── cn=dom              ← (naty déplacée vers dev2/ le 2026-07-29 — groupe vide de membre réel, encore requis par app-builder/storage)
-#       ├── cn=harem            ← sacha (Carpeta déplacée vers dev2/ le 2026-07-29 — groupe encore requis par app-builder/storage)
 #       ├── cn=manager          ← sacha, elodie, sabrina (app : restauration)
 #       ├── cn=cuisinier        ← sacha                (app : restauration)
 #       ├── cn=serveur          ← sacha                (app : restauration)
@@ -45,8 +43,9 @@
 #
 # e2e_member / e2e_outsider (voir CLAUDE.md, section "Tests end-to-end") :
 # comptes synthétiques utilisés par runner/ pour automatiser la vérification
-# de cloisonnement de chaque app. e2e_member doit être membre de TOUS les
-# groupes ci-dessus ; e2e_outsider d'aucun. Tout nouveau groupe créé ici DOIT
+# de cloisonnement de chaque app. e2e_member doit être membre de tous les
+# groupes ci-dessus SAUF admins (depuis le 2026-11-01 : admins ouvre /code,
+# donc l'hôte, et le runner lit son mot de passe) ; e2e_outsider d'aucun. Tout nouveau groupe créé ici DOIT
 # ajouter e2e_member comme membre, sinon les tests E2E des apps qui
 # l'utilisent cassent en silence. Ajoutés en direct sur l'annuaire vivant
 # (ldapadd) le 2026-07-27 — ce fichier n'est rejoué qu'à l'init du volume,
@@ -207,7 +206,7 @@ dn: cn=admins,ou=groups,dc=ssolab,dc=local
 objectClass: groupOfNames
 cn: admins
 member: uid=sacha,ou=people,dc=ssolab,dc=local
-member: uid=e2e_member,ou=people,dc=ssolab,dc=local
+# Jamais e2e_member ici (2026-11-01) : admins ouvre code-server, donc l'hôte.
 
 # ── Groupe : famille ──────────────────────────────────────────────
 dn: cn=famille,ou=groups,dc=ssolab,dc=local
@@ -228,24 +227,8 @@ member: uid=hassan,ou=people,dc=ssolab,dc=local
 member: uid=lea,ou=people,dc=ssolab,dc=local
 member: uid=e2e_member,ou=people,dc=ssolab,dc=local
 
-# ── Groupe : dom ──────────────────────────────────────────────────
-# naty a été déplacée vers dev2/ le 2026-07-29 (voir dev2-handoff.md) —
-# groupe conservé ici (vide de membre réel) car app-builder et storage le
-# référencent encore dans --require-group sur le lab 1.
-dn: cn=dom,ou=groups,dc=ssolab,dc=local
-objectClass: groupOfNames
-cn: dom
-member: uid=e2e_member,ou=people,dc=ssolab,dc=local
-
-# ── Groupe : harem ────────────────────────────────────────────────
-# Carpeta a été déplacée vers dev2/ le 2026-07-29 (voir dev2-handoff.md) —
-# groupe conservé ici (sacha uniquement) car app-builder et storage le
-# référencent encore dans --require-group sur le lab 1.
-dn: cn=harem,ou=groups,dc=ssolab,dc=local
-objectClass: groupOfNames
-cn: harem
-member: uid=sacha,ou=people,dc=ssolab,dc=local
-member: uid=e2e_member,ou=people,dc=ssolab,dc=local
+# Les groupes dom et harem ont été supprimés le 2026-10-11 (ils ne servaient
+# qu'à google-agenda, déplacée vers dev2/) : ne pas les recréer.
 
 # ── Groupe : manager ──────────────────────────────────────────────
 # Utilisé par : restauration (rôle manager)

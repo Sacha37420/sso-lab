@@ -206,15 +206,28 @@ else
   WARNINGS=$(( WARNINGS + 1 ))
 fi
 
-# ── Vérification que le port Keycloak est joignable depuis le WAN ─────────
-KC_WAN_CHECK="${SERVER_URL_WAN}:${PORT_KEYCLOAK}/realms/${REALM:-ssolab}"
-printf "\n  Test accès Keycloak WAN : %s\n" "$KC_WAN_CHECK"
-HTTP_CODE=$(curl -sf --max-time 8 -o /dev/null -w "%{http_code}" "$KC_WAN_CHECK" 2>/dev/null || echo "000")
+# ── Vérification que Keycloak est joignable depuis l'extérieur ────────────
+# Avec un domaine, Keycloak n'est servi que par Caddy (https://<DOMAIN>/auth/) : son
+# port 8080 est lié à 127.0.0.1 (chantier « failles », F1) et ne doit JAMAIS être
+# redirigé sur la box. Tester <IP WAN>:8080 donnait donc un avertissement à chaque
+# passage, avec le conseil (faux) d'ouvrir ce port — corrigé le 2026-11-08. Sans
+# domaine (HTTP local), on teste comme avant l'accès direct par le port.
+if [[ "$DOMAIN" != "CHANGE_ME" && -n "$DOMAIN" ]]; then
+  KC_WAN_CHECK="https://${DOMAIN}/auth/realms/${REALM:-ssolab}"
+  _kc_hint="redirection des ports 80/443 de la box vers ${_lan_host:-cette machine}, ~/edge-router/ en service, DNS de ${DOMAIN} à jour"
+else
+  KC_WAN_CHECK="${SERVER_URL_WAN}:${PORT_KEYCLOAK}/realms/${REALM:-ssolab}"
+  _kc_hint="redirection de port sur la box (${PORT_KEYCLOAK} → ${_lan_host:-cette machine}:${PORT_KEYCLOAK})"
+fi
+printf "\n  Test accès Keycloak depuis l'extérieur : %s\n" "$KC_WAN_CHECK"
+# (sans -f ni « || echo 000 » : curl écrit déjà 000 quand il échoue, et les deux
+# ensemble donnaient « 000000 », qui n'entrait jamais dans la branche « injoignable »)
+HTTP_CODE=$(curl -s --max-time 8 -o /dev/null -w "%{http_code}" "$KC_WAN_CHECK" 2>/dev/null); HTTP_CODE="${HTTP_CODE:-000}"
 if [[ "$HTTP_CODE" =~ ^[23] ]]; then
-  echo "  ✅  Keycloak répond (HTTP $HTTP_CODE) — port-forwarding OK."
+  echo "  ✅  Keycloak répond (HTTP $HTTP_CODE)."
 elif [[ "$HTTP_CODE" == "000" ]]; then
-  echo "  ⚠️  AVERTISSEMENT : Keycloak injoignable sur ${_wan_host}:${PORT_KEYCLOAK}"
-  echo "      Vérifier : redirection de port sur la box (${PORT_KEYCLOAK} → 192.168.1.50:${PORT_KEYCLOAK})"
+  echo "  ⚠️  AVERTISSEMENT : Keycloak injoignable sur $KC_WAN_CHECK"
+  echo "      Vérifier : ${_kc_hint}"
   echo "               + Keycloak en cours d'exécution"
   echo "               + hairpin NAT supporté par la box"
   WARNINGS=$(( WARNINGS + 1 ))

@@ -50,8 +50,8 @@ d'autorisation échoue (le realm a un chemin, `/auth/realms/ssolab`) :
   "oauth": {"clientId": "lab-mcp", "callbackPort": 8976, "scopes": "openid profile email",
             "authServerMetadataUrl": "https://<DOMAIN>/auth/realms/ssolab/.well-known/openid-configuration"}}}}
 ```
-> ⚠ Suit la documentation de Claude Code ; **jamais essayé contre ce serveur** (non déployé, pas de
-> `claude` sur l'hôte). Le client MCP éprouvé est celui du SDK Python (`tests/client.py`).
+> ⚠ Suit la documentation de Claude Code ; **jamais essayé contre ce serveur** depuis un poste
+> extérieur. Le client MCP éprouvé est celui du SDK Python (`tests/client.py`).
 
 ### Outils MCP
 `whoami` · `list_apps` · `check_name` · `create_app` · `deploy` · `job_status` · `status` · `logs` ·
@@ -77,7 +77,8 @@ erreurs : `API.md` §3.9.
 ## API web (`/mcp/api/…`) — pour lab-admin
 
 Jeton Keycloak `azp = lab-admin` (celui du frontend), même origine que lab-admin. Toutes les routes
-de la table d'I5, plus `GET /mcp/api/groups`. **Tout est décrit dans [`API.md`](API.md)** : formes,
+de la table d'I5, plus celles ajoutées depuis (liste : `API.md`, « Écarts avec la table d'I5 », et
+§3.9 pour l'adresse d'essai). **Tout est décrit dans [`API.md`](API.md)** : formes,
 format d'erreur unique, états d'un job, quatre profils de `GET /me`.
 
 ---
@@ -288,13 +289,17 @@ Préalables : l'image `lab-workspace:latest` construite (`workspace/`), et `lab-
 | `LAB_WS_IMAGE` / `LAB_WS_MAX` / `LAB_WS_IDLE_MIN` | `lab-workspace:latest` / 3 / 30 |
 | `LAB_WS_MEMORY` / `LAB_WS_CPUS` / `LAB_WS_PIDS` | `2g` / `1` / 512 |
 | `LAB_PG_MAX` / `LAB_PG_MEMORY` / `LAB_PG_IMAGE` | 3 / `512m` / `dpage/pgadmin4:8` |
-| `LAB_PREVIEW_TTL_H` | 12 — durée de vie d'un essai après sa construction, en heures (nombre > 0 ; le moteur refuse de démarrer sinon). Non transmise par `docker-compose.yml` à ce jour : le défaut s'applique |
+| `LAB_PREVIEW_TTL_H` | 12 — durée de vie d'un essai après sa construction, en heures (nombre > 0 ; le moteur refuse de démarrer sinon) |
 | `LAB_WS_BRIDGE_PREFIX` | `lws` — préfixe d'interface des ponts d'espace (essais : `lwt`) |
 | `LAB_WS_PUBLIC_VIA_HOST` | `1` : `<DOMAIN>` résolu vers l'hôte dans l'espace |
 | `LAB_SQL_TIMEOUT_S` / `LAB_SQL_MAX_ROWS` | 10 / 500 |
 | `LAB_MCP_QUICK_LOCK_TIMEOUT` / `LAB_MCP_JOB_LOCK_TIMEOUT` | 20 s / 900 s |
 | `LAB_TICKET_REPO` | `Sacha37420/sso-lab` |
 | `LAB_GIT_ALLOW_FILE=1` | origines git en `file://` — **tests uniquement**, absent du compose, signalé au démarrage |
+
+Seules `LAB_WS_IMAGE`, `LAB_WS_MAX`, `LAB_WS_IDLE_MIN`, `LAB_PREVIEW_TTL_H` et `LAB_PG_MAX` passent
+de `lab-mcp/.env` au conteneur (`docker-compose.yml:47-51`) ; les autres gardent leur défaut tant
+que le compose ne les transmet pas (relu le 2026-11-08).
 
 État écrit par le moteur dans `<LAB_STATE_DIR>` : `deploy-keys/<app>` (+`.pub`, 600) et
 `auto-deploy/<app>.json` (secret du webhook, 600).
@@ -339,6 +344,5 @@ Préalables : l'image `lab-workspace:latest` construite (`workspace/`), et `lab-
 1. Un compte humain : première connexion (`me/init` qui inscrit réellement), parcours complet.
 2. Tout ce qui parle au vrai GitHub par le vrai oauth-hub : création d'un projet jusqu'au bout
    (dépôt, clé de déploiement, webhook), déploiement par SSH avec la clé, commits, ticket.
-3. Le moteur derrière le Caddy du lab : labels `/mcp`, `/mcp/*`, `/ws/*`.
 4. Claude Code et Vibe appelant le MCP depuis un espace avec le jeton d'espace (éprouvé ici avec le
    client du SDK).

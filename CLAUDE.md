@@ -519,6 +519,16 @@ de Keycloak, domaine, routeur, `~/edge-router/`) : `README.md` §1.2.
 - Prouvé par morceaux (clone de test, instances PostgreSQL jetables), **jamais joué de bout en
   bout** : cet hôte ne peut pas porter un second lab. À la première vraie installation, s'attendre
   à des écarts dans les étapes de démarrage de `sso-lab`, des apps et de l'image d'espace.
+- **Keycloak 26 dépend de PostgreSQL** (relu le 2026-11-08) : jusqu'à cette date, `install.sh`
+  démarrait `sso-lab` (étape 7) avant `infra` (étape 8), sans `dev-db.sh ensure-keycloak` ni
+  `keycloak-nonce-compat.sh` — sur une machine neuve Keycloak ne pouvait pas démarrer, et sans le
+  scope les apps bouclaient à la connexion. L'étape 7 prépare maintenant la base `keycloak` (infra
+  démarrée pour elle) puis pose le scope. Le témoin « sso-lab initialisé » est le volume de
+  l'annuaire (`ldap-data`), plus `keycloak-data` (H2 de Keycloak 22, plus monté).
+- Le superutilisateur doit exister dans `init.ldif` (membre de `admins` et `developers`) : le
+  gabarit ne connaît que `sacha`, `install.sh` le signale. Le gabarit ne contient plus `dom`,
+  `harem`, ni `e2e_member` dans `admins` (ils y étaient encore le 2026-11-08).
+- `install.sh` planifie la sauvegarde (`backup-cron.sh`) ; `lab-doctor.sh` fait le bilan.
 - **Rien de ce qui suit n'est dans un dépôt** — le perdre, c'est perdre le lab : tous les `.env`,
   `infra/dev-roles.env`, `sso-lab/ldap/init.ldif`, `.ports`, `.devs`, `.owners`, `.lab-state/`
   (clés de déploiement, comptes d'envoi), `~/edge-router/`, `~/lab-work/`, et les volumes Docker.
@@ -589,12 +599,12 @@ Le script demande interactivement :
 - **Scaffold** : télécharge Django via Docker ou Angular via Docker (répond `O`)
 
 Ce que fait `new-app.sh` :
-- Crée `dev/<app>/` avec la structure complète (backend, frontend, docker-compose, Dockerfiles, nginx, .env…)
+- Crée `deploiement/<app>/` avec la structure complète (backend, frontend, docker-compose,
+  Dockerfiles, nginx, .env, `FEUILLE_DE_ROUTE.md`, `CLAUDE.md`, `AGENTS.md`…) — `new-app.sh:170`
 - Copie et adapte le template depuis `_templates/django-angular/`
-- Ajoute `<app>/` au `.gitignore` du dépôt parent (car ce sera un sous-module)
-- Enregistre les ports dans `.ports`
-- Ajoute le schéma SQL dans `infra/init/00_schemas.sql` (ou `infra/init-postgis/00_schemas.sql`
-  si l'instance PostGIS est choisie — voir section « Base de données » plus bas)
+- Écrit la ligne `.owners` (`--owner <uid>`, défaut : le superutilisateur) et les ports dans `.ports`
+- Crée le schéma **à chaud dans la base du propriétaire** par `ensure-schemas.sh`
+  (`new-app.sh:356-361`) ; `infra/init*/00_schemas.sql` n'est plus alimenté
 - Crée `.keycloak-client-opts` (utilisé par `create-app-client.sh`)
 - **Ne crée pas** le client Keycloak ni le dépôt GitHub
 
@@ -602,8 +612,8 @@ Le script demande ensuite le **groupe requis** (cloisonnement). Le laisser vide 
 accessible à tout compte du realm — le script le signale bruyamment.
 
 Enfin, pour une app avec base (Spring seul/+Angular, Django seul/+Angular), le script demande
-l'**instance PostgreSQL** : `postgres` (partagée, `devdb`, défaut) ou `postgis` (dédiée SIG,
-`gisdb` — extension PostGIS absente de l'instance partagée, voir la section dédiée plus bas).
+l'**instance PostgreSQL** : `postgres` (base `dev_<uid>` du propriétaire, défaut) ou `postgis`
+(base `gis_<uid>` — extension PostGIS absente de l'instance partagée, voir la section dédiée plus bas).
 Cette question est posée en tout dernier, justement pour ne décaler aucune des questions
 précédentes : un appel non-interactif qui ne fournit pas de réponse pour cette dernière ligne
 obtient EOF → défaut `postgres`, exactement comme pour le groupe. L'exemple ci-dessous, déjà
@@ -623,19 +633,14 @@ printf 'carto-lab\n4\n8091\n4209\nO\ndevelopers\n2\n' | bash scripts/new-app.sh
 
 ### Étape 2 — Dépôt GitHub + sous-module
 
-Après le scaffold, initialiser git dans le dossier créé, créer le repo GitHub et l'enregistrer comme sous-module :
+Après le scaffold, créer le dépôt GitHub (vide) puis laisser `app-register.sh` faire le reste :
+`git init`, premier commit, push, enregistrement de `deploiement/mon-app` comme sous-module
+(indexé, **non commité** dans le parent) et `update = none` pour un dépôt privé.
 
 ```bash
-cd mon-app
-git init && git checkout -b main
-git add . && git commit -m "feat: initial scaffold"
-gh repo create Sacha37420/mon-app --public
-git remote add origin https://github.com/Sacha37420/mon-app.git
-git push -u origin main
-cd ..
-# Retirer du .gitignore (new-app.sh l'y avait ajouté) et enregistrer comme sous-module
-sed -i '/^mon-app\/$/d' .gitignore
-git submodule add https://github.com/Sacha37420/mon-app.git mon-app
+gh repo create Sacha37420/mon-app --public      # ou --private
+LAB_GIT_AUTHOR_NAME="Prénom Nom" LAB_GIT_AUTHOR_EMAIL=moi@example.org \
+  bash scripts/app-register.sh mon-app https://github.com/Sacha37420/mon-app.git
 ```
 
 ---
@@ -643,7 +648,7 @@ git submodule add https://github.com/Sacha37420/mon-app.git mon-app
 ### Étape 3 — Remplir `.env`
 
 ```bash
-nano mon-app/.env
+nano deploiement/mon-app/.env
 ```
 
 Champs à renseigner au minimum :
@@ -679,22 +684,22 @@ groupe, flow `require-<client>` lié au client, et `KEYCLOAK_REQUIRED_GROUPS` é
 bash scripts/setup2.sh mon-app --yes
 ```
 
-`setup2.sh <app>` enchaîne **dans l'ordre** :
-1. `clean2.sh <app>` — arrête et supprime les containers de l'app
-2. `reset_url.sh` — propage LAN/WAN/Keycloak dans tous les `.env`
-3. Démarrage de **sso-lab** (Keycloak + LDAP + Caddy)
-4. Attente que Keycloak réponde (jusqu'à 300 s)
-5. **`create-app-client.sh <app>`** — crée ou met à jour le client Keycloak (secret, redirect URIs, claim `groups`)
-6. `recompose_docker.sh --app <app> --force` — build et démarre les containers
-7. `get-ports-list.sh` — régénère `ports.env`
-8. Redirections de ports sur la box d'après `bbox.env` : `open-freebox-ports.sh` si `FREEBOX_IP`,
-   `open-bbox-ports2.sh` si `BBOX_IP` ; les deux renseignées → question posée au terminal, et
-   sans terminal (moteur) l'étape est sautée — les redirections existantes restent en place
+`setup2.sh <app>` délègue à `setup_unit.sh`, qui suit l'un de deux ordres (relu le 2026-11-08) :
+- **app à portes** (ligne `.owners`, toute app née après le chantier multi-dev) :
+  `validate-app.sh`, build pendant que l'ancienne version tourne, `app-test.sh` (un test rouge
+  arrête tout), puis client Keycloak, schéma, `up -d --no-build`, cloisonnement ;
+- **app historique** (sans ligne `.owners`) : `clean2.sh <app>`, démarrage de **sso-lab** s'il
+  le faut (attente de Keycloak, 300 s), **`create-app-client.sh <app>`**, `ensure-schemas.sh`,
+  `recompose_docker.sh --app <app> --force` — sans tests.
 
-> **C'est `setup2.sh` qui crée le client Keycloak**, via `create-app-client.sh` à l'étape 5.  
+`setup2.sh` lui-même ajoute `reset_url.sh`, `get-ports-list.sh` et les redirections de ports de
+la box d'après `bbox.env` (`open-freebox-ports.sh` si `FREEBOX_IP`, `open-bbox-ports2.sh` si
+`BBOX_IP` ; les deux renseignées → question au terminal, et sans terminal l'étape est sautée).
+
+> **C'est le déploiement qui crée le client Keycloak** (`create-app-client.sh`).
 > `create-app-client.sh` peut aussi être appelé seul pour recréer/mettre à jour un client sans tout redéployer :
 > ```bash
-> bash scripts/create-app-client.sh mon-app $(cat mon-app/.keycloak-client-opts)
+> bash scripts/create-app-client.sh mon-app $(cat deploiement/mon-app/.keycloak-client-opts)
 > ```
 
 ---
@@ -769,12 +774,12 @@ le bon container, donc il n'y a rien à faire de spécial pour une app `postgis`
 
 ### Fichiers rasters / médias (apps avec upload)
 
-Si une app persiste des fichiers hors base (ex. rasters GeoTIFF de `carto-lab`), son volume doit
-être déclaré `external: true` dans son `docker-compose.yml`, avec un `name:` explicite. Sans ça,
-`clean2.sh <app>` (`docker compose down --volumes`) le supprime à chaque `setup2.sh <app> --yes`
+Si une app persiste des fichiers hors base qui ne sont pas des fichiers utilisateur, son volume
+doit être déclaré `external: true` dans son `docker-compose.yml`, avec un `name:` explicite. Sans
+ça, `clean2.sh <app>` (`docker compose down --volumes`) le supprime à chaque `setup2.sh <app> --yes`
 — `clean2.sh` protège les volumes de `infra` et `sso-lab`, mais pas ceux qu'une app se serait
-donnés elle-même. Voir `carto-lab/docker-compose.yml` (volume `carto-media`) pour l'exemple —
-c'est le défaut pour tout fichier **propre à une app** (rasters SIG, exports…).
+donnés elle-même. (Le volume `carto-media` de `carto-lab`, longtemps l'exemple, n'existe plus :
+ses rasters sont dans `storage` — relu le 2026-11-08, `carto-lab/backend/config/settings.py:73-74`.)
 
 **Stockage de fichiers partagé du lab — `storage`** : contrairement au cas général ci-dessus,
 l'app `storage/` (voir sa description dans le tableau des sous-modules) est le point d'entrée
@@ -1037,7 +1042,8 @@ deux fois). Voir `api.authentication.KeycloakServiceUser` et `api.permissions.re
 #### Partage lié à un groupe Keycloak (`Share.required_groups`)
 
 Pensé pour une app dont **tout le groupe autorisé** doit lire/écrire les mêmes données — cas
-d'`atelier-3d` (encore à migrer) et de `carto-lab` (migré, cf. plus haut) : aucun cloisonnement
+de `carto-lab` (migré, cf. plus haut ; `atelier-3d`, migré lui aussi, a pris un partage par
+projet racine — `atelier-3d/backend/api/storage_backend.py:47,65`) : aucun cloisonnement
 individuel, n'importe quel membre du groupe requis lit/modifie/supprime les données de n'importe
 qui. Plutôt que de dupliquer la composition du groupe dans une liste de `ShareMember` à maintenir à
 la main (risque de dérive silencieuse — même piège que documenté pour `e2e_member` plus haut),
@@ -1186,7 +1192,7 @@ dossier vide avec un `.env` orphelin que rien ne déployait. Utilisé par `stora
 
 ### Périphériques de l'hôte — `peripheriques`
 
-`peripheriques` (Django + Angular + `media/`, 8101 / 4216) donne accès, en direct et en relecture,
+`peripheriques` (Django + Angular, 8101 / 4216 ; flux tenus par `lab-media/`) donne accès, en direct et en relecture,
 à la caméra et au micro branchés sur l'hôte. Contrat d'origine :
 `chantiers/peripheriques/CONTRAT.md` (v6). Décisions à ne pas rouvrir :
 
@@ -1460,6 +1466,7 @@ pour le chemin réel, toujours passer par `registry_app_dir`.
 | `restauration` | `Sacha37420/restauration` | Django + Angular | 8088 / 4206 |
 | `robot-lab` | `Sacha37420/robot-lab` | Django + Angular (+ `engine/` Playwright) | 8094 / 4212 |
 | `storage` | `Sacha37420/storage` | Django + Angular | 8093 / 4211 |
+| `test-video` | `Sacha37420/test-video` | Django + Angular | 8102 / 4217 |
 | `traitement-de-fichiers-compils` | `Sacha37420/traitement-de-fichiers-compils` | Django + Angular | 8089 / 4207 |
 
 > `lab-admin` et `lab-mcp` font partie du cadriciel : ils restent à la racine, jamais dans
@@ -1510,6 +1517,8 @@ ci-dessous, lancé avec `bash sso-lab/…`).
 | Script | Rôle |
 |---|---|
 | `install.sh [--check]` | Installation rejouable du lab ; `--check` ne fait rien et dit ce qui manque |
+| `lab-doctor.sh` | Bilan de santé en lecture seule (installation, pg_hba, partages, sauvegarde, jokers et PKCE Keycloak, scope nonce, ports, conteneurs oubliés, cloisonnement, disque) ; code 1 si un problème |
+| `backup-cron.sh [--check]` | Planifie `backup.sh` à 3 h dans la crontab (ne change jamais une ligne existante) et vérifie les prérequis NAS ; appelé par `install.sh` |
 | `new-app.sh [--owner <uid>]` | Scaffold d'une nouvelle app dans `deploiement/` (appelé par le moteur) |
 | `app-register.sh`, `app-sync.sh`, `app-remote.sh`, `app-status.sh`, `app-logs.sh`, `app-env.sh`, `app-test.sh`, `app-smtp.sh`, `app-restart.sh`, `app-remove.sh`, `app-relocate.sh` | Les commandes d'exploitation d'une app — les seules que le moteur exécute. Chacune documente son usage en tête de fichier |
 | `validate-app.sh`, `check-app-name.sh` | Contrôle de sûreté d'un dépôt avant déploiement ; règles de nommage |

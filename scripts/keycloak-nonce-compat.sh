@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# nonce-keycloak-js-22.sh — compatibilité keycloak-js 22 ↔ Keycloak ≥ 25.
+# keycloak-nonce-compat.sh — compatibilité keycloak-js 22 ↔ Keycloak ≥ 25.
 #
 # POURQUOI : depuis Keycloak 25, le claim `nonce` n'est plus mis que dans
 # l'id_token. keycloak-js 22.0.5 (tous les frontends du lab) le compare AUSSI
@@ -16,8 +16,8 @@
 #   3. l'ajoute aux scopes par défaut de CHAQUE client public à flux standard.
 # À retirer quand tous les frontends seront passés à keycloak-js ≥ 25.
 #
-# Usage : bash nonce-keycloak-js-22.sh            (Keycloak de l'hôte, sso-lab/.env)
-#         KC_URL=http://localhost:18080 SSO_ENV=/chemin/.env bash nonce-keycloak-js-22.sh
+# Usage : bash scripts/keycloak-nonce-compat.sh    (Keycloak de l'hôte, sso-lab/.env)
+#         KC_URL=http://localhost:18080 SSO_ENV=/chemin/.env bash scripts/keycloak-nonce-compat.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
