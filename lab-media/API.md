@@ -381,7 +381,7 @@ Caddy retire le préfixe et réécrit les `Location` que MediaMTX renvoie (sessi
 
 ---
 
-## 5. Ce que `peripheriques` appelle aujourd'hui, et ce qui le remplace
+## 5. Ce que `peripheriques` appelait avant la bascule du 2026-10-11, et ce qui l'a remplacé (historique)
 
 Référence : `deploiement/peripheriques/backend/api/media_client.py`, `kick.py`, `hook.py`
 (contrat `chantiers/peripheriques`, I2 et I4).

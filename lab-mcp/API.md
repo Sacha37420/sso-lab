@@ -87,7 +87,10 @@ contrôles, même objet rendu, même erreur. Correspondance :
 Conventions de l'entrée web :
 - corps de requête et de réponse en JSON (`Content-Type: application/json`) ; corps de requête ≤ 256 Ko
   (≤ 4 Mo pour `POST /projects`, qui peut porter une graine) ;
-- **tout succès est un `200`** avec un objet JSON (jamais `201`/`202`/`204`, jamais de tableau nu) ;
+- **tout succès est un `200`** avec un objet JSON (jamais de tableau nu), sauf `POST /me/smtp` qui
+  rend `201` (§3.8) ;
+- `GET /mcp/healthz` → `{"ok": true}`, sans jeton (sonde de vie ; ne dit rien des scripts ni de
+  Docker — `labmcp/web.py:232`) ;
 - toute erreur a le format du §2 ; un chemin qui n'existe pas rend un `404` sans corps JSON ;
 - dates en ISO 8601 UTC (`2026-10-10T14:37:08Z`), sauf `deployed.at`, rendu tel que le lab
   l'enregistre (ISO 8601 avec décalage local).

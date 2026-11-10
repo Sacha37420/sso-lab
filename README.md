@@ -1,9 +1,11 @@
 # dev/ — Lab SSO multi-applications
 
 Plateforme d'apprentissage et de développement autour de **Keycloak**, **OpenLDAP**,
-**PostgreSQL/PostGIS** et **Caddy**, hébergeant quinze applications Django + Angular (+ une
-Spring Boot possible) authentifiées via OIDC, plus un service de stockage de fichiers partagé
-et un runner Playwright pour les tests de cloisonnement.
+**PostgreSQL/PostGIS** et **Caddy**. Elle héberge des applications Django + Angular authentifiées
+par OIDC (quatorze dans `deploiement/`, dont le didacticiel `test-video`) et les services du
+cadriciel : `lab-admin` (portail), `storage` (fichiers), `oauth-hub` (jetons des sites externes),
+`app-builder` (spécifications), le moteur `lab-mcp` (déploiements, espaces de travail),
+`lab-media` (caméras, micro, haut-parleur) et un runner Playwright pour les tests de cloisonnement.
 
 Les applications sont des **sous-modules git** autonomes, chacune dans son propre dépôt
 GitHub. Les scripts du dépôt parent (`scripts/`) gèrent leur cycle de vie complet : scaffold,
@@ -40,30 +42,29 @@ client Keycloak, build Docker, ports réseau, rotation des secrets.
 
 ```
 dev/
-├── sso-lab/            ← Keycloak 22 + OpenLDAP + phpLDAPadmin + Caddy + fallback + oauth2-proxy + code-server
-├── infra/              ← PostgreSQL 16 (devdb) + PostGIS 16-3.5 (gisdb) + pgAdmin 8
-├── runner/              ← Playwright + Chromium partagé (tests de cloisonnement E2E)
-├── _templates/          ← templates Django+Angular / Django seul / Angular seul
-├── analyse-lora/                    ← Django + Angular  [sous-module]
-├── app-builder/                     ← Django + Angular  [sous-module] — éditeur de specs d'apps
-├── arbre-genealogique/              ← Django + Angular  [sous-module]
-├── atelier-3d/                      ← Django + Angular  [sous-module] — reconstruction 3D
-├── bilan-thermique/                 ← Django + Angular + Celery [sous-module] — simulation thermique
-├── carto-lab/                       ← Django + Angular  [sous-module] — SIG (instance PostGIS dédiée)
-├── code-route/                      ← Django + Angular + Celery [sous-module] — code de la route
-├── conciergerie/                    ← Django + Angular  [sous-module] — gestion locative
-├── craft-lab/                       ← Django + Angular + relay WebSocket [sous-module] — jeu 2D multijoueur
-├── lab-admin/                       ← Django + Angular  [sous-module] — portail du lab
-├── oauth-hub/                       ← Django + Angular  [sous-module] — coffre d'identifiants OAuth externes
-├── peripheriques/                   ← Django + Angular + media MediaMTX [sous-module] — caméra/micro de l'hôte
-├── restauration/                    ← Django + Angular  [sous-module]
-├── robot-lab/                       ← Django + Angular + engine Playwright [sous-module]
-├── storage/                         ← Django + Angular  [sous-module] — stockage fichiers du lab
-├── traitement-de-fichiers-compils/  ← Django + Angular  [sous-module]
-├── scripts/             ← tous les scripts d'orchestration (new-app.sh, setup2.sh…)
-├── .ports / .app-descriptions ← registres (ports, vitrine publique)
-└── bbox.env             ← source de vérité réseau (LAN/WAN)
+├── sso-lab/            ← Keycloak 26 + OpenLDAP + phpLDAPadmin + Caddy + fallback + oauth2-proxy + code-server
+├── infra/              ← PostgreSQL 16 (bases lab, keycloak, dev_<uid>) + PostGIS 16-3.5 (gis_<uid>) + pgAdmin 8
+├── runner/             ← Playwright + Chromium partagé (tests de cloisonnement E2E)
+├── lab-mcp/            ← moteur : déploiements, espaces de travail, pgAdmin par dev (seul à monter docker.sock avec Caddy et code-server)
+├── lab-media/          ← MediaMTX : caméras, micro, haut-parleur, enregistrements
+├── workspace/          ← image lab-workspace des espaces VS Code (code-server, Claude Code, Mistral Vibe)
+├── _templates/         ← gabarits Django+Angular / Django seul / Angular seul, règles des projets
+├── lab-admin/          ← Django + Angular  [sous-module] — portail du lab (Accueil, Services, Projets)
+├── storage/            ← Django + Angular  [sous-module] — stockage de fichiers du lab
+├── oauth-hub/          ← Django + Angular  [sous-module] — coffre d'identifiants OAuth externes
+├── app-builder/        ← Django + Angular  [sous-module] — spécifications d'apps
+├── deploiement/        ← les applications, une par sous-module :
+│   ├── analyse-lora/  arbre-genealogique/  atelier-3d/  bilan-thermique/  carto-lab/
+│   ├── code-route/  conciergerie/  craft-lab/  peripheriques/  restauration/
+│   └── robot-lab/  test-video/  traitement-de-fichiers-compils/
+├── scripts/            ← tous les scripts d'orchestration (install.sh, setup2.sh, app-*.sh…)
+├── edge-router.example/ ← gabarit du répartiteur 80/443 (posé dans ~/edge-router/ par install.sh)
+├── .ports / .owners / .devs / .app-descriptions ← registres (ports, propriétaires, développeurs, vitrine)
+└── bbox.env            ← source de vérité réseau (LAN/WAN, routeur)
 ```
+
+Pour le chemin réel d'une app, les scripts passent toujours par `registry_app_dir` :
+`deploiement/<app>` d'abord, sinon la racine (services du cadriciel).
 
 Hors de ce dépôt, sur le même hôte (voir [1.1](#11-ce-qui-est-inclus-dans-dev-ce-qui-ne-lest-pas)
 pour le détail) :
@@ -84,11 +85,14 @@ pour le détail) :
 **Inclus et versionné dans ce dépôt (ou ses sous-modules)** :
 - `sso-lab/` : Keycloak, OpenLDAP, phpLDAPadmin, Caddy (reverse-proxy), oauth2-proxy,
   code-server.
-- `infra/` : les deux instances PostgreSQL (`postgres`/`devdb` et `postgis`/`gisdb`), pgAdmin.
+- `infra/` : les deux instances PostgreSQL (`postgres` et `postgis`), pgAdmin.
 - `runner/` : conteneur Playwright partagé pour les tests de cloisonnement E2E.
+- `lab-mcp/`, `lab-media/`, `workspace/` : moteur, flux audio/vidéo, image des espaces de travail.
 - `_templates/` : templates de scaffold (Django+Angular, Django seul, Angular seul).
-- Les quinze applications, en tant que sous-modules git pointant vers leurs propres dépôts.
+- Les applications et les services du cadriciel à interface web, en sous-modules git pointant
+  vers leurs propres dépôts.
 - Tous les scripts d'orchestration (`scripts/`).
+- `edge-router.example/` : le gabarit du répartiteur 80/443 (voir 1.5).
 
 **Explicitement hors de ce dépôt, non versionné, à la charge de l'opérateur** :
 - **Le nom de domaine et le DDNS** (No-IP, DuckDNS, client du routeur…) — voir
@@ -97,8 +101,9 @@ pour le détail) :
   font qu'appeler son API pour ouvrir des ports, jamais configurer le WAN/DDNS lui-même.
 - **`~/edge-router/`** — le répartiteur partagé entre plusieurs cadriciels (`dev/`, `dev2/`).
   Il vit en dehors de tout dépôt git, sur l'hôte. Voir [1.5](#15-plusieurs-cadriciels-sur-une-même-ip-wan--le-répartiteur).
-  ⚠️ Il n'est donc reconstructible depuis aucun `git clone` — sa config (`docker-compose.yml`
-  + `nginx.conf`) doit être sauvegardée manuellement si elle change.
+  Sur une machine neuve, `install.sh` le pose depuis le gabarit `edge-router.example/` ; une fois
+  modifié à la main (second cadriciel), seule la sauvegarde nocturne en garde une copie
+  (`backup.sh`, « configuration hors dépôt »).
 - **`dev2/`** — un second cadriciel complet, structurellement identique à `dev/` (mêmes
   scripts, mêmes mécanismes) mais avec son propre domaine, son propre realm Keycloak/LDAP,
   ses propres apps (non sous-modules, dépôt git local uniquement). Totalement isolé de `dev/` :
@@ -137,20 +142,25 @@ bash scripts/install.sh --domain mon-lab.example.org --acme-email moi@example.or
    `gis_<uid>` pour les apps), des secrets générés à la place des `CHANGE_ME`, et pour `lab-mcp`
    les identités de l'hôte (`id -u`, `id -g`, GID du groupe `docker`) ;
 4. `sso-lab/ldap/init.ldif` depuis son gabarit, `.ports` reconstruit, `~/lab-work` et
-   `.lab-state/` créés ;
+   `.lab-state/` créés ; contrôle que le superutilisateur a un compte dans l'annuaire, membre
+   de `admins` et `developers` (le gabarit ne connaît que `sacha`) ;
 5. secrets de premier passage (`init-secrets.sh`) : LDAP, Keycloak, `POSTGRES_PASSWORD`,
    `POSTGIS_PASSWORD`, coffre d'`oauth-hub`, **un mot de passe par compte de l'annuaire**
    (écrits dans `sso-lab/.env`, clés `<UID>_PASSWORD`) — seulement tant que les volumes
    correspondants n'existent pas ;
 6. réseau Docker `edge-net`, propagation des adresses (`reset_url.sh`) ;
-7. `sso-lab`, realm, fédération LDAP, clients Keycloak de `code-server` et de pgAdmin ;
+7. base `keycloak` de Keycloak 26 (`infra` démarré pour elle, `dev-db.sh ensure-keycloak`,
+   mot de passe recopié par `reset_url.sh`), puis `sso-lab`, realm, fédération LDAP, scope
+   `nonce-keycloak-js-22` (`keycloak-nonce-compat.sh` : sans lui, boucle de connexion dans
+   toutes les apps), clients Keycloak de `code-server` et de pgAdmin ;
 8. `infra`, puis `dev-db.sh ensure-lab` (rôle et base `lab`), `dev-db.sh ensure <superutilisateur>
    --gis`, propagation des mots de passe de base, `dev-db.sh lockdown-connect --apply` ;
 9. runner de tests ;
 10. `storage`, `oauth-hub`, `lab-admin`, `lab-mcp`, puis chaque application (`--no-apps` pour
     s'arrêter au cadriciel) ;
 11. image `lab-workspace:latest` (≈ 8 min ; `--no-workspace-image` pour la remettre à plus tard),
-    partages de groupe de `storage`, `ports.env`, page 404 ;
+    partages de groupe de `storage`, sauvegarde nocturne planifiée à 3 h (`backup-cron.sh`),
+    `ports.env`, page 404 ;
 12. bilan, et la liste de ce qui reste à faire à la main.
 
 `--until <n>` arrête après l'étape *n* (par exemple `--until 6` : tout ce qui précède le premier
@@ -172,10 +182,12 @@ démarrage de conteneur). En cas d'échec, corriger et relancer la même command
 - **Adresses réelles des comptes** : le gabarit de l'annuaire donne à chacun une adresse factice
   `<uid>@ssolab.local` ; mettre les vraies dans `sso-lab/ldap/init.ldif` **avant** l'installation
   (après, par phpLDAPadmin) pour que « mot de passe oublié » fonctionne.
-- **Sauvegardes** : `scripts/backup.sh` (bases, annuaire, volumes, tout ce qui est hors dépôt ; copie
-  locale et NAS — voir CLAUDE.md « Sauvegardes »), **à planifier soi-même** : `install.sh` ne pose pas le
-  cron (`0 3 * * * /bin/bash <dépôt>/scripts/backup.sh > /dev/null 2>&1`). `~/lab-work/` n'y est pas :
-  le travail des espaces se sauvegarde en le poussant sur GitHub.
+- **Copie NAS des sauvegardes** : `install.sh` planifie `scripts/backup.sh` (bases, annuaire,
+  volumes, tout ce qui est hors dépôt — voir CLAUDE.md « Sauvegardes ») à 3 h, mais la copie sur
+  un NAS demande `LAB_BACKUP_NAS`, `LAB_BACKUP_NAS_USER` (`.env` racine) et `~/.lab-backup-nas`
+  (mot de passe, mode 600). Vérifier : `bash scripts/backup-cron.sh --check`. Les archives ne
+  sont **pas chiffrées**. `~/lab-work/` n'y est pas : le travail des espaces se sauvegarde en le
+  poussant sur GitHub.
 
 > **Sans nom de domaine**, l'installation va au bout d'un lab « HTTP local » (accès direct par
 > port), mais **le moteur `lab-mcp` refuse de démarrer** (`DOMAIN=CHANGE_ME`) : la page
@@ -183,7 +195,9 @@ démarrage de conteneur). En cas d'échec, corriger et relancer la même command
 > HTTPS. Relancer `install.sh --domain …` une fois le domaine en place.
 
 > **Un autre installateur que le propriétaire d'origine** règle deux choses : `LAB_SUPERUSER`
-> (`.env` racine — un uid de l'annuaire, membre de `admins` et `developers` dans `init.ldif`), et
+> (`.env` racine, par défaut l'utilisateur Unix qui lance l'installation — un uid de l'annuaire,
+> membre de `admins` et `developers` : copier le bloc `uid=sacha` de `sso-lab/ldap/init.ldif`
+> **avant** le premier démarrage, `install.sh --check` le signale sinon), et
 > `LAB_TICKET_REPO` (`lab-mcp/.env` — dépôt GitHub où le moteur ouvre les tickets « lab » ;
 > défaut `Sacha37420/sso-lab`).
 
@@ -196,10 +210,15 @@ démarrage de conteneur). En cas d'échec, corriger et relancer la même command
 > d'un tiers saute ce dossier au lieu d'avorter ; `install.sh` l'extrait pour qui y a accès.
 
 À l'issue de l'installation :
-- Keycloak est disponible sur `http://<IP_LAN>:8080/`, phpLDAPadmin sur `:8081`, pgAdmin sur
-  `:5050` (accès direct LAN uniquement pour ces deux derniers, jamais exposés via Caddy).
-- Chaque app est disponible sur `https://<DOMAIN>/<app>/` (ou `http://<IP_LAN>:<port_frontend>/`).
+- Chaque app est disponible sur `https://<DOMAIN>/<app>/` (sans domaine, en HTTP local :
+  `http://<IP_LAN>:<port_frontend>/`).
+- Keycloak (8080), phpLDAPadmin (8081) et pgAdmin (5050) ne sont liés qu'à `127.0.0.1` dès
+  qu'un domaine est configuré : les joindre par un tunnel SSH
+  (`ssh -L 8080:localhost:8080 <hôte>`). La console d'administration de Keycloak ne s'ouvre pas
+  aujourd'hui, même par tunnel (CLAUDE.md, « Keycloak 26 ») : administrer par
+  `docker exec keycloak /opt/keycloak/bin/kcadm.sh …`.
 - `infra/` et `sso-lab/` tournent en `restart: always` : ils redémarrent avec Docker.
+- `bash scripts/lab-doctor.sh` fait le bilan de santé (lecture seule).
 
 Ensuite, on ne manipule plus que des unités individuelles :
 
@@ -207,7 +226,11 @@ Ensuite, on ne manipule plus que des unités individuelles :
 bash scripts/setup2.sh mon-app --yes    # (re)déployer une app
 bash scripts/clean2.sh mon-app          # l'arrêter et supprimer ses containers
 bash scripts/install.sh --check         # l'installation est-elle toujours complète ?
+bash scripts/lab-doctor.sh              # bilan de santé : bases, sauvegarde, Keycloak, ports, conteneurs
 ```
+
+> Sur la machine en service, `install.sh --check` ne conclut pas encore « rien à faire » : il
+> voudrait déployer `test-video`, jamais déployée (to_do_global.md, T2).
 
 `bash scripts/setup2.sh --yes` (sans nom) redéploie **tout** le lab ; il suppose l'installation
 déjà faite.
@@ -233,8 +256,10 @@ bash scripts/reset_url.sh
 réseau à chaque exécution :
 - compare l'IP LAN détectée (table de routage) à celle déclarée dans `bbox.env` ;
 - compare l'IP WAN détectée (`api.ipify.org`) à celle déclarée ;
-- teste que Keycloak répond bien depuis l'extérieur sur `<IP_WAN>:<PORT_KEYCLOAK>` (donc que
-  le port-forwarding NAT fonctionne).
+- teste que Keycloak répond depuis l'extérieur : `https://<DOMAIN>/auth/realms/ssolab` avec un
+  domaine (ports 80/443 et `edge-router`), `<IP_WAN>:<PORT_KEYCLOAK>` en HTTP local seulement.
+  Avec un domaine, **ne jamais rediriger 8080** sur la box : Keycloak n'y écoute que sur
+  `127.0.0.1`.
 
 Un écart signalé peut venir d'un DDNS pas encore à jour, d'un double NAT, ou d'un port-forwarding
 manquant/mal ciblé — `reset_url.sh` explique la piste la plus probable dans son propre message.
@@ -284,12 +309,14 @@ en dehors de ce dépôt :
    No-IP DUC) ou client DynDNS intégré du routeur. Aucun script de ce dépôt ne pousse une mise
    à jour vers un fournisseur DNS — `reset_url.sh`/`bbox.env` ne font que *lire* l'IP WAN
    courante pour configurer les services locaux.
-3. Une fois le domaine actif, le renseigner dans **`.env` et `sso-lab/.env`** — les deux valeurs
-   `DOMAIN`/`ACME_EMAIL` doivent être **identiques**.
+3. Une fois le domaine actif, le renseigner dans le **`.env` racine** : `reset_url.sh` recopie
+   `DOMAIN` et `ACME_EMAIL` dans tous les autres `.env`, `sso-lab/.env` compris
+   (`scripts/reset_url.sh:338,348`).
 
 ```bash
+bash scripts/install.sh --domain mondomaine.example.com --acme-email moi@example.com
+# ou, à la main :
 nano .env            # DOMAIN=mondomaine.example.com, ACME_EMAIL=moi@example.com
-nano sso-lab/.env    # mêmes valeurs
 bash scripts/reset_url.sh
 bash scripts/setup2.sh --yes
 ```
@@ -344,8 +371,9 @@ Docker `sso-net`.
 > est déjà dans cette disposition. Il déclare le réseau `edge-net` **externe** (créé par
 > `install.sh` et par `setup2.sh` s'il manque — sans lui Compose ne démarre rien) et son Caddy
 > **ne publie plus 80/443** : sans `~/edge-router/`, le lab n'est pas joignable en HTTPS de
-> l'extérieur. Le répartiteur n'étant pas versionné, il est à reconstituer à la main d'après le
-> schéma ci-dessous (un `docker-compose.yml` et un `nginx.conf`).
+> l'extérieur. Sur une machine neuve, `install.sh` le pose depuis le gabarit versionné
+> `edge-router.example/` (`scripts/edge-router-install.sh`, qui ne touche jamais à un
+> `~/edge-router/` existant). Les fichiers ci-dessous décrivent ce qu'il contient.
 
 Un routeur ne peut rediriger un port externe donné (80 ou 443) que vers **une seule** machine/
 port interne. Si l'hôte fait tourner **deux cadriciels indépendants** (deux arbres type `dev/`,
@@ -472,9 +500,9 @@ cadriciel continue d'ouvrir `PORT_HTTP`/`PORT_HTTPS` sans effet sur le routage a
 le service `caddy` concerné et relancer `docker compose up -d` — aucune autre modification
 nécessaire, `edge-net` peut rester connecté sans effet tant que `ports:` republie 80/443.
 
-> ⚠️ **`~/edge-router/` n'est reproductible depuis aucun `git clone`.** S'il change (nouveau
-> cadriciel, nouveau domaine), sauvegarder `docker-compose.yml`/`nginx.conf` manuellement en
-> dehors du dépôt — ni `dev/` ni `dev2/` n'en gardent de copie versionnée. Toucher à `edge-net`
+> ⚠️ **Le `~/edge-router/` réel n'est pas versionné** : le gabarit `edge-router.example/` ne
+> connaît qu'un cadriciel. Une fois modifié (second cadriciel, nouveau domaine), sa seule copie
+> est la sauvegarde nocturne (`backup.sh`, « configuration hors dépôt »). Toucher à `edge-net`
 > ou aux `ports:` de n'importe quel Caddy affecte **tous** les cadriciels simultanément : à
 > faire en connaissance de cause, jamais sans vérifier l'état des autres cadriciels avant.
 > N'utiliser ce mécanisme que si l'hôte héberge réellement plusieurs cadriciels — un seul
@@ -485,6 +513,18 @@ nécessaire, `edge-net` peut rester connecté sans effet tant que `ports:` repub
 ## 2 — Créer une nouvelle application
 
 ### 2.1 La méthode standard
+
+**Voie normale (depuis le 2026-10-10) : `lab-admin` → Projets → « Nouveau projet »** (ou l'outil
+`create_app` du moteur `lab-mcp`). Le moteur enchaîne : contrôle du nom, dépôt GitHub sous le
+compte du développeur (jeton passé par `oauth-hub`), scaffold dans `deploiement/<app>`, ligne
+`.owners`, schéma dans la base du propriétaire, clé de déploiement, sous-module ; puis le bouton
+« Déployer » fait le chemin à portes : synchronisation du commit poussé, `validate-app.sh`,
+construction, **tests backend**, démarrage, test de cloisonnement. Une spécification « prête »
+d'`app-builder` se construit de la même façon (« Mes spécifications » → « Lancer la
+construction »). Il faut pour cela la fiche GitHub d'`oauth-hub` (voir 1.2).
+
+Les étapes ci-dessous sont la **voie manuelle** du superutilisateur (ou ce que font les scripts
+appelés par le moteur) — utiles pour comprendre ou dépanner.
 
 **Étape 1 — Scaffold interactif :**
 
@@ -536,15 +576,20 @@ bash scripts/setup2.sh mon-app --yes
 ```
 
 Avec un nom d'app (et sans `--restart-sso-lab`/`--rotate-secrets`), `setup2.sh` délègue
-intégralement à `scripts/setup_unit.sh`, qui enchaîne pour **cette app uniquement** :
-1. `clean2.sh <app>` — arrêt + suppression des containers/volumes de l'app
-2. démarrage de `sso-lab` s'il ne tourne pas déjà, attente que Keycloak réponde
-3. `create-app-client.sh <app>` — client Keycloak (secret, redirect URIs, claim `groups`,
-   flow `require-<app>`)
-4. `ensure-schemas.sh <app>` — rattrapage à chaud du schéma Postgres si la base existait déjà
-5. `recompose_docker.sh --app <app> --force` — build et démarrage des containers
-6. synchronisation du **catalogue de tests E2E** vers `lab-admin` (best-effort : un échec
-   n'interrompt jamais le déploiement — voir [5, Tests end-to-end](#tests-end-to-end-playwright))
+intégralement à `scripts/setup_unit.sh`, qui suit l'un de deux ordres :
+- **app « à portes »** (une ligne dans `.owners` : toute app créée depuis le chantier
+  multi-dev) : `validate-app.sh` (contrôle de sûreté pour l'app d'un développeur, portes de
+  qualité pour tous), construction pendant que l'ancienne version tourne, **tests backend**
+  (`app-test.sh` — un test rouge arrête tout et laisse l'ancienne version en service), client
+  Keycloak, schéma, démarrage `--no-build`, test de cloisonnement ;
+- **app historique** (sans ligne `.owners`, les douze apps d'origine) : `clean2.sh <app>`
+  (l'app est coupée), démarrage de `sso-lab` s'il le faut, `create-app-client.sh <app>`,
+  `ensure-schemas.sh <app>`, `recompose_docker.sh --app <app> --force`. **Aucun test n'est
+  joué** sur ce chemin (to_do_global.md, T1).
+
+> `setup2.sh <app>` déploie **l'arbre de travail** du dossier, tout ce qui y a été commité ou
+> modifié depuis le dernier déploiement — pas seulement ce qu'on voulait changer. Pour un
+> changement de configuration seule : `bash scripts/app-restart.sh <app>`.
 
 `setup_unit.sh <app> --yes` reste aussi appelable seul, sans passer par `setup2.sh`, pour
 redéployer une app sans toucher au reste du lab.
@@ -560,12 +605,12 @@ sur l'ancien chemin séquentiel (opérations sur l'infra partagée, pas sûres �
 > `setup2.sh` — étape manuelle après déploiement, dans `sso-lab/ldap/init.ldif`, si l'app en a
 > besoin (ne pas oublier d'y ajouter `e2e_member`, voir [2.2](#22-règles-dinfrastructure-et-de-sécurité)).
 
-**Méthode IA avancée** — pour des applications plus complexes, un workflow de conception
-assistée existe : **app-builder** (éditeur visuel de specs — modèles de données, endpoints,
-services frontend, pages, pipelines) → **lab-admin** (page « Prompts de déploiement », génère
-des prompts Claude Code prêts à l'emploi à partir des specs) → **code-server**
-(`https://DOMAIN/code/`, Claude Code CLI pré-installé, Docker de l'hôte monté — coller le
-prompt et laisser l'IA construire l'app en exécutant elle-même `new-app.sh`/`setup2.sh`).
+**Avec une IA** — chaque projet a son **espace de travail** (un VS Code par projet, ouvert depuis
+la page du projet dans `lab-admin`, avec Claude Code et Mistral Vibe, sans Docker ni accès à
+l'hôte) et une **adresse d'essai** `https://DOMAIN/dev-<uid>/` qui sert le dossier de travail
+non commité (`lab-essai` dans l'espace). Chaque projet porte `FEUILLE_DE_ROUTE.md`, `CLAUDE.md`
+et `AGENTS.md` (règles imposées, gabarits dans `_templates/regles/`). `code-server`
+(`https://DOMAIN/code/`) monte tout le dépôt et le socket Docker : il est réservé à `admins`.
 
 ### 2.2 Règles d'infrastructure et de sécurité
 
@@ -636,9 +681,10 @@ backend Django vérifie lui-même, dans `api/authentication.py` (le template le 
 > échoue alors que le cloisonnement réel est correct).
 
 **Cas particulier — `code-server`** : pas de flow Keycloak, protégé **en amont** par
-`oauth2-proxy` (`OAUTH2_PROXY_ALLOWED_GROUPS=developers,admins`). Tourne en `--auth=none` et
-n'a **aucune protection propre** — retirer oauth2-proxy l'exposerait nu, avec un terminal ayant
-accès au Docker de l'hôte.
+`oauth2-proxy` (`OAUTH2_PROXY_ALLOWED_GROUPS=admins` — `developers` en a été retiré le
+2026-10-11 : y entrer vaut un accès root à l'hôte). Tourne en `--auth=none` sur son propre
+réseau `code-net`, partagé avec `oauth2-proxy-code` seul, et n'a **aucune protection propre** —
+retirer oauth2-proxy l'exposerait nu, avec un terminal ayant accès au Docker de l'hôte.
 
 **API appelable par d'autres apps du lab — `KEYCLOAK_TRUSTED_CLIENTS`.** Le contrôle `azp`
 suppose un client unique. Pour une API qui doit être appelable par d'autres apps au nom de leurs
@@ -779,12 +825,12 @@ mobile) :
 
 | App | Dépôt | Ports (back/front) | Groupe(s) requis | Instance DB | Description |
 |---|---|---|---|---|---|
-| `lab-admin` | [Sacha37420/lab-admin](https://github.com/Sacha37420/lab-admin) | 8083 / 4201 | `admins` | postgres | Portail du lab : apps déployées, éditeur de code, création de projet, gestion des utilisateurs, catalogue de tests E2E |
+| `lab-admin` | [Sacha37420/lab-admin](https://github.com/Sacha37420/lab-admin) | 8083 / 4201 | `admins`, `developers` (administration : `admins`) | postgres (`lab`) | Portail du lab multi-dev : Accueil, Services, Projets (création, déploiement et tests par le moteur, adresse d'essai, spécifications), Nouvel utilisateur |
 | `conciergerie` | [Sacha37420/conciergerie](https://github.com/Sacha37420/conciergerie) | 8084 / 4202 | `proprietaires`, `admins` | postgres | Gestion locative : biens, frais, co-propriétaires, sync réservations, bilan de capital |
 | `analyse-lora` | [Sacha37420/analyse-lora](https://github.com/Sacha37420/analyse-lora) | 8086 / 4204 | `developers`, `amis`, `famille` | postgres | Suivi de capteurs LoRa : relevés, mesures, droits par capteur |
 | `app-builder` | [Sacha37420/app-builder](https://github.com/Sacha37420/app-builder) | 8087 / 4205 | tous **sauf** `proprietaires` | postgres | Éditeur visuel de specs d'apps (modèles, endpoints, pages, pipelines) |
 | `restauration` | [Sacha37420/restauration](https://github.com/Sacha37420/restauration) | 8088 / 4206 | `manager`, `cuisinier`, `serveur` | postgres | Gestion de restaurant : fournisseurs, recettes, commandes, paiements, planning, analyses de ventes |
-| `traitement-de-fichiers-compils` | [Sacha37420/traitement-de-fichiers-compils](https://github.com/Sacha37420/traitement-de-fichiers-compils) | 8089 / 4207 | `developers` | postgres | Dépôt de fichiers : édition, suivi des modifications, historique |
+| `traitement-de-fichiers-compils` | [Sacha37420/traitement-de-fichiers-compils](https://github.com/Sacha37420/traitement-de-fichiers-compils) | 8089 / 4207 | `developers` | postgres | Atelier de fichiers dans le navigateur (images, PDF, vidéo), OCR Mistral par le serveur, dépôt dans storage et partage par email |
 | `arbre-genealogique` | [Sacha37420/arbre-genealogique](https://github.com/Sacha37420/arbre-genealogique) | 8090 / 4208 | *(aucun — ouvert à tout compte du realm ; autorisation par arbre via `Tree.owner_email`/`is_public`/`TreeShare`)* | postgres | Arbre généalogique : personnes, relations, périodes d'union |
 | `carto-lab` | [Sacha37420/carto-lab](https://github.com/Sacha37420/carto-lab) | 8091 / 4209 | `developers` | **postgis** (dédiée) | SIG : import de cartes, systèmes de coordonnées, calculs géo, météo France |
 | `storage` | [Sacha37420/storage](https://github.com/Sacha37420/storage) | 8093 / 4211 | `famille`,`amis`,`developers`,`admins`,`manager`,`cuisinier`,`serveur`,`proprietaires` (tous — API interne au lab) | postgres | Stockage de fichiers du lab : espaces personnels, partages par groupe, API consommée par les autres apps |
@@ -792,9 +838,10 @@ mobile) :
 | `robot-lab` | [Sacha37420/robot-lab](https://github.com/Sacha37420/robot-lab) | 8094 / 4212 (+ `engine` 8095) | `developers` | postgres | Robots de navigation web (Playwright + Claude/Mistral) : enregistrement de parcours, assistant IA, exécution + téléchargements |
 | `code-route` | [Sacha37420/code-route](https://github.com/Sacha37420/code-route) | 8096 / **4200** | tous les groupes | postgres | Apprentissage du code de la route : fiches, quiz thématiques, bilan personnalisé, génération IA de questions (+ Celery) |
 | `craft-lab` | [Sacha37420/craft-lab](https://github.com/Sacha37420/craft-lab) | 8097 / 4213 (+ `relay` 8098) | `famille`, `amis`, `developers` | postgres | Jeu de construction/survie 2D multijoueur : catalogue objets/monstres/cartes, génération procédurale, combat, artisanat |
-| `bilan-thermique` | [Sacha37420/bilan-thermique](https://github.com/Sacha37420/bilan-thermique) | 8099 / 4214 | `developers`, `famille`, `amis` | postgres | Simulation thermique d'une paroi multicouche par éléments finis : conduction, capacité, apports solaires (+ Celery) |
+| `bilan-thermique` | [Sacha37420/bilan-thermique](https://github.com/Sacha37420/bilan-thermique) | 8099 / 4214 | `developers`, `famille`, `amis` | postgres | Simulation thermique de bâtiment : 1D, 3D sur maillage, ombrage, météo, environnement IGN (+ Celery) |
 | `oauth-hub` | [Sacha37420/oauth-hub](https://github.com/Sacha37420/oauth-hub) | 8100 / 4215 | tous les groupes | postgres | Coffre des identifiants OAuth2 de sites externes (GitHub, GitLab…) et distribution de jetons aux apps autorisées |
-| `peripheriques` | [Sacha37420/peripheriques](https://github.com/Sacha37420/peripheriques) | 8101 / 4216 (+ `media` ICE 8189 udp/tcp) | tous les groupes (droits fins par email, en base) | postgres | Caméra et micro de l'hôte : direct (WebRTC/HLS) et enregistrement continu heure par heure, droits accordés par email |
+| `peripheriques` | [Sacha37420/peripheriques](https://github.com/Sacha37420/peripheriques) | 8101 / 4216 | tous les groupes (droits fins par email, en base) | postgres | Droits sur les caméras, le micro et le haut-parleur de l'hôte (flux tenus par `lab-media/`, ICE 8189) : direct WebRTC/HLS, relecture, enregistrement réglé webcam par webcam, « Parler » |
+| `test-video` | [Sacha37420/test-video](https://github.com/Sacha37420/test-video) | 8102 / 4217 | `admins`, `developers` | postgres (`dev_sacha`) | Didacticiel du cadriciel (chapitres, exercices) — jamais déployé ; seule app à portes (`.owners`) |
 
 > `code-route` est la seule app dont le port frontend (**4200**) est en dessous du plancher
 > habituel des suggestions de `new-app.sh` — valeur historique, à ne pas « corriger ».
@@ -810,9 +857,11 @@ git submodule update --remote --merge      # mettre à jour tous les pointeurs d
 bash scripts/setup2.sh <app> --yes         # (re)déployer
 bash scripts/clean2.sh <app>               # arrêter
 ```
-Le code de chaque app vit intégralement dans son propre dépôt GitHub — cloner/modifier depuis
-`dev/<app>/` fonctionne comme n'importe quel dépôt git ; `dev/` ne fait que référencer un commit
-précis via le pointeur de sous-module.
+Le code de chaque app vit intégralement dans son propre dépôt GitHub — `deploiement/<app>/` (ou
+`<service>/` à la racine pour lab-admin, storage, oauth-hub, app-builder) est un dépôt git
+ordinaire ; `dev/` ne fait que référencer un commit précis via le pointeur de sous-module.
+Sauf pour `app-builder`, `lab-admin`, `oauth-hub` et `storage`, les dossiers d'apps sont dans
+`deploiement/` (colonne « App » ci-dessus = nom du dossier).
 
 > `storage`, `code-route` et `oauth-hub` requièrent volontairement **tous** les groupes existants
 > du realm. Une app « ouverte à tout compte du realm » se déclare ainsi — par la liste complète des
@@ -845,7 +894,7 @@ base.
 
 | Mécanisme | Cas d'usage | Exemple de référence |
 |---|---|---|
-| Compte de service `<app>-admin` (`KEYCLOAK_SERVICE_WRITE_SHARES`) | L'app décide seule de l'autorisation ; pas de token utilisateur à forwarder | `conciergerie` (un partage par bien), `traitement-de-fichiers-compils` (autorisation portée par les modèles de l'app), `arbre-genealogique` (idem + purge best-effort par signal `post_delete`), `atelier-3d` (worker Celery, écrit longtemps après la requête HTTP) |
+| Compte de service `<app>-admin` (`KEYCLOAK_SERVICE_WRITE_SHARES` : un partage ; `KEYCLOAK_SERVICE_WRITE_PREFIXES` : un préfixe de chemins — c'est le cas des quatre apps citées ici, `restauration-admin` seul est sous `…_SHARES`) | L'app décide seule de l'autorisation ; pas de token utilisateur à forwarder | `conciergerie` (un partage par bien), `traitement-de-fichiers-compils` (autorisation portée par les modèles de l'app), `arbre-genealogique` (idem + purge best-effort par signal `post_delete`), `atelier-3d` (worker Celery, écrit longtemps après la requête HTTP) |
 | Forward du token utilisateur (`KEYCLOAK_TRUSTED_CLIENTS`) | Carte commune, tout le groupe lit/écrit tout, pas de tâche asynchrone touchant les fichiers | `carto-lab` (`Share.required_groups`) |
 | Republication proxy `AllowAny` | Lecture publique nécessaire (page sans authentification) — `storage` lui-même n'a et ne doit avoir aucun chemin de lecture anonyme | `restauration` (photos de plats sur la carte publique) |
 
@@ -919,10 +968,13 @@ par `new-app.sh` et avant chaque déploiement) qui crée le schéma, avec pour p
 de l'app. Il refuse de le créer si l'app d'un développeur désigne une autre base que la sienne.
 
 **pgAdmin** : login interne désactivé, uniquement Keycloak (OAuth2), accès réservé au groupe
-**`admins`** (`infra/pgadmin/config_local.py`). Son client Keycloak (`infra`) est créé par
-`install.sh` (`create-app-client.sh infra --port 5050 --redirect-path /oauth2/authorize`), qui
-écrit `KEYCLOAK_CLIENT_SECRET` dans `infra/.env`. Chaque développeur a par ailleurs son propre
-pgAdmin, ouvert sur sa seule base, depuis `lab-admin`.
+**`admins`** (`infra/pgadmin/config_local.py`), joignable par tunnel SSH seulement (port lié à
+`127.0.0.1`). Son client Keycloak (`infra`) est créé par `install.sh`
+(`create-app-client.sh infra --port 5050 --redirect-path /oauth2/authorize`), qui écrit
+`KEYCLOAK_CLIENT_SECRET` dans `infra/.env`. ⚠ Sur la machine en service ce client est
+**désactivé** depuis le 2026-11-01 : le pgAdmin partagé ne se connecte plus (décision en attente,
+to_do_global.md). Chaque développeur a par ailleurs son propre pgAdmin, ouvert sur sa seule base,
+depuis `lab-admin`.
 
 > ⚠️ **Après une migration qui supprime une colonne de blobs** (voir [3](#3--gestion-des-fichiers)) :
 > `DROP COLUMN` ne fait que marquer la colonne supprimée, les données TOAST restent jusqu'à une
@@ -937,16 +989,23 @@ pgAdmin, ouvert sur sa seule base, depuis `lab-admin`.
 
 ### Services et ports
 
-| Service | Port LAN | URL HTTPS |
+| Service | Port sur l'hôte | URL HTTPS |
 |---|---|---|
-| Keycloak | 8080 | `https://DOMAIN/auth/` |
-| phpLDAPadmin | 8081 | direct LAN uniquement |
-| pgAdmin | 5050 | direct LAN uniquement |
-| PostgreSQL / PostGIS | 5432 (×2 instances) | interne Docker uniquement |
-| code-server | — | `https://DOMAIN/code/` (réservé `developers`/`admins`) |
+| Keycloak | 8080, lié à `127.0.0.1` (tunnel SSH) | `https://DOMAIN/auth/` (realms ; ni la console ni `master`) |
+| phpLDAPadmin | 8081, lié à `127.0.0.1` (tunnel SSH) | — |
+| pgAdmin partagé | 5050, lié à `127.0.0.1` (tunnel SSH) | — |
+| OpenLDAP | 389, lié à `127.0.0.1` | — |
+| PostgreSQL / PostGIS | aucun (5432 interne à `dev-net`) | — |
+| code-server | — | `https://DOMAIN/code/` (réservé `admins`) |
+| Espaces de travail | — | `https://DOMAIN/ws/<uid>/` (passerelle `lab-ws-gateway`) |
+| Adresse d'essai d'un dev | — | `https://DOMAIN/dev-<uid>/` |
+| `edge-router` | 80, 443 sur toutes les interfaces | — |
+| `lab-media` (ICE WebRTC) | 8189 udp/tcp sur toutes les interfaces | — |
 
-Ports applicatifs : voir le tableau [2.5](#25-sous-modules-existants-et-comment-les-utiliser).
-URL frontend `https://DOMAIN/<app>/`, API `https://DOMAIN/<app>-api/`.
+Tout autre port publié est lié à `127.0.0.1` (`"${LAB_BIND_ADDR:-127.0.0.1}:…"` dans chaque
+compose ; `0.0.0.0` seulement en HTTP local sans domaine). Ports applicatifs : voir le tableau
+[2.5](#25-sous-modules-existants-et-comment-les-utiliser). URL frontend `https://DOMAIN/<app>/`,
+API `https://DOMAIN/<app>-api/`.
 
 ### Vitrine publique vs outils d'administration
 
@@ -954,8 +1013,8 @@ URL frontend `https://DOMAIN/<app>/`, API `https://DOMAIN/<app>-api/`.
 authentification** — y ajouter une app publie son nom et sa description à tout visiteur.
 Régénérer après modification : `bash scripts/complete_404.sh`.
 
-Les **outils d'administration** (page « Apps du lab » de `lab-admin`, catalogue des tests E2E,
-`add-user.sh`) affichent en revanche **toutes** les apps réellement déployées — toute entrée de
+Les **outils d'administration** (page « Projets » de `lab-admin`, tests de cloisonnement joués
+par le moteur, `add-user.sh`) affichent en revanche **toutes** les apps réellement déployées — toute entrée de
 `.ports` dont le dossier contient un `docker-compose.yml`, indépendamment de
 `.app-descriptions`. Une app hors vitrine est signalée par une étiquette « hors vitrine » dans
 `lab-admin`, jamais masquée.
@@ -965,7 +1024,7 @@ Les **outils d'administration** (page « Apps du lab » de `lab-admin`, catalogu
 | Utilisateur | Groupes | code-server |
 |---|---|---|
 | sacha | developers, admins, famille, amis, manager, cuisinier, serveur, proprietaires | ✓ |
-| hassan | developers, amis | ✓ |
+| hassan | developers, amis | ✗ (`admins` seul) |
 | lea | famille, amis | ✗ |
 | elodie | famille, manager, proprietaires | ✗ |
 | sabrina | manager | ✗ |
@@ -973,8 +1032,10 @@ Les **outils d'administration** (page « Apps du lab » de `lab-admin`, catalogu
 | marie | famille | ✗ |
 | fannie | proprietaires | ✗ |
 
-`e2e_member` (membre de **tous** les groupes) et `e2e_outsider` (membre d'**aucun** groupe) sont
-deux comptes synthétiques réservés aux tests E2E — voir ci-dessous. `e2e_member` porte une adresse
+`e2e_member` (membre de tous les groupes **sauf `admins`** depuis le 2026-11-01 — `admins` ouvre
+`/code`, donc l'hôte) et `e2e_outsider` (membre d'**aucun** groupe) sont deux comptes
+synthétiques réservés aux tests E2E — voir ci-dessous. Un troisième, `e2edev` (`developers`
+seul), sert au parcours « développeur » de `lab-admin`. `e2e_member` porte une adresse
 **factice** `e2e_member@ssolab.local` : sans claim `email`, `api/authentication.py` lui refuse
 tout appel API et il ne permettrait de tester que l'accès à la page. Le domaine `.local` est ce
 qui rend l'ajout sûr (aucun email réellement envoyé, adresse marquée vérifiée d'office).
@@ -982,8 +1043,8 @@ qui rend l'ajout sûr (aucun email réellement envoyé, adresse marquée vérifi
 
 > ⚠️ Ce tableau est le reflet de `sso-lab/ldap/init.ldif`, **non versionné** (voir
 > [1.2](#12-installation)) : une installation neuve part de `init.ldif.example`. Tout
-> **nouveau groupe** y ajouté doit inclure `e2e_member`, sans quoi le test de cloisonnement de
-> toute app utilisant ce groupe échoue à tort.
+> **nouveau groupe** y ajouté doit inclure `e2e_member` (jamais `admins`), sans quoi le test de
+> cloisonnement de toute app utilisant ce groupe échoue à tort.
 
 ### Tests end-to-end (Playwright)
 
@@ -994,32 +1055,31 @@ de conception : il ne doit dépendre d'aucun contenu propre à l'app). Il automa
 de cloisonnement : membre du groupe requis passe, non-membre refusé, non-membre avec session SSO
 déjà active refusé aussi.
 
-> ⚠️ **Chantier ouvert — huit apps sur quinze n'ont aujourd'hui aucun spec** : `analyse-lora`,
-> `app-builder`, `arbre-genealogique`, `atelier-3d`, `conciergerie`, `lab-admin`, `restauration`
-> et `traitement-de-fichiers-compils`. Les sept autres l'ont. Ce qui rend le trou dangereux :
-> **le runner répond `[]` pour ces apps, sans erreur ni avertissement** — une app sans spec est
-> donc indiscernable, dans `lab-admin` comme en ligne de commande, d'une app dont tous les tests
-> passent. Une réponse `[]` signifie « aucun test trouvé », jamais « tout va bien ».
->
-> ```bash
-> docker exec lab-runner sh -c "curl -s -X POST -H 'Content-Type: application/json' \
->   -d '{\"app\":\"<app>\"}' http://localhost:4300/run"
-> ```
+Le spec est présent dans toutes les apps où il s'applique. **Deux apps n'en ont pas, à
+dessein** : `arbre-genealogique` (aucun groupe requis) et `traitement-de-fichiers-compils` (page
+publique, atelier dans le navigateur) ; leur feuille de route porte la ligne
+`cloisonnement : aucun — <raison>`, et leur protection est tenue par leurs tests backend. Pour
+elles le runner répond `[]` : cela veut dire « aucun test trouvé », **jamais** « tout va bien ».
 
 - **`runner/`** (racine, comme `infra/`/`sso-lab/`) : conteneur unique Playwright + Chromium
-  pour tout le lab, réseau `sso-net` uniquement, jamais exposé, atteint via `lab-admin`
-  (worker Celery) ou `docker exec` depuis `setup_unit.sh`.
-- **Catalogue** (`GET /list`, pas de navigateur) : à chaque déploiement d'une app, liste les
-  tests du fichier de l'app dans `lab-admin` (best-effort, fin de `setup_unit.sh`).
-- **Exécution** (`POST /run`, navigateur réel) : jamais automatique — déclenchée à la main
-  depuis la page **Debug** de `lab-admin`. Un seul run à la fois, lab-wide (mutex + concurrency=1).
+  pour tout le lab, réseau `sso-net` uniquement, jamais exposé. Il joue **toujours le spec du
+  gabarit** (le fichier de l'app n'est qu'un signal de présence, jamais chargé).
+- **Qui lance les tests** : le moteur `lab-mcp`, et lui seul — après chaque déploiement par le
+  chemin à portes, à la demande depuis la page d'un projet de `lab-admin` (ou l'outil MCP
+  `run_tests`), et pour tous les projets par « Tout tester ». Dernier verdict par app :
+  `.lab-state/tests/<app>.json`. Un seul run à la fois, lab-wide (409 si occupé). L'ancien
+  catalogue, la page « Debug » et le worker Celery de `lab-admin` sont supprimés.
+- Exception : `storage/frontend/e2e/gestes.spec.ts` (25 gestes), joué à la main par
+  `storage/frontend/e2e/jouer-gestes.sh`, jamais par le moteur.
 
 ### Réseaux Docker
 
 | Réseau | Utilisé par |
 |---|---|
-| `sso-lab_sso-net` | Keycloak, LDAP, Caddy, oauth2-proxy, code-server, toutes les apps, `runner/` |
-| `dev-net` | PostgreSQL, PostGIS, pgAdmin, backends Django/Spring |
+| `sso-lab_sso-net` | Keycloak, LDAP, Caddy, oauth2-proxy, toutes les apps, `runner/` |
+| `sso-lab_code-net` | `code-server` et `oauth2-proxy-code` **seulement** (rien d'autre ne doit joindre code-server) |
+| `dev-net` | PostgreSQL, PostGIS, pgAdmin, Keycloak (base `keycloak`), backends Django |
+| ponts `lws…` | espaces de travail (`ws-<uid>`) : ni l'hôte ni un autre pont Docker, sauf 80/443 (règles posées par le moteur) |
 | `edge-net` | Répartiteur partagé entre cadriciels (`~/edge-router/`) — Caddy uniquement, voir [1.5](#15-plusieurs-cadriciels-sur-une-même-ip-wan--le-répartiteur) |
 
 ### Scripts utiles
@@ -1028,20 +1088,34 @@ Tous lancés avec `bash scripts/<nom>` depuis la racine `dev/` (résolvent eux-m
 
 | Script | Rôle |
 |---|---|
-| `new-app.sh` | Scaffold interactif d'une nouvelle app |
+| `install.sh [--check]` | Installation rejouable du lab ; `--check` ne fait rien et dit ce qui manque |
+| `lab-doctor.sh` | Bilan de santé en lecture seule : installation, bases, sauvegarde, Keycloak, ports, conteneurs, cloisonnement, disque |
+| `backup.sh [--check\|--list\|--local]` | Sauvegarde nocturne : bases, annuaire, volumes, configuration hors dépôt ; copie locale et NAS |
+| `backup-cron.sh [--check]` | Planifie `backup.sh` dans la crontab (rejouable) et vérifie les prérequis de la copie NAS |
+| `new-app.sh [--owner <uid>]` | Scaffold d'une nouvelle app dans `deploiement/` (appelé par le moteur) |
+| `app-register.sh`, `app-sync.sh`, `app-remote.sh`, `app-status.sh`, `app-logs.sh`, `app-env.sh`, `app-test.sh`, `app-smtp.sh`, `app-restart.sh`, `app-remove.sh`, `app-relocate.sh` | Commandes d'exploitation d'une app, celles que le moteur exécute ; usage en tête de chaque fichier |
+| `app-preview.sh up\|down\|status <uid> [app]` | Adresse d'essai d'un développeur (`/dev-<uid>`) |
+| `validate-app.sh <app>`, `check-app-name.sh <nom>` | Contrôle de sûreté d'un dépôt avant déploiement ; règles de nommage |
+| `dev-db.sh ensure\|ensure-lab\|ensure-keycloak\|status\|hba-status\|…` | Rôles et bases par propriétaire, base du cadriciel, base de Keycloak |
+| `lab-lock.sh <commande>` | Exécute sous le verrou de déploiement (code 75 si occupé) |
+| `workspace-image.sh build\|check` | Image `lab-workspace` des espaces de travail |
+| `storage-shares.sh [--check]` | Partages de groupe de `storage` attendus par les apps |
+| `edge-router-install.sh` | Pose `~/edge-router/` depuis `edge-router.example/` s'il n'existe pas |
+| `keycloak-nonce-compat.sh` | Scope `nonce-keycloak-js-22` (keycloak-js 22 ↔ Keycloak 26), idempotent |
 | `setup2.sh [<app>] --yes` | Déploiement complet (une app, ou tout le lab en parallèle) |
 | `setup_unit.sh <app> --yes` | Pipeline complet d'une seule app (utilisé par `setup2.sh`, appelable seul) |
-| `create-app-client.sh <app>` | Créer/mettre à jour le client Keycloak seul (`--native-redirect`, `--pkce`, `--no-env`) |
+| `create-app-client.sh <app>` | Créer/mettre à jour le client Keycloak seul (`--native-redirect`, `--pkce`, `--prune-uris`, `--no-env`) |
 | `ensure-schemas.sh <app>` | Rattraper à chaud le schéma Postgres manquant |
 | `recompose_docker.sh --app <app>` | Rebuilder et redémarrer les containers |
 | `clean2.sh <app>` | Arrêter et supprimer les containers d'une app |
-| `reset_url.sh` | Propager LAN/WAN/Keycloak dans tous les `.env`, valider la config réseau |
+| `reset_url.sh` | Propager LAN/WAN/Keycloak/domaine dans tous les `.env`, valider la config réseau |
 | `open-freebox-ports.sh` | Redirections de ports (HTTP/HTTPS) sur une Freebox : `authorize`, `status`, `apply` |
 | `open-bbox-ports2.sh` | Ouvrir les ports adaptés (HTTP/HTTPS) sur une Bbox |
 | `get-ports-list.sh` | Régénérer `ports.env` depuis `.ports` |
 | `complete_404.sh` | Régénérer `sso-lab/fallback/html/404.html` depuis `.app-descriptions` |
 | `init-secrets.sh` | Générer des mots de passe forts |
 | `add-user.sh` | Créer un utilisateur LDAP + l'assigner à des groupes |
+| `dev-enroll.sh`, `work-clone.sh` | Inscription d'un développeur, clone de travail d'un projet (appelés par le moteur) |
 | `sso-lab/setup-code-server-auth.sh` | Créer le client Keycloak de code-server (`--rotate` pour forcer la rotation) |
 | `rotate-secrets-full.sh --yes` | Rotation complète de tous les secrets automatisables + redémarrage |
 | `rotate-ldap-user-passwords.sh --yes` | Rotation à chaud du mot de passe de chaque compte LDAP, avec email |
@@ -1062,8 +1136,8 @@ dev/
 ├── .env / bbox.env          ← non commités
 ├── infra/                   ← PostgreSQL + PostGIS + pgAdmin  [restart: always]
 │   ├── docker-compose.yml
-│   └── init/ / init-postgis/
-│       └── 00_schemas.sql       ← CREATE SCHEMA par app  ← MODIFIER ICI
+│   ├── dev-roles.env            ← mots de passe des rôles lab, keycloak, dev_<uid> — NON commité
+│   └── init/ / init-postgis/    ← ne crée plus aucun schéma (ensure-schemas.sh s'en charge)
 ├── sso-lab/                 ← Keycloak + OpenLDAP + Caddy + fallback + oauth2-proxy + code-server
 │   ├── docker-compose.yml
 │   ├── ldap/init.ldif           ← utilisateurs et groupes LDAP — NON commité
@@ -1074,12 +1148,13 @@ dev/
 │   ├── django-angular/
 │   ├── django-only/
 │   └── angular-only/
-└── <app>/                   ← sous-module git (même modèle pour chaque app)
+└── deploiement/<app>/       ← sous-module git (même modèle pour chaque app)
     ├── .env / .env.example
     ├── .keycloak-client-opts    ← --require-group, port, chemin Caddy
     ├── docker-compose.yml
     ├── backend/ / frontend/
-    └── frontend/e2e/cloisonnement.spec.ts   ← manquant sur 8 apps, voir « Tests end-to-end »
+    ├── FEUILLE_DE_ROUTE.md       ← lots, statuts, commande de test (lue par validate-app.sh et app-test.sh)
+    └── frontend/e2e/cloisonnement.spec.ts   ← voir « Tests end-to-end »
 ```
 
 > **Journal de bugs** : les incidents rencontrés et leurs corrections sont documentés dans

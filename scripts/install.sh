@@ -28,6 +28,7 @@
 # passe. On peut donc la relancer après un échec, ou sur un lab en service.
 #
 # Ce que l'installation NE PEUT PAS faire, et qu'elle rappelle à la fin :
+#   (la sauvegarde nocturne, elle, est planifiée à l'étape 11 : backup-cron.sh)
 #   • enregistrer une application OAuth chez GitHub et en saisir le secret dans
 #     oauth-hub (sans elle : ni création de projet, ni ticket, ni éditeur) ;
 #   • le SMTP de Keycloak (mot de passe d'application) ;
@@ -111,6 +112,10 @@ envset() {
 is_placeholder() { [[ -z "$1" || "$1" == *CHANGE_ME* || "$1" == *VOTRE_IP_WAN* || "$1" == *192.168.1.X* ]]; }
 running() { docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null | grep -q true; }
 has_volume() { docker volume inspect "$1" > /dev/null 2>&1; }
+# sso-lab déjà initialisé ? L'annuaire garde ses mots de passe dans ldap-data.
+# (keycloak-data est la base H2 de Keycloak 22, plus montée depuis Keycloak 26 :
+# une machine neuve ne la crée jamais — elle ne peut plus servir de témoin.)
+sso_initialized() { has_volume sso-lab_ldap-data || has_volume sso-lab_keycloak-data; }
 unit_running() {  # au moins un conteneur en service pour ce projet Compose
   [[ -n "$(docker ps -q --filter "label=com.docker.compose.project=$1" 2>/dev/null)" ]]
 }
@@ -304,7 +309,7 @@ while IFS= read -r _dir; do
   [[ -n "$_k" ]] && _left+="${_dir#"$ROOT"/} : ${_k}; "
 done < <(registry_dirs_with .env)
 if [[ -n "$_left" ]]; then
-  if has_volume sso-lab_keycloak-data; then gap "secrets encore à CHANGE_ME dans des .env existants — ${_left}"
+  if sso_initialized; then gap "secrets encore à CHANGE_ME dans des .env existants — ${_left}"
   else note "secrets encore à CHANGE_ME (seront générés à l'étape 5 ou écrits au déploiement) — ${_left}"; fi
 fi
 
@@ -313,6 +318,20 @@ LDIF="sso-lab/ldap/init.ldif"
 if [[ -d "$LDIF" ]]; then gap "$LDIF est un DOSSIER (créé par Docker faute de fichier) : le supprimer (sudo rmdir) puis relancer"
 elif [[ -f "$LDIF" ]]; then ok "$LDIF présent"
 else todo "créer $LDIF depuis son gabarit (mots de passe générés à l'étape 5)"; run cp "$LDIF.example" "$LDIF"; run chmod 600 "$LDIF"; fi
+# Le superutilisateur (par défaut : l'utilisateur Unix courant) doit être un compte
+# de l'annuaire, membre de admins et developers. Le gabarit ne connaît que « sacha » :
+# sur une autre machine, sans ce contrôle, personne ne pouvait administrer le lab.
+_ldif_src="$LDIF"; [[ -f "$_ldif_src" ]] || _ldif_src="$LDIF.example"
+if [[ -f "$_ldif_src" ]] && registry_valid_uid "$SU"; then
+  if ! grep -qx "uid: $SU" "$_ldif_src"; then
+    gap "le superutilisateur « $SU » n'a pas de compte dans $_ldif_src : y copier le bloc « uid=sacha » en remplaçant l'uid (et mail), l'ajouter aux groupes admins et developers AVANT le premier démarrage de sso-lab — ou relancer avec --superuser <uid existant>"
+  else
+    for _g in admins developers; do
+      awk -v g="cn=$_g,ou=groups" -v m="member: uid=$SU,ou=people" '$0 ~ "^dn: " { in_g = (index($0, g) > 0) } in_g && index($0, m) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$_ldif_src" \
+        || gap "le superutilisateur « $SU » n'est pas membre du groupe $_g dans $_ldif_src (ligne « member: uid=$SU,ou=people,dc=ssolab,dc=local » à ajouter au groupe)"
+    done
+  fi
+fi
 
 # Registre des ports : non versionné, et monté par lab-admin — s'il manque,
 # Docker crée un DOSSIER .ports à sa place, et plus aucune app n'est visible.
@@ -366,8 +385,8 @@ step "5/12  Secrets de premier passage"
 # clé par clé et volume par volume, de ce qu'il a le droit d'écrire.
 _ldif_placeholder=false
 [[ -f "$LDIF" ]] && grep -q '^userPassword: CHANGE_ME' "$LDIF" && _ldif_placeholder=true
-if has_volume sso-lab_keycloak-data; then
-  ok "sso-lab déjà initialisé (volume sso-lab_keycloak-data) : aucun secret n'est régénéré"
+if sso_initialized; then
+  ok "sso-lab déjà initialisé (volume de l'annuaire présent) : aucun secret n'est régénéré"
 elif [[ -f sso-lab/.env ]] && ! is_placeholder "$(envget sso-lab/.env KEYCLOAK_ADMIN_PASSWORD)" && ! $_ldif_placeholder; then
   # Installation interrompue après cette étape : les secrets sont déjà posés.
   # On ne les régénère pas — relancer ne doit rien changer.
@@ -386,7 +405,7 @@ fi
 for _pair in "infra/.env:POSTGRES_PASSWORD" "infra/.env:POSTGIS_PASSWORD" "sso-lab/.env:KEYCLOAK_ADMIN_PASSWORD" "sso-lab/.env:LDAP_ADMIN_PASSWORD"; do
   _f="${_pair%%:*}"; _k="${_pair##*:}"
   [[ -f "$_f" ]] || continue
-  is_placeholder "$(envget "$_f" "$_k")" && { $CHECK && ! has_volume sso-lab_keycloak-data && continue; gap "$_k vaut encore le gabarit dans $_f"; }
+  is_placeholder "$(envget "$_f" "$_k")" && { $CHECK && ! sso_initialized && continue; gap "$_k vaut encore le gabarit dans $_f"; }
 done
 if [[ -f "$LDIF" ]] && grep -q '^userPassword: CHANGE_ME' "$LDIF"; then
   if has_volume sso-lab_ldap-data; then gap "$LDIF porte encore des mots de passe CHANGE_ME alors que l'annuaire est initialisé (bash scripts/rotate-ldap-user-passwords.sh --yes)"
@@ -418,6 +437,31 @@ step "7/12  Identité : sso-lab (Keycloak, LDAP, Caddy)"
 # shellcheck source=lib/kcprobe.sh
 source "$SCRIPT_DIR/lib/kcprobe.sh"
 KC_PORT="$(envget sso-lab/.env PORT_KEYCLOAK)"; KC_PORT="${KC_PORT:-8080}"
+# Keycloak 26 garde son realm dans la base `keycloak` de dev-postgres (chantier
+# failles, F11) : sur une machine neuve, il faut l'infra, cette base, et son mot
+# de passe recopié dans sso-lab/.env (KEYCLOAK_DB_PASSWORD, par reset_url.sh)
+# AVANT le premier démarrage de sso-lab — sinon Keycloak ne démarre pas et
+# l'étape échoue après 300 s. (Le réseau dev-net, externe pour sso-lab, est créé
+# par infra.) L'étape 8 trouve ensuite l'infra déjà en service.
+if running dev-postgres && bash "$SCRIPT_DIR/dev-db.sh" status keycloak > /dev/null 2>&1 \
+   && [[ -n "$(envget sso-lab/.env KEYCLOAK_DB_PASSWORD)" ]]; then
+  ok "base keycloak en place, mot de passe dans sso-lab/.env"
+else
+  todo "préparer la base de Keycloak : démarrer infra si besoin, dev-db.sh ensure-keycloak, reset_url.sh"
+  if ! $CHECK; then
+    if ! running dev-postgres; then
+      bash "$SCRIPT_DIR/recompose_docker.sh" --app infra || fail "l'infra n'a pas démarré (infra/.env complet ?)"
+      for _i in $(seq 1 60); do docker exec dev-postgres pg_isready -q 2>/dev/null && break; sleep 2; done
+      docker exec dev-postgres pg_isready -q 2>/dev/null || fail "dev-postgres ne répond pas (docker logs dev-postgres)"
+      sleep 3
+    fi
+    bash "$SCRIPT_DIR/dev-db.sh" ensure-keycloak || fail "dev-db.sh ensure-keycloak a échoué"
+    bash "$SCRIPT_DIR/reset_url.sh" >> "$STATE_DIR/install-reset-url.log" 2>&1 \
+      || fail "reset_url.sh (mot de passe de la base keycloak) a échoué — $(tail -3 "$STATE_DIR/install-reset-url.log" | tr '\n' ' ')"
+    [[ -n "$(envget sso-lab/.env KEYCLOAK_DB_PASSWORD)" ]] || fail "KEYCLOAK_DB_PASSWORD toujours vide dans sso-lab/.env après reset_url.sh"
+    ok "base keycloak prête"
+  fi
+fi
 if [[ "$(kc_probe_sso_state "$KC_PORT")" == "up" ]]; then ok "Keycloak répond"
 else
   todo "démarrer sso-lab et attendre Keycloak"
@@ -435,11 +479,30 @@ kc_client_exists() {
   source "$SCRIPT_DIR/lib/kcadmin.sh"
   [[ "$(kc_admin_login 2>/dev/null && kc_admin_get "/clients?clientId=$1" 2>/dev/null | jq 'length' 2>/dev/null)" == "1" ]]
 }
+kc_client_enabled() {
+  # shellcheck source=lib/kcadmin.sh
+  source "$SCRIPT_DIR/lib/kcadmin.sh"
+  [[ "$(kc_admin_login 2>/dev/null && kc_admin_get "/clients?clientId=$1" 2>/dev/null | jq -r '.[0].enabled' 2>/dev/null)" == "true" ]]
+}
+kc_nonce_scope_ok() {  # le scope de compatibilité est-il un scope par défaut du realm ?
+  # shellcheck source=lib/kcadmin.sh
+  source "$SCRIPT_DIR/lib/kcadmin.sh"
+  kc_admin_login > /dev/null 2>&1 || return 1
+  kc_admin_get "/default-default-client-scopes" 2>/dev/null | jq -e 'any(.[]; .name == "nonce-keycloak-js-22")' > /dev/null 2>&1
+}
 if [[ "$(kc_probe_sso_state "$KC_PORT")" == "up" ]]; then
   if kc_client_exists code-server; then ok "client Keycloak code-server présent"
   else todo "créer le realm, la fédération LDAP et le client code-server (sso-lab/setup-code-server-auth.sh)"
        run bash "$ROOT/sso-lab/setup-code-server-auth.sh" || fail "setup-code-server-auth.sh a échoué"; fi
-  if kc_client_exists infra; then ok "client Keycloak de pgAdmin (infra) présent"
+  # keycloak-js 22 (tous les frontends) exige `nonce` dans l'access_token, que
+  # Keycloak ≥ 25 n'y met plus : sans ce scope, boucle de connexion infinie
+  # dans toutes les apps (CLAUDE.md, « Keycloak 26 »). Lecture seule en --check.
+  if kc_nonce_scope_ok; then ok "scope nonce-keycloak-js-22 par défaut du realm"
+  else todo "poser le scope nonce-keycloak-js-22 (scripts/keycloak-nonce-compat.sh)"
+       run bash "$SCRIPT_DIR/keycloak-nonce-compat.sh" > /dev/null || fail "keycloak-nonce-compat.sh a échoué (le relancer : au premier passage Keycloak peut ne pas être prêt)"; fi
+  if kc_client_exists infra; then
+    if kc_client_enabled infra; then ok "client Keycloak de pgAdmin (infra) présent"
+    else note "client Keycloak de pgAdmin (infra) présent mais DÉSACTIVÉ : le pgAdmin partagé ne se connecte pas (décision en attente, to_do_global.md)"; fi
   else todo "créer le client Keycloak de pgAdmin (create-app-client.sh infra) — son secret est écrit dans infra/.env"
        run bash "$SCRIPT_DIR/create-app-client.sh" infra --port "$(envget infra/.env PORT_PGADMIN)" --redirect-path /oauth2/authorize > /dev/null \
          || fail "création du client pgAdmin impossible"; fi
@@ -532,6 +595,16 @@ if running storage-backend; then
 else
   $CHECK && todo "puis : partages de groupe de storage"
 fi
+# Sauvegarde nocturne : la ligne de crontab (backup-cron.sh ne change jamais une ligne existante).
+if command -v crontab > /dev/null 2>&1 && crontab -l 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -qF "$ROOT/scripts/backup.sh"; then
+  ok "sauvegarde nocturne planifiée (crontab)"
+else
+  todo "planifier la sauvegarde nocturne à 3 h (scripts/backup-cron.sh)"
+  if ! $CHECK; then
+    bash "$SCRIPT_DIR/backup-cron.sh" > "$STATE_DIR/install-backup-cron.log" 2>&1 \
+      || gap "sauvegarde : planifiée seulement en partie — bash scripts/backup-cron.sh --check (copie NAS : LAB_BACKUP_NAS, LAB_BACKUP_NAS_USER, ~/.lab-backup-nas)"
+  fi
+fi
 if ! $CHECK; then
   bash "$SCRIPT_DIR/get-ports-list.sh" > /dev/null 2>&1 || true
   bash "$SCRIPT_DIR/complete_404.sh" > /dev/null 2>&1 || true
@@ -581,9 +654,10 @@ Gestes qui restent humains, dans tous les cas :
     bash scripts/create-app-client.sh <une app>  (réapplique les réglages du realm).
   • Nom de domaine + DDNS chez le fournisseur ; ports 80 et 443 du routeur vers cette machine.
   • Mots de passe des comptes : sso-lab/.env (clés <UID>_PASSWORD), à transmettre à chacun.
-  • Sauvegardes : scripts/backup.sh existe, mais install.sh ne le planifie pas. Poser le cron
-    (crontab -e : 0 3 * * * /bin/bash <dépôt>/scripts/backup.sh > /dev/null 2>&1) et, pour la
-    copie NAS, LAB_BACKUP_NAS / LAB_BACKUP_NAS_USER dans le .env racine et ~/.lab-backup-nas.
+  • Sauvegardes : planifiées à 3 h par l'installation (scripts/backup-cron.sh). Pour la copie
+    NAS : LAB_BACKUP_NAS / LAB_BACKUP_NAS_USER dans le .env racine et ~/.lab-backup-nas (600),
+    puis bash scripts/backup-cron.sh --check. Elles ne sont pas encore chiffrées.
+  • Santé du lab à tout moment : bash scripts/lab-doctor.sh (lecture seule).
 Vérifier à tout moment : bash scripts/install.sh --check
 EOF
 [[ $N_GAP -eq 0 ]]

@@ -20,7 +20,7 @@
 #   bash scripts/dev-db.sh ensure <uid> [--gis]     provisionnement idempotent
 #   bash scripts/dev-db.sh ensure-lab                    rôle et base `lab` du cadriciel (LAB_PG_PASSWORD)
 #   bash scripts/dev-db.sh ensure-keycloak               rôle et base `keycloak` de Keycloak 26 (KEYCLOAK_PG_PASSWORD)
-#   bash scripts/dev-db.sh status lab|<uid> [--gis]      lecture seule : ce qui existe (code 0 = complet)
+#   bash scripts/dev-db.sh status lab|keycloak|<uid> [--gis]  lecture seule : ce qui existe (code 0 = complet)
 #   bash scripts/dev-db.sh rotate lab|<uid>              rotation à chaud du mot de passe du rôle
 #   bash scripts/dev-db.sh ensure-all               rejoue `ensure` pour tout ce que dev-roles.env
 #                                                   déclare (après recréation d'un volume)
@@ -334,7 +334,7 @@ SQL
 cmd_status() {
   local who="" gis=false a missing=0
   for a in "$@"; do case "$a" in --gis) gis=true ;; -*) die "Option inconnue : $a" ;; *) who="$a" ;; esac; done
-  [[ -n "$who" ]] || die "status : « lab » ou un uid attendu"
+  [[ -n "$who" ]] || die "status : « lab », « keycloak » ou un uid attendu"
   local role db key
   _one() {  # _one <container> <rôle> <base> <clé>
     local c="$1" r="$2" d="$3" k="$4" attrs owner pub
@@ -354,6 +354,8 @@ cmd_status() {
   }
   if [[ "$who" == "lab" ]]; then
     _one "$PG_CONTAINER" lab lab LAB_PG_PASSWORD
+  elif [[ "$who" == "keycloak" ]]; then
+    _one "$PG_CONTAINER" keycloak keycloak KEYCLOAK_PG_PASSWORD
   else
     registry_valid_uid "$who" || die "uid invalide : '${who}'"
     _one "$PG_CONTAINER" "dev_${who}" "dev_${who}" "DEV_PG_PASSWORD__${who}"
@@ -363,7 +365,7 @@ cmd_status() {
 }
 
 # Rejoue le provisionnement de tout ce que dev-roles.env déclare : la base du
-# cadriciel (LAB_PG_PASSWORD) et chaque développeur (DEV_PG_PASSWORD__<uid>).
+# cadriciel (LAB_PG_PASSWORD), celle de Keycloak (KEYCLOAK_PG_PASSWORD) et chaque développeur (DEV_PG_PASSWORD__<uid>).
 # Sert après la recréation d'un volume PostgreSQL (infra/init*/ ne crée plus
 # aucun schéma ni rôle applicatif) — appelé par setup2.sh en mode « tout le
 # lab ». Sur une instance déjà en place, ne change rien.
@@ -372,6 +374,11 @@ cmd_ensure_all() {
   local uid n=0 line
   if [[ -n "$(_roles_val LAB_PG_PASSWORD)" ]]; then
     cmd_ensure_lab; n=$((n + 1))
+  fi
+  # Base de Keycloak 26 : oubliée ici jusqu'au 2026-11-08, donc absente après la
+  # recréation du volume de dev-postgres (Keycloak ne redémarrait plus).
+  if [[ -n "$(_roles_val KEYCLOAK_PG_PASSWORD)" ]]; then
+    cmd_ensure_keycloak; n=$((n + 1))
   fi
   while IFS= read -r uid; do
     [[ -n "$uid" ]] || continue
