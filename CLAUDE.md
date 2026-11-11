@@ -182,7 +182,9 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
   se joignent plus que par tunnel SSH (`ssh -L 8080:localhost:8080 …`).
 - **`lab-admin` a deux niveaux** : la porte (`admins,developers`) et l'administration (`admins`,
   permission DRF par défaut `IsLabAdmin`). Toute nouvelle vue est d'admin tant qu'elle ne déclare
-  rien ; toute nouvelle route Angular porte `adminGuard`. Ne jamais recréer `lab-admin-backend`
+  rien ; toute nouvelle route Angular porte `adminGuard`. Seule exception backend (2026-11-11) :
+  `/api/spec-links/<app>/` (`IsLabMember`, lignes de l'appelant seulement ; l'inventaire
+  `MEMBER_ROUTES` est tenu par `DefaultDenyTests`). Ne jamais recréer `lab-admin-backend`
   sur une image antérieure au commit `c4449e8` avec `KEYCLOAK_REQUIRED_GROUPS=admins,developers`.
 - **`code-server` (`/code`) est réservé au groupe `admins`** (`OAUTH2_PROXY_ALLOWED_GROUPS`,
   `sso-lab/docker-compose.yml`) : il monte tout le dépôt, le socket Docker, `~/.ssh` et
@@ -321,6 +323,38 @@ construction ». Contrat et rapports : `chantiers/app-builder-lab/`.
   en service le dossier, hors des tests) — retiré ; un lien direct vers une page d'App Builder
   retombe sur l'accueil (défaut `redirectUri` du gabarit, voir « Pièges constatés ») ;
   `lab-runner` accumulait des processus Chromium zombies (corrigé le 2026-10-31 : `init: true`).
+
+**App Builder v2 (chantier `chantiers/app-builder-v2/`, en service depuis le 2026-11-11 ;
+non éprouvés : un vrai appel Claude/Mistral avec outils, Claude Code réel relié par MCP)** :
+- **Forme universelle, additive** (migrations `0011`, `0012`) : rôles applicatifs distincts de la
+  porte (`required_groups`), accès par modèle (`access` : owner/shared/group/parent/public_read/
+  global), machines à états, contraintes, tâches de fond, intégrations **du lab** (liste fermée),
+  API externes, extensions typées, `Endpoint.auth` (jwt/public/api_key/hmac/internal_key/ticket).
+  Un accès non décrit est un **avertissement**, pas un blocage (décision de nuit : les specs
+  « prêtes » d'hier le restent). Inventaire qui la justifie : `etude/01-inventaire-apps.md`.
+- **L'IA écrit par des opérations atomiques, jamais par un patch JSON en texte** : outils
+  `lire_elements`, `proposer_operations` (essai à blanc), `proposer_choix`, `verifier_spec`, boucle
+  bornée côté serveur (6 appels, 90 s), même code pour Claude et Mistral ; seul du texte reste
+  dans l'historique ; la spec part en **index compact**, lue en base, jamais depuis le navigateur.
+  Une proposition s'applique par `POST /api/apps/<id>/operations/` avec `base_version` (409 si la
+  spec a changé). Ne pas réintroduire `PATCH_READY`/`CHOICES_*` ni de fusion côté TypeScript.
+- **Jeton d'abonnement Claude (`sk-ant-oat…`) refusé au coffre** : les conditions d'Anthropic
+  réservent l'OAuth d'abonnement à Claude Code et aux applications d'Anthropic (vérifié le
+  2026-11-11, code.claude.com/docs/en/legal-and-compliance). La voie « abonnement » est **Claude
+  Code ou Vibe de l'utilisateur, relié au serveur MCP d'App Builder** (`POST /app-builder-api/api/mcp/`,
+  jeton personnel `abt_…` haché, 90 j au plus, révocable, portée lire/écrire, éventuellement lié
+  à une spec ; page `/connexion-ia`). Un `abt_` n'ouvre que `/api/mcp/` ; un jeton Keycloak n'y
+  entre pas. **Limite assumée** : le jeton ne revérifie pas les groupes Keycloak de son titulaire
+  pendant sa durée de vie (il ne donne accès qu'à ses propres specs). Le jeton est posé par
+  l'utilisateur lui-même : ni lab-admin ni le moteur ne le transportent.
+- **Passerelle** : la remise porte `fingerprint` (sha256 du contenu remis, stable tant qu'il ne
+  change pas — `updated_at` change à chaque enregistrement automatique et ne sert pas de témoin) ;
+  lab-admin garde le lien projet ↔ spec (`spec_links`), signale une spec modifiée et la transmet
+  au projet par un **ticket** (`POST /projects/<app>/tickets`, route existante du moteur) que les
+  règles d'agent font traiter avant le lot suivant. Le moteur n'a pas changé.
+- Piège : `PUT /api/apps/<id>/` **recrée tous les éléments enfants avec de nouveaux ids**. Le graphe
+  et les liens `edit.query` passent par une correspondance d'ids côté front (`resolveId`) ; tout
+  nouveau lien par id vers un élément de spec doit en tenir compte (l'id de la spec, lui, est stable).
 
 ### Règles de développement imposées à tout projet (IA comprises)
 
