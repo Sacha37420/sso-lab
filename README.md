@@ -1130,7 +1130,7 @@ Tous lancés avec `bash scripts/<nom>` depuis la racine `dev/` (résolvent eux-m
 dev/
 ├── README.md
 ├── CLAUDE.md               ← guide détaillé pour les agents IA
-├── .gitignore               ← ignore les .env, .ports, ports.env, ldap/init.ldif et .debug/
+├── .gitignore               ← ignore les .env, .ports, ports.env, ldap/init.ldif
 ├── .ports                   ← registre des ports (géré par new-app.sh) — non commité
 ├── .app-descriptions        ← vitrine publique (page 404)
 ├── .env / bbox.env          ← non commités
@@ -1157,5 +1157,5 @@ dev/
     └── frontend/e2e/cloisonnement.spec.ts   ← voir « Tests end-to-end »
 ```
 
-> **Journal de bugs** : les incidents rencontrés et leurs corrections sont documentés dans
-> `.debug/` (ignoré par git).
+> **Journal de bugs** : les pièges rencontrés et leurs leçons sont dans `CLAUDE.md`, section
+> « Pièges constatés » (l'ancien dossier `.debug/` y a été réuni le 2026-11-11).

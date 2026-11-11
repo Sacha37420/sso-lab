@@ -465,6 +465,24 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
   depuis plus de deux semaines », verrou généré avec `--before=<date>` et installation par `npm ci`.
 - **L'image pgAdmin ne démarre pas sous `cap_drop ALL` seul** (son Python porte une capacité de
   fichier) : il lui faut `NET_BIND_SERVICE`. Démarrage : 35 à 55 s.
+- **L'email sert d'identité dans plusieurs apps — non résolu** (relevé de juin, repris de l'ancien
+  `.debug/` le 2026-11-11) : changer l'email d'un compte dans l'annuaire rend orphelines ses
+  données là où elles sont rattachées à l'email (`app-builder` : `app_specs.owner_email` et
+  `mcp_tokens.owner_email` ; `traitement-de-fichiers-compils` : `utilisateurs.email` ; plus
+  largement tout `owner_email` ; `google-agenda` de dev2 en clé primaire). Contournement : `UPDATE`
+  de l'ancien vers le nouvel email dans une transaction, parent avant enfants. Vrai correctif :
+  rattacher au `sub` Keycloak, immuable.
+- **Derrière un chemin Caddy qui retire le préfixe (`handle_path`), une URL absolue part hors de
+  l'app** : `/assets/…` est demandé à la racine du domaine et rend 404 (vu sur `apps.json` de
+  l'ancien cadriciel, puis sur les polices Foyer). Toujours une URL relative au `base href`.
+- **« Unexpected error when handling authentication request » à la connexion** : la vraie cause
+  n'est que dans `docker logs keycloak` (vu : `LDAP: error code 49`, mot de passe de bind LDAP
+  désynchronisé par une régénération de secrets jamais appliquée). Une édition à la main des
+  fichiers `olcDatabase=*.ldif` d'OpenLDAP doit retirer leur en-tête `# CRC32`, sinon
+  `slapd`/`slaptest` refusent la configuration.
+- **Les appels d'administration à Keycloak passent par l'adresse interne** (`keycloak:8080` depuis
+  un conteneur, `localhost:8080` sur l'hôte), jamais par l'URL publique : la box n'a pas toujours
+  le hairpin NAT, et le jeton reste sur la machine.
 
 ### État de la bascule
 

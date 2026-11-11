@@ -247,7 +247,7 @@ echo -e "\033[0;32m✓ Adresses réseau propagées.\033[0m"
 # volumes (donc les vraies valeurs) sont préservés par clean2.sh. Un simple
 # `setup2.sh --yes` répété désynchroniserait alors le .env des services réels
 # → Keycloak ne peut plus bind LDAP (« Invalid Credentials », page d'erreur
-# générique à la connexion). Vécu en prod — voir .debug/.
+# générique à la connexion). Vécu en prod — voir CLAUDE.md, « Pièges constatés ».
 _IS_FIRST_SETUP=false
 docker volume inspect sso-lab_ldap-data > /dev/null 2>&1 || _IS_FIRST_SETUP=true
 if $RESTART_SSO_LAB || { [[ -z "$APP_NAME" ]] && $_IS_FIRST_SETUP; }; then

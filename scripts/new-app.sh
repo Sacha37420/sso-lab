@@ -391,7 +391,7 @@ add_schema() {
 # une fois avec les vraies valeurs (→ .env, gitignored). Ne JAMAIS appeler ceci
 # directement pour écrire .env.example avec de vraies valeurs — c'est exactement
 # le bug corrigé ici (SECRET_KEY/DB_PASSWORD réels commités dans .env.example,
-# cf. .debug/ — a fuité dans l'historique public de plusieurs apps).
+# a fuité dans l'historique public de plusieurs apps).
 # $1 = valeur DB_PASSWORD/POSTGIS_PASSWORD à écrire, $2 = valeur SECRET_KEY à écrire
 _render_env_content() {
   local schema="$1" has_db="$2" client_id="$3" bport="$4" fport="$5" \
