@@ -113,9 +113,9 @@ is_placeholder() { [[ -z "$1" || "$1" == *CHANGE_ME* || "$1" == *VOTRE_IP_WAN* |
 running() { docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null | grep -q true; }
 has_volume() { docker volume inspect "$1" > /dev/null 2>&1; }
 # sso-lab déjà initialisé ? L'annuaire garde ses mots de passe dans ldap-data.
-# (keycloak-data est la base H2 de Keycloak 22, plus montée depuis Keycloak 26 :
-# une machine neuve ne la crée jamais — elle ne peut plus servir de témoin.)
-sso_initialized() { has_volume sso-lab_ldap-data || has_volume sso-lab_keycloak-data; }
+# (keycloak-data, base H2 de Keycloak 22, a été retiré le 2026-11-11 : fin du
+# retour arrière de Keycloak 26 — il ne sert plus de témoin.)
+sso_initialized() { has_volume sso-lab_ldap-data; }
 unit_running() {  # au moins un conteneur en service pour ce projet Compose
   [[ -n "$(docker ps -q --filter "label=com.docker.compose.project=$1" 2>/dev/null)" ]]
 }

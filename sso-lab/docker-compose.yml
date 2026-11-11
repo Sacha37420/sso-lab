@@ -33,9 +33,6 @@ networks:
 volumes:
   ldap-data:
   ldap-config:
-  # Base H2 de Keycloak 22 : plus montée par le service, gardée pour le retour
-  # arrière (chantiers/failles/keycloak/PROCEDURE.md § 6). À retirer ensuite.
-  keycloak-data:
   caddy-data:
   code-server-data:
 

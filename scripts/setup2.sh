@@ -239,8 +239,9 @@ echo -e "\033[0;32m✓ Adresses réseau propagées.\033[0m"
 # .env garderait des mots de passe qui ne correspondent plus à rien.
 #
 # ⚠ Sur tout le lab (sans nom d'app) et SANS --restart-sso-lab, ne le lancer que
-# si le volume d'identité sso-lab_keycloak-data n'existe pas encore (premier
-# setup). Sur un lab déjà initialisé, init-secrets.sh régénère quand même
+# si le volume de l'annuaire sso-lab_ldap-data n'existe pas encore (premier
+# setup ; keycloak-data, base H2 de Keycloak 22, n'est plus un témoin depuis
+# Keycloak 26 — le realm est dans la base keycloak de dev-postgres). Sur un lab déjà initialisé, init-secrets.sh régénère quand même
 # LDAP_ADMIN_PASSWORD/LDAP_CONFIG_PASSWORD/KEYCLOAK_ADMIN_PASSWORD dans
 # sso-lab/.env — mais SANS jamais les appliquer à LDAP/Keycloak, dont les
 # volumes (donc les vraies valeurs) sont préservés par clean2.sh. Un simple
@@ -248,7 +249,7 @@ echo -e "\033[0;32m✓ Adresses réseau propagées.\033[0m"
 # → Keycloak ne peut plus bind LDAP (« Invalid Credentials », page d'erreur
 # générique à la connexion). Vécu en prod — voir .debug/.
 _IS_FIRST_SETUP=false
-docker volume inspect sso-lab_keycloak-data > /dev/null 2>&1 || _IS_FIRST_SETUP=true
+docker volume inspect sso-lab_ldap-data > /dev/null 2>&1 || _IS_FIRST_SETUP=true
 if $RESTART_SSO_LAB || { [[ -z "$APP_NAME" ]] && $_IS_FIRST_SETUP; }; then
   echo -e "\033[0;36m══ 3/7  Génération des secrets\033[0m"
   SECRET_ARGS=()

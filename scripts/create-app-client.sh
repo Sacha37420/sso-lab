@@ -115,6 +115,14 @@ if [[ $# -lt 1 ]] || [[ "${1:-}" == "*" ]]; then
   while IFS= read -r _compose; do
     _name="$(basename "$(dirname "$_compose")")"
     [[ "$_name" == "sso-lab" ]] && continue
+    # Sans .keycloak-client-opts : pas de client. En créer un donnerait un client
+    # public sans --require-group (ouvert à tout le realm) pour lab-media ou
+    # runner, et réécrirait le client infra (pgAdmin), désactivé à dessein —
+    # install.sh le crée par son propre appel (2026-11-11).
+    if [[ ! -f "$(dirname "$_compose")/.keycloak-client-opts" ]]; then
+      echo "  ■ $_name ignoré (pas de .keycloak-client-opts)"
+      continue
+    fi
     _found=$(( _found + 1 ))
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

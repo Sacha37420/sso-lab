@@ -11,7 +11,7 @@
 # Enchaîne, pour cette app uniquement :
 #   1. clean2.sh <app>            — arrêt + suppression des containers/volumes
 #   2. sso-lab                    — démarré s'il ne tourne pas déjà, attente Keycloak
-#   3. create-app-client.sh <app> — client Keycloak (créé/mis à jour)
+#   3. create-app-client.sh <app> — client Keycloak (créé/mis à jour ; rien sans .keycloak-client-opts)
 #   4. ensure-schemas.sh <app>    — schéma Postgres (rattrapage à chaud)
 #   5. recompose_docker.sh --app <app> --force — build + démarrage des containers
 #
@@ -183,7 +183,13 @@ fi
 #     `public` et croit ses migrations faites — backend « up », base vide.
 CLIENT_FAILED=false
 echo -e "\033[0;36m══ $APP_NAME — client Keycloak\033[0m"
-if bash "$SCRIPT_DIR/create-app-client.sh" "$APP_NAME"; then
+# Sans .keycloak-client-opts, aucun client : create-app-client.sh en créerait un
+# public SANS --require-group, donc ouvert à tout compte du realm. Toute app en a
+# un (new-app.sh le pose) ; les unités qui n'en ont pas n'authentifient pas par
+# Keycloak (lab-media : ses apps décident par leur hook — 2026-11-11).
+if [[ ! -f "$APP_DIR_UNIT/.keycloak-client-opts" ]]; then
+  echo -e "\033[0;33m⚠ $APP_NAME — pas de .keycloak-client-opts : aucun client Keycloak créé.\033[0m"
+elif bash "$SCRIPT_DIR/create-app-client.sh" "$APP_NAME"; then
   echo -e "\033[0;32m✓ $APP_NAME — client Keycloak configuré.\033[0m"
 else
   CLIENT_FAILED=true

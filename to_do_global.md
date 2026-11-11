@@ -66,19 +66,24 @@ test est fait, et coché dans la feuille de route de l'app.
       l'adresse publique, où `realms/master` répond 404). Décider, en ta présence, de poser
       `KC_HOSTNAME_ADMIN=http://localhost:8080` (redémarre Keycloak), puis l'ouvrir par tunnel.
       La carte morte est retirée de lab-admin.
-- [ ] **Le 2026-11-08** : fin de la fenêtre de retour arrière de Keycloak (PROCEDURE.md § 6), et fin
-      du gel. Ensuite, faire tourner le mot de passe PostgreSQL (`rotate-db-password.sh`) : il est
-      apparu dans un journal de session.
+- [x] **Le 2026-11-08** : fin de la fenêtre de retour arrière de Keycloak (PROCEDURE.md § 6), et fin
+      du gel — clos le 2026-11-11 (volume H2 retiré du compose et de `backup.sh`, image d'export
+      supprimée, témoin de `setup2.sh` passé à `ldap-data`). L'image `keycloak:22.0` reste : `dev2/` s'en sert.
+- [ ] Ⓟ Faire tourner le mot de passe PostgreSQL (`rotate-db-password.sh --yes`, puis `reset_url.sh`, puis
+      `app-restart.sh` de chaque app) : il est apparu dans un journal de session. Le 2026-11-11, refusé à
+      Claude par le contrôle des permissions : à lancer par toi (images vérifiées conformes pour les 16 apps).
 
 **Dans les apps** (détail dans leur feuille de route)
 - [ ] peripheriques : direct H.264, WebRTC depuis le WAN, révocation pendant une lecture, HD USB Camera.
 - [ ] 2026-11-08 — peripheriques : les lots 5 (coupure, pont google-agenda) et 6 (haut-parleur) tournent
       depuis le 2026-11-05 (conteneurs recréés 3 min après `d6ea9e7`) [D], mais `deployed/peripheriques.json`
       garde `2080f19` : ce déploiement n'a pas été enregistré. Parcours réels à faire.
-- [ ] 2026-11-08 — peripheriques : la déconnexion échoue (`LOGOUT_ERROR invalid_redirect_uri`, 3 fois en
+- [x] 2026-11-08 — peripheriques : la déconnexion échoue (`LOGOUT_ERROR invalid_redirect_uri`, 3 fois en
       72 h dans le journal de Keycloak) : le frontend renvoie vers `https://<DOMAIN>` (racine), qui n'est pas
       dans les URI de retour du client depuis `--prune-uris` [C]. À corriger côté frontend (retour sous
       `/peripheriques/`) ; vérifier les autres apps au même geste.
+      2026-11-11 : `kc.logout({ redirectUri: document.baseURI })` dans les 18 frontends et les deux gabarits,
+      commité et poussé. **En service seulement au prochain déploiement de chaque app** (test-video : déployée).
 - [ ] code-route : les 8 scénarios de `route-robot.md` (lot 2).
 - [ ] traitement-de-fichiers-compils : partage à un destinataire puis retrait ; recadrage, filtres, PDF (lot 3).
 - [ ] carto-lab : QGIS ouvre une couche publiée (lot 2).
@@ -106,7 +111,7 @@ Les 16 failles F1 à F16 du contrat sont corrigées et **en service** ; tout est
       `SECRET_KEY` peut tourner sans rien détruire (fait pour craft-lab).
 - [x] **F8** conciergerie, **F9** craft-lab, **F10** lab-admin : voir leurs feuilles de route.
 - [x] **F11** : Keycloak 26.8.1 en `start --optimized` sur PostgreSQL. La console et le realm `master` ne sont plus servis.
-      Retour arrière possible jusqu'au 2026-11-08, et **gel** jusque-là (CLAUDE.md, « Keycloak 26 »).
+      Retour arrière clos et gel levé le 2026-11-11 (CLAUDE.md, « Keycloak 26 »).
 - [x] **F13, en partie** : `e2e_member` n'est plus dans `admins`. Le runner monte toujours tout le dépôt (R1 ouvert).
 - [x] **F14 / W1** : `lab-workspace:latest` en Node 22 (`workspace/verify.sh` 293/293). Un espace déjà ouvert garde l'ancienne image.
 - [x] **F15** : bail fixe `192.168.1.50` pour le serveur sur la Freebox.
@@ -124,7 +129,7 @@ Les 16 failles F1 à F16 du contrat sont corrigées et **en service** ; tout est
   - `manage-users` de restauration à restreindre par les permissions fines de Keycloak 26 ;
   - `code-server`, `carto-ogc` : clients confidentiels, joker retiré, mais aucun PKCE ;
   - `dev2/`.
-- [ ] Le 2026-11-08 : fin de la fenêtre de retour arrière de Keycloak (PROCEDURE.md § 6).
+- [x] Le 2026-11-08 : fin de la fenêtre de retour arrière de Keycloak (PROCEDURE.md § 6) — close le 2026-11-11.
 
 ## État au 2026-10-31, après le chantier « urgences » (`chantiers/urgences/`)
 
@@ -229,7 +234,7 @@ en service ».
   - `[service-account]` : restauration (vrais rôles, U4), et peripheriques et lab-admin ;
   - storage `[volume]` (volume `external` d'`infra`, à dessein) ; lab-admin `[bind]` (dépôt monté, à dessein).
   Sans refus : app-builder, oauth-hub.
-- [ ] 2026-11-08 : `deploiement/carto-lab/setup-ogc-auth.sh:25` cherche `scripts/` et `sso-lab/` dans
+- [x] 2026-11-08 : `deploiement/carto-lab/setup-ogc-auth.sh:25` cherche `scripts/` et `sso-lab/` dans
       `deploiement/` et ne marche plus depuis la bascule (carto-lab, lot 2).
 - [ ] 2026-11-08 : `.keycloak-client-opts` reste suivi par git dans conciergerie, analyse-lora et
       arbre-genealogique (`git ls-files`) — la case de conciergerie était cochée à tort, décochée.
@@ -244,7 +249,7 @@ en service ».
 
 ### T2 — Un point d'entrée unique et une installation sans surprise · P2 · S–M
 
-- [ ] **`install.sh --check` ne conclut pas « rien à faire » sur la machine en service** [C] : il veut déployer `test-video`. Il déploierait en plus l'arbre de travail d'un projet privé sans `app-sync`.
+- [x] **`install.sh --check` ne conclut pas « rien à faire » sur la machine en service** [C] — 2026-11-11 : test-video déployée (`93f0b1b`, tests backend et cloisonnement `ok`), `--check` rend « Rien à faire », code 0. : il veut déployer `test-video`. Il déploierait en plus l'arbre de travail d'un projet privé sans `app-sync`.
       2026-11-08 : toujours vrai (seule action annoncée). `~/dev/deploiement/test-video` est encore à `30a678b`,
       `origin/main` à `c2f21bb` (lot 2 fait, jamais testé ni déployé). Ⓟ : mettre à jour et déployer, ou poser
       `.no-autodeploy`.
@@ -263,10 +268,12 @@ en service ».
       `developers`) (nuit 2026-11-08, PR « Nuit 2026-11-08 » de sso-lab, à fusionner).
 - [ ] 2026-11-08 [C] `install.sh` dit « client Keycloak de pgAdmin (infra) présent » alors qu'il est désactivé :
       il le dit désormais (note, pas un manque) (nuit 2026-11-08, PR « Nuit 2026-11-08 » de sso-lab, à fusionner). La décision reste à prendre (voir en tête).
-- [ ] 2026-11-08 [C] `lab-media` : aucun client Keycloak `lab-media` n'existe aujourd'hui (le service a été
+- [x] 2026-11-08 [C] `lab-media` : aucun client Keycloak `lab-media` n'existe aujourd'hui (le service a été
       déployé à la main), mais `setup_unit.sh:186` appelle `create-app-client.sh` sans condition et
       `lab-media/` n'a pas de `.keycloak-client-opts` : une installation neuve créerait un client public sans
-      groupe. Le point ci-dessous reste ouvert.
+      groupe. 2026-11-11 : `setup_unit.sh` et le mode « toutes les apps » de `create-app-client.sh` ne créent
+      plus de client pour une unité sans `.keycloak-client-opts` (lab-media, runner, infra). Point ci-dessous ouvert
+      (lab-media déployé par `setup_unit.sh` sans le profil `capture`).
 - [ ] **`lab-media` est traité comme une app** par `install.sh` (l. 510-520) et par `setup2.sh --yes` [C/D] : risque qu'un client Keycloak sans groupe soit créé pour lui. Le corriger soit par `lab-media/.no-autodeploy`, soit par un `units.conf` (nom, type infra/cadriciel/app, priorité, RAM, Keycloak oui/non) lu par `install.sh`, `setup2.sh` et `app-priorities.conf`.
 - [ ] **Répartiteur `scripts/lab`**, sans supprimer aucun script :
   - `install [--check]`
@@ -287,8 +294,9 @@ en service ».
   - [x] corriger le message faux « rien n'est planifié » (`install.sh`, README) — 2026-11-01.
 - [ ] **Routeur** : Freebox par défaut dans la doc. Renommer `bbox.env` en `router.env` (renommage différé, plusieurs scripts le lisent).
 - [ ] **Essais rejouables de l'installation** : `install.sh --check` sur un clone jetable, et `validate-app.sh` sur des dépôts piégés (`scripts/tests/`).
-- [ ] 2026-11-08 `shellcheck` n'est pas installé sur l'hôte : les scripts de la nuit ne sont passés que par
-      `bash -n`. Ⓟ installer `shellcheck` (paquet Debian) et le jouer sur `scripts/`.
+- [x] 2026-11-08 `shellcheck` n'est pas installé sur l'hôte : les scripts de la nuit ne sont passés que par
+      `bash -n`. 2026-11-11 : joué par `docker run koalaman/shellcheck:v0.10.0 -S warning -x` sur tout `scripts/` :
+      aucune erreur, 7 avertissements mineurs (SC2010 ×2 dans `backup.sh`, SC2034 ×3, SC2120, SC2155).
 - **Note d'installation au 2026-11-08 : quelques obstacles** (détail : `rapports-auto/nuit-2026-11-08.md`,
   mission 1). Les deux bloquants (Keycloak 26 sans base, superutilisateur absent de l'annuaire) sont
   corrigés sur la branche de la nuit ; restent les gestes humains (domaine, DDNS, box, fiche GitHub
@@ -510,7 +518,7 @@ Ces points ont été écrits et testés sur des doubles, jamais en réel.
 Détail et commandes : `rapports-auto/nuit-2026-11-08.md`, mission 4. Coût : S (< 1 h), M (une demi-journée), L.
 
 **P1 — sécurité, perte de données**
-- [ ] Ⓟ [C] **Fin de la fenêtre de retour arrière de Keycloak aujourd'hui** : décider de la clore (retirer le
+- [x] Ⓟ [C] **Fin de la fenêtre de retour arrière de Keycloak aujourd'hui** (close le 2026-11-11, sauf la rotation, en tête) : décider de la clore (retirer le
       volume `sso-lab_keycloak-data` du compose et de `backup.sh`, les images `keycloak-export22:bascule` et
       `quay.io/keycloak/keycloak:22.0`), puis lever le gel et faire tourner le mot de passe PostgreSQL
       (déjà en tête). Gain : fin du gel ; `install.sh` ne dépend plus de ce volume (corrigé cette nuit). S.
@@ -542,7 +550,7 @@ Détail et commandes : `rapports-auto/nuit-2026-11-08.md`, mission 4. Coût : S 
       sa route de santé).
 
 **P3 — confort**
-- [ ] Ⓟ [C] Conteneur oublié `upbeat_wozniak` (image `lab-media-capture`, ffmpeg d'essai WHIP du chantier
+- [x] Ⓟ [C] Conteneur oublié `upbeat_wozniak` (image `lab-media-capture`, ffmpeg d'essai WHIP du chantier
       « haut-parleur », sans réseau) tourne depuis le 2026-11-05 : `docker rm -f upbeat_wozniak`. S.
 - [ ] [C] Ni `Strict-Transport-Security` ni `Content-Security-Policy` sur les pages servies par Caddy
       (seulement `nosniff` et `SAMEORIGIN`). Gain : défense en profondeur. Coût M (CSP à éprouver app par app).

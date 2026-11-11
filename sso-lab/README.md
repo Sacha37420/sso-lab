@@ -7,7 +7,7 @@ Lab d'apprentissage SSO/LDAP pour préparer un poste Développeur Intégrateur.
 |---|---|---|
 | OpenLDAP | osixia/openldap:1.5.0 | 389 |
 | phpLDAPadmin | osixia/phpldapadmin:0.9.0 | 8081 |
-| Keycloak | keycloak/keycloak:22.0 | 8080 |
+| Keycloak | sso-lab-keycloak:26.8.1 (base `keycloak` de `dev-postgres`) | 8080 (127.0.0.1) |
 | Spring App | (étape 3) | 8082 |
 
 ## Lancement

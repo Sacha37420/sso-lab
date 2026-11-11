@@ -524,7 +524,7 @@ de Keycloak, domaine, routeur, `~/edge-router/`) : `README.md` §1.2.
   `keycloak-nonce-compat.sh` — sur une machine neuve Keycloak ne pouvait pas démarrer, et sans le
   scope les apps bouclaient à la connexion. L'étape 7 prépare maintenant la base `keycloak` (infra
   démarrée pour elle) puis pose le scope. Le témoin « sso-lab initialisé » est le volume de
-  l'annuaire (`ldap-data`), plus `keycloak-data` (H2 de Keycloak 22, plus monté).
+  l'annuaire (`ldap-data`), dans `install.sh` comme dans `setup2.sh` (2026-11-11).
 - Le superutilisateur doit exister dans `init.ldif` (membre de `admins` et `developers`) : le
   gabarit ne connaît que `sacha`, `install.sh` le signale. Le gabarit ne contient plus `dom`,
   `harem`, ni `e2e_member` dans `admins` (ils y étaient encore le 2026-11-08).
@@ -547,8 +547,7 @@ fait rien et dit ce qui serait sauvegardé ; `--list` montre les copies ; `--loc
 
 - **Contenu** (un dossier daté par passage) : chaque base des deux instances PostgreSQL
   (`pg_dump -Fc`, restaurable base par base) et leurs rôles ; l'annuaire LDAP (`slapcat`) ; les
-  volumes `infra_storage-media`, `sso-lab_keycloak-data`, `sso-lab_caddy-data`,
-  `lab-media_config` ; et tout ce qui n'est dans aucun dépôt (`.env`, registres, `.lab-state/`,
+  volumes `infra_storage-media`, `sso-lab_caddy-data`, `lab-media_config`, `lab-media_state` ; et tout ce qui n'est dans aucun dépôt (`.env`, registres, `.lab-state/`,
   `init.ldif`, `~/edge-router/`, `chantiers/`). **Pas** les enregistrements de `lab-media`, ni les caches, ni
   `~/lab-work`.
 - **Deux copies** : `~/sauvegardes/lab/` et le NAS (partage et compte dédié dans le `.env`
@@ -567,7 +566,7 @@ fait rien et dit ce qui serait sauvegardé ; `--list` montre les copies ; `--loc
   bases restaurées dans des PostgreSQL jetables avec le même nombre de tables et de lignes qu'en
   service. **Non éprouvé** : remonter un lab entier sur une machine neuve. Depuis
   Keycloak 26 (2026-11-01), le realm est dans la base `keycloak` de `dev-postgres`, sauvegardée avec
-  les autres bases ; le volume `sso-lab_keycloak-data` n'est plus que la copie de retour arrière de 22.
+  les autres bases (le volume H2 de 22 n'est plus sauvegardé depuis le 2026-11-11).
 - Piège : un conteneur lancé avec `--cap-drop ALL` ne lit pas un fichier `600` d'un autre
   utilisateur, même en root — le lancer sous l'identité de l'appelant (`--user`).
 
@@ -1220,11 +1219,12 @@ perte (comptes, secrets, clé de signature identiques). Procédure et essais :
 - Hostname v2 : `KC_HOSTNAME=${KEYCLOAK_HOSTNAME_URL}` (URL complète, `/auth` compris),
   `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`, `KC_PROXY_HEADERS=xforwarded`. `KC_HOSTNAME_URL`,
   `KC_PROXY`, `KC_HOSTNAME_STRICT*` n'existent plus.
-- **Retour arrière possible jusqu'au 2026-11-08** : le volume H2 `sso-lab_keycloak-data` de 22
-  est intact (PROCEDURE.md § 6). Jusque-là, **gel** : ni `create-app-client.sh`, ni `add-user.sh`,
-  ni création de projet, ni rotation de secret — tout ce qui est écrit dans 26 serait perdu par un
-  retour. Ensuite : retirer ce volume du compose et de `backup.sh`, supprimer les images
-  `keycloak-export22:bascule` et `quay.io/keycloak/keycloak:22.0`.
+- **Retour arrière clos le 2026-11-11, gel levé** : le volume `sso-lab_keycloak-data` (H2 de 22) est
+  retiré du compose et de `backup.sh`, l'image `keycloak-export22:bascule` supprimée. Le volume
+  lui-même reste sur le disque (2 Mo, plus rien ne le lit) : `docker volume rm sso-lab_keycloak-data`
+  quand on veut. **Ne pas supprimer `quay.io/keycloak/keycloak:22.0`** : c'est l'image du Keycloak
+  de `dev2/` (`keycloak2`). `setup2.sh --restart-sso-lab` vide encore l'annuaire mais plus le realm
+  (il est dans la base `keycloak`) : non réécrit, à ne pas lancer sans relire.
 
 `create-app-client.sh --no-env` crée un client **sans écrire de `<app>/.env`** : pour un client dont
 l'application vit hors de `dev/` (application de bureau, autre dépôt). Sans lui, le script créait un
