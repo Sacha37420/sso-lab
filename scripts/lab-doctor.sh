@@ -78,6 +78,31 @@ else bad "pg_hba.conf : $(tr '\n' ' ' <<< "$out") (CLAUDE.md, « Base de donnée
 section "3. Partages de groupe de storage"
 if bash "$SCRIPT_DIR/storage-shares.sh" --check > /dev/null 2>&1; then ok "tous présents"
 else bad "partages manquants ou différents (bash scripts/storage-shares.sh --check)"; fi
+section "3 bis. oauth-hub et tâches de nuit"
+# Fiche GitHub d'oauth-hub : sans client_id + secret, ni création de projet ni éditeur.
+# (fait aussi par install.sh --check, sauté en --quick)
+_oh="$(docker exec oauth-hub-backend python manage.py provider_credentials status github 2>/dev/null)"; _rc=$?
+case "$_rc" in
+  0) ok "oauth-hub : fiche GitHub complète" ;;
+  3) bad "oauth-hub : fiche GitHub sans identifiants (bash scripts/install.sh les demande à la fin)" ;;
+  4) bad "oauth-hub : fiche GitHub absente" ;;
+  *) warn "oauth-hub : état de la fiche GitHub illisible (conteneur arrêté, ou image antérieure à provider_credentials)" ;;
+esac
+
+# Tâches de nuit (automatisation/, chantier nuit-auto I6)
+_auto="$(registry_state_dir 2>/dev/null)/auto/runs"
+if crontab -l 2>/dev/null | grep -q 'automatisation/bin/auto.sh'; then
+  _er="$(ls -1d "$_auto"/*/ 2>/dev/null | sort | tail -1)"
+  if [[ -z "$_er" ]]; then warn "tâches de nuit planifiées, aucun passage enregistré"
+  else
+    _st="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("statut","?"), d.get("date","?"), d.get("tache","?"))' "$_er/etat.json" 2>/dev/null)"
+    _age_d=$(( ( $(date +%s) - $(stat -c %Y "$_er") ) / 86400 ))
+    case "${_st%% *}" in
+      fini) (( _age_d <= 2 )) && ok "tâches de nuit : dernier passage fini (${_st#* })" || bad "tâches de nuit : aucun passage depuis ${_age_d} jours" ;;
+      *) bad "tâches de nuit : dernier passage « ${_st:-illisible} » (bash automatisation/bin/auto.sh etat)" ;;
+    esac
+  fi
+fi
 
 # ── 4 ────────────────────────────────────────────────────────────────────────
 section "4. Sauvegarde"

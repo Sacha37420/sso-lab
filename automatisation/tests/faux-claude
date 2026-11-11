@@ -1,0 +1,100 @@
+#!/bin/bash
+# Faux « claude » des essais du moteur — installé à /usr/local/bin/claude dans une image de test
+# (FROM lab-workspace:latest). N'appelle rien : simule une session d'après le SCÉNARIO, lu dans
+# le jeton (CLAUDE_CODE_OAUTH_TOKEN=faux-<scénario>-<aléa>), seul moyen de le choisir sans
+# ajouter de variable ni de montage au conteneur de mission.
+# Trace chaque appel dans /home/coder/.faux-appels (phase, session, options) pour les essais.
+set -u
+[[ "${1:-}" == --version ]] && { echo "9.9.9 (Claude Code factice)"; exit 0; }
+tok="${CLAUDE_CODE_OAUTH_TOKEN:-}"; scen="${tok#faux-}"; scen="${scen%%-*}"
+sid=""; resume=""; maxt=""; prompt=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --session-id) sid="$2"; shift ;;
+    --resume) resume="$2"; sid="$2"; shift ;;
+    --max-turns) maxt="$2"; shift ;;
+    --model|--output-format) shift ;;
+    -p|--dangerously-skip-permissions) ;;
+    *) prompt="$1" ;;
+  esac
+  shift
+done
+[[ -n "$sid" ]] || sid="00000000-0000-4000-8000-000000000000"
+resultat() {  # resultat <is_error> <subtype> <texte>
+  printf '{"type":"result","subtype":"%s","is_error":%s,"num_turns":3,"result":"%s","session_id":"%s"}\n' "$2" "$1" "$3" "$sid"
+}
+[[ "$prompt" == "Réponds uniquement par le mot OK." ]] && { [[ "$scen" == noauth ]] && { resultat true error "Invalid API key"; exit 1; }; resultat false success OK; exit 0; }
+
+phase="$(sed -n 's/^- phase : //p' /entree/mission.md)"
+echo "phase=$phase sid=$sid resume=${resume:-} maxt=${maxt:-} scen=$scen user=$(id -u) cwd=$PWD net=$(cat /sys/class/net/eth0/address 2>/dev/null | head -c 2)" >> /home/coder/.faux-appels
+mapfile -t montages < <(sed -n 's/^| [^|]* | \(\/work\/[^ ]*\) | .*/\1/p' /entree/mission.md)
+
+ecrire_sorties() {  # ecrire_sorties <charge> [texte en plus]
+  {
+    echo "# Rapport factice ($phase)"
+    echo
+    echo "Cibles : ${montages[*]}"
+    echo "${2:-}"
+  } > /sortie/rapport.md
+  cat > /sortie/resume.json <<EOF
+{"version":1,"statut":"fini","charge":"$1","titre_pr":"Essai : correctif factice","constats":[{"gravite":"basse","cible":"zzautoa","titre":"constat factice","fichier":"backend/views.py:1","corrige":true}],"tests_ajoutes":0}
+EOF
+}
+modifier_tout() {
+  local m
+  for m in "${montages[@]}"; do
+    if [[ "$m" == /work/dev ]]; then printf 'echo corrigé\n' >> "$m/scripts/outil.sh"
+    else printf '# corrigé par la nuit (%s)\n' "$phase" >> "$m/backend/views.py"; fi
+  done
+}
+
+case "$scen" in
+  ok)
+    modifier_tout; ecrire_sorties normale ;;
+  parasite)
+    modifier_tout
+    mkdir -p /work/zzautoa/backend/__pycache__ /work/zzautoa/node_modules/x
+    echo b > /work/zzautoa/backend/__pycache__/v.cpython-312.pyc; echo b > /work/zzautoa/node_modules/x/i.js
+    echo b > /work/zzautoa/backend/mod.pyc
+    ecrire_sorties normale ;;
+  interdit)
+    if [[ -n "$resume" ]]; then
+      git -C /work/zzautoa --no-optional-locks show HEAD:backend/Dockerfile > /work/zzautoa/backend/Dockerfile
+      ecrire_sorties normale "repris après refus"
+    else
+      modifier_tout; echo "RUN echo pirate" >> /work/zzautoa/backend/Dockerfile; ecrire_sorties normale
+      # Le .git est en lecture seule : une écriture doit échouer.
+      if touch /work/zzautoa/.git/hooks/pre-commit 2>/dev/null; then echo "GIT-INSCRIPTIBLE" >> /sortie/rapport.md; fi
+    fi ;;
+  limite)
+    if [[ -z "$resume" ]]; then modifier_tout; resultat true error "Claude AI usage limit reached|1762900000"; exit 1; fi
+    ecrire_sorties normale "repris après limite" ;;
+  delai)
+    modifier_tout; sleep 600 ;;
+  rouge|rouge2)
+    if [[ "$phase" == correction ]]; then
+      grep -q "MARQUEUR-ROUGE" /entree/tests.txt || echo "TESTS-TXT-ABSENT" >> /sortie/rapport.md
+      [[ "$scen" == rouge ]] && echo vert > /work/zzautoa/backend/etat.txt
+      echo "## Correction après tests" >> /sortie/rapport.md
+    else
+      modifier_tout; echo rouge > /work/zzautoa/backend/etat.txt; ecrire_sorties normale
+    fi ;;
+  fuite)
+    modifier_tout; ecrire_sorties normale "jeton : $CLAUDE_CODE_OAUTH_TOKEN — adresse 198.51.100.7, boucle 127.0.0.1" ;;
+  lien)
+    modifier_tout; ecrire_sorties normale; rm -f /sortie/rapport.md; ln -s /entree/mission.md /sortie/rapport.md ;;
+  faible)
+    if [[ "$phase" == suite ]]; then echo "## Pour aller plus loin" >> /sortie/rapport.md
+    else modifier_tout; echo "corrigé" > /work/zzautob/frontend/src.txt; ecrire_sorties faible; fi ;;
+  deps|lourd)
+    modifier_tout; echo "# dépendance factice" >> /work/zzautoa/backend/requirements.txt
+    [[ "$scen" == lourd ]] && touch /work/zzautoa/backend/.heavy-build
+    ecrire_sorties normale ;;
+  services)
+    grep -q "bilan factice" /entree/contexte/lab-doctor.txt || echo "CONTEXTE-ABSENT" >> /tmp/x
+    modifier_tout; ecrire_sorties normale "$(cat /entree/contexte/lab-doctor.txt)" ;;
+  essai)
+    modifier_tout; ecrire_sorties normale; resultat true error_max_turns ""; exit 1 ;;
+  *) resultat true error "scénario inconnu : $scen"; exit 1 ;;
+esac
+resultat false success "fini"
