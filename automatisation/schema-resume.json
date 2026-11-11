@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Sacha37420/sso-lab/automatisation/schema-resume.json",
+  "title": "resume.json d'une mission de nuit",
+  "description": "Écrit par Claude dans /sortie/resume.json (contrat nuit-auto, I4). Lu par automatisation/bin/auto.sh : charge décide de la phase 2, titre_pr devient le titre de la PR, un constat critique non corrigé met la PR en brouillon.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "statut", "charge", "titre_pr", "constats", "tests_ajoutes"],
+  "properties": {
+    "version": {
+      "description": "Version du format. Toujours 1.",
+      "const": 1
+    },
+    "statut": {
+      "description": "fini : la mission est terminée et le rapport est complet. partiel : travail interrompu ou incomplet.",
+      "enum": ["fini", "partiel"]
+    },
+    "charge": {
+      "description": "Quantité de travail produite (critères dans prompts/_commun.md). faible déclenche la phase <tache>-suite.md si elle existe.",
+      "enum": ["faible", "normale", "forte"]
+    },
+    "titre_pr": {
+      "description": "Titre de la PR, en français, une seule ligne.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 72,
+      "pattern": "^[^\\r\\n]+$"
+    },
+    "constats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gravite", "cible", "titre", "fichier", "corrige"],
+        "properties": {
+          "gravite": {"enum": ["critique", "haute", "moyenne", "basse"]},
+          "cible": {
+            "description": "Nom de la cible telle que dans /entree/mission.md (_racine pour le dépôt racine).",
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\r\\n]+$"
+          },
+          "titre": {
+            "description": "Une ligne, sans secret, sans donnée personnelle, sans adresse IP.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\r\\n]+$"
+          },
+          "fichier": {
+            "description": "Chemin relatif à la racine de la cible, avec :ligne si utile (ex. backend/api/views.py:42).",
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\r\\n]+$"
+          },
+          "corrige": {"type": "boolean"}
+        }
+      }
+    },
+    "tests_ajoutes": {
+      "description": "Nombre de méthodes de test backend ajoutées pendant toute la mission (toutes phases).",
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

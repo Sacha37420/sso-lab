@@ -613,6 +613,56 @@ fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 step "12/12  Bilan"
+
+# ── Identifiants des sites dans oauth-hub (commande provider_credentials, chantier nuit-auto I1)
+# oauth_provider <slug> : 0 si la fiche est complète. Pose OAUTH_RC (0 complète · 3 incomplète ·
+# 4 absente) et OAUTH_CB (URI de rappel à enregistrer chez le site). Si le conteneur en service
+# est antérieur à la commande, retombe sur une lecture directe de la table.
+oauth_provider() {
+  local slug="$1" out
+  OAUTH_CB=""
+  out="$(docker exec oauth-hub-backend python manage.py provider_credentials status "$slug" 2>/dev/null)"; OAUTH_RC=$?
+  if [[ "$OAUTH_RC" =~ ^(0|3|4)$ ]]; then
+    OAUTH_CB="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline()).get("callback_url",""))' 2>/dev/null)"
+  else
+    local n
+    n="$(docker exec dev-postgres psql -X -U "$(envget infra/.env POSTGRES_USER)" -d lab -tAc \
+      "SELECT CASE WHEN client_id <> '' AND client_secret_encrypted <> '' AND enabled THEN 0 ELSE 3 END FROM oauth_hub.providers WHERE slug = '$slug'" 2>/dev/null | tr -d '[:space:]')"
+    OAUTH_RC="${n:-4}"
+    local dom; dom="$(envget .env DOMAIN)"
+    is_placeholder "$dom" || OAUTH_CB="https://$dom/oauth-hub-api/api/callback/$slug/"
+  fi
+  [[ "$OAUTH_RC" == "0" ]]
+}
+# oauth_fill <slug> : demande client_id et secret au terminal et les enregistre. Le secret
+# passe par l'entrée standard de la commande — jamais en argument (lisible par ps), jamais
+# affiché ni journalisé.
+oauth_fill() {
+  local slug="$1" cid sec dom
+  dom="$(envget .env DOMAIN)"
+  oauth_provider "$slug"
+  echo ""
+  echo -e "  ${B}oauth-hub — fiche « $slug »${N}"
+  case "$slug" in
+    github) echo "    1. Ouvrir https://github.com/settings/applications/new (OAuth App, pas GitHub App)" ;;
+    gitlab) echo "    1. GitLab → Preferences → Applications (portées : read_user read_repository)" ;;
+    google) echo "    1. Console Google Cloud → API et services → Identifiants → ID client OAuth (Application Web)" ;;
+  esac
+  is_placeholder "$dom" || echo "    2. Page d'accueil de l'application : https://$dom/"
+  echo "    3. URI de rappel (exactement) : ${OAUTH_CB:-https://<DOMAIN>/oauth-hub-api/api/callback/$slug/}"
+  read -r -p "    Client ID (vide = plus tard) : " cid < /dev/tty
+  [[ -z "$cid" ]] && return 0
+  [[ "$cid" =~ ^[A-Za-z0-9._@-]{4,200}$ ]] || { echo -e "    ${R}Client ID refusé (caractères inattendus).${N}"; return 0; }
+  read -r -s -p "    Client secret (non affiché) : " sec < /dev/tty; echo ""
+  [[ -z "$sec" ]] && { echo "    Secret vide : rien n'est enregistré."; return 0; }
+  if printf '%s\n' "$sec" | docker exec -i oauth-hub-backend python manage.py provider_credentials set "$slug" --client-id "$cid" > /dev/null 2>&1; then
+    echo -e "    ${G}✔${N} enregistré."
+  else
+    echo -e "    ${R}✘${N} enregistrement impossible (oauth-hub à redéployer ? bash scripts/setup2.sh oauth-hub --yes) — saisir la fiche dans l'interface d'oauth-hub."
+  fi
+  sec=""; unset sec
+}
+
 if docker info > /dev/null 2>&1; then
   while IFS= read -r _dir; do
     _u="$(basename "$_dir")"
@@ -628,8 +678,28 @@ if running dev-postgres && running oauth-hub-backend; then
   for _c in lab-mcp lab-admin; do
     [[ ",$_tc," == *",$_c,"* ]] || gap "oauth-hub n'autorise pas le client « $_c » (page « Apps autorisées » d'oauth-hub)"
   done
-  _pv="$(docker exec dev-postgres psql -X -U "$(envget infra/.env POSTGRES_USER)" -d lab -tAc "SELECT count(*) FROM oauth_hub.providers WHERE slug = 'github'" 2>/dev/null || true)"
-  [[ "$_pv" == "1" ]] || gap "oauth-hub n'a pas de fiche « github » : enregistrer une application OAuth chez GitHub (URI de rappel : https://<DOMAIN>/oauth-hub-api/api/callback/github/ — pas à pas dans oauth-hub/README.md ; portée read:user repo) et saisir son client_id/client_secret dans oauth-hub"
+  # Fiches des sites : créées SANS identifiants par la migration 0002 d'oauth-hub. Exister ne
+  # suffit pas — il faut client_id + secret (Provider.is_configured). Jusqu'au 2026-11-11, ce
+  # bilan ne vérifiait que l'existence de la ligne, toujours vraie : « Rien à faire » sur une
+  # fiche vide, et ni création de projet ni éditeur.
+  if oauth_provider github; then
+    ok "oauth-hub : fiche GitHub complète"
+  else
+    case "$OAUTH_RC" in
+      4) gap "oauth-hub n'a pas de fiche « github » (supprimée ?) : la recréer dans l'interface d'oauth-hub" ;;
+      *) if ! $CHECK && ! $YES && [[ -t 0 ]]; then oauth_fill github; fi
+         oauth_provider github && ok "oauth-hub : fiche GitHub complète" \
+           || gap "oauth-hub : fiche GitHub sans identifiants — enregistrer une application OAuth chez GitHub (https://github.com/settings/applications/new, URI de rappel : ${OAUTH_CB:-https://<DOMAIN>/oauth-hub-api/api/callback/github/}), puis : bash scripts/install.sh (le demande à la fin) — sans elle, ni création de projet, ni éditeur" ;;
+    esac
+  fi
+  if ! $CHECK && ! $YES && [[ -t 0 ]]; then
+    for _p in gitlab google; do
+      oauth_provider "$_p" && continue
+      [[ "$OAUTH_RC" == "3" ]] || continue
+      read -r -p "  Configurer aussi la fiche « $_p » d'oauth-hub maintenant ? [o/N] " _r < /dev/tty
+      [[ "$_r" =~ ^[oOyY] ]] && oauth_fill "$_p"
+    done
+  fi
 fi
 [[ -n "$(envget sso-lab/.env SMTP_FROM)" ]] || gap "SMTP de Keycloak non configuré (sso-lab/.env : SMTP_FROM, SMTP_USER, SMTP_PASSWORD) : pas de « mot de passe oublié », pas d'email de mot de passe aux comptes"
 
@@ -648,8 +718,11 @@ else echo -e "${Y}${B}Installation terminée, $N_GAP point(s) restent à la main
 cat <<EOF
 
 Gestes qui restent humains, dans tous les cas :
-  • oauth-hub : fiche GitHub (application OAuth à enregistrer chez GitHub, portée read:user repo),
-    et, au besoin, GitLab / Google.
+  • oauth-hub : fiche GitHub (application OAuth à enregistrer chez GitHub, portée read:user repo) —
+    demandée ci-dessus quand le terminal le permet ; au besoin, GitLab / Google. Puis chacun relie
+    SON compte GitHub dans oauth-hub (https://<DOMAIN>/oauth-hub/), consentement dans le navigateur.
+  • Tâches de nuit (automatisation/README.md) : claude setup-token, jeton GitHub à portée fine,
+    puis bash automatisation/bin/auto.sh verifier && bash automatisation/bin/auto.sh planifier.
   • SMTP de Keycloak : mot de passe d'application dans sso-lab/.env, puis
     bash scripts/create-app-client.sh <une app>  (réapplique les réglages du realm).
   • Nom de domaine + DDNS chez le fournisseur ; ports 80 et 443 du routeur vers cette machine.

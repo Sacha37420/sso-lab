@@ -573,6 +573,48 @@ fait rien et dit ce qui serait sauvegardé ; `--list` montre les copies ; `--loc
 
 ---
 
+## Tâches de nuit — `automatisation/` (2026-11-11, chantier `chantiers/nuit-auto/`)
+
+Claude Code relit les apps chaque nuit et ouvre des PR **testées** ; rien n'est déployé, la
+fusion et le bouton « Déployer » restent humains. Mode d'emploi : `automatisation/README.md`.
+
+- **Calendrier** (`automatisation/calendrier.conf`, prompts dans `automatisation/prompts/`) :
+  lun/mer/ven `securite` (2 apps en rotation), mar/jeu `metier-ux` (2 apps), sam `interface`
+  (lab-admin + `_templates/`), dim `services` (cadriciel) ; phase `-suite` si la charge est
+  faible. cron à 0 h (`auto.sh lancer`, arrêt de lui-même à 5 h) et 5 h 10 (`auto.sh rattraper` :
+  reprend la même session si limite, délai ou refus ; lance si aucun passage).
+- **Claude tourne dans `lab-workspace`**, jamais sur l'hôte : `--cap-drop ALL`, réseau `lws…`
+  (pare-feu des espaces : 80/443 publics seulement, LAN refusé), **sans étiquette `lab.ws`** (le
+  moteur supprimerait le conteneur), `.git` du clone monté en lecture seule, **aucun jeton
+  GitHub**. `--dangerously-skip-permissions` n'y est acceptable que parce que c'est le conteneur
+  qui fait barrière — ne jamais le reprendre sur l'hôte.
+- **Correctif** : calculé dans un conteneur `--network none`, appliqué par `git apply` dans un
+  clone propre jamais monté (jamais de git de l'hôte sur un dossier écrit par Claude — même faille
+  que `work-clone.sh`). Refusés : `.github/`, `.env*`, `.keycloak-*`, Dockerfile, compose, nginx,
+  `.gitmodules`, liens, et pour la racine `sso-lab/`, `infra/`, `.claude/`, `CLAUDE.md`.
+- **Avant la PR** : `validate-app.sh --quality-only`, commande de test de la feuille de route
+  **du commit de base**, base jetable sur réseau `--internal`, `.env` assaini ; image
+  `<app>-backend:auto` reconstruite si `requirements` change (pas pour une app `.heavy-build`).
+  Rouge ⇒ une seule phase de correction, puis rapport seul.
+- **Gestes humains** : `claude setup-token` → `.lab-state/auto/claude-token` ; jeton GitHub **à
+  portée fine** (contents + pull requests) → `.lab-state/auto/github-token` (le `gh` de l'hôte,
+  `delete_repo`, n'est jamais utilisé) ; `auto.sh verifier` doit conclure « Rien ne peut attendre
+  l'utilisateur » avant `auto.sh planifier`. Les deux jetons sont dans la sauvegarde nocturne
+  (`.lab-state/`).
+- Essais sans Claude ni GitHub : `bash automatisation/tests/run.sh [unitaires]`. Le droit
+  d'écriture du jeton à portée fine ne se prouve que par une vraie PR (l'API rend les droits de
+  l'utilisateur, pas ceux du jeton).
+
+**oauth-hub à l'installation** : `python manage.py provider_credentials status|set <slug>`
+(secret sur l'entrée standard seulement). `install.sh` demande à la fin client_id et secret de
+la fiche GitHub si elle est incomplète (terminal requis) ; `install.sh --check` et
+`lab-doctor.sh` la signalent. Jusqu'au 2026-11-11, le bilan ne vérifiait que l'existence de la
+ligne — toujours vraie, la migration `0002` la crée vide. Piège : l'analyseur d'arguments de
+Django recopie l'argument refusé dans son message — toute commande qui touche un secret doit
+avoir un message d'erreur fixe.
+
+---
+
 ## Créer une nouvelle application
 
 > **Voie normale depuis le 2026-10-10 : `lab-admin` → Projets → « Nouveau projet »** (ou l'outil
