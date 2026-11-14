@@ -1175,34 +1175,61 @@ conception est dans `chantiers/nuit-auto/CONTRAT.md`.
 
 ### 6.1 Activer les sessions automatiques
 
-**État au 2026-11-14** : tout est en place sauf la planification. `auto.sh verifier` conclut
-« Rien ne peut attendre l'utilisateur » (jetons, image, pare-feu, Claude authentifié, jeton
-GitHub, SMTP), et un essai a tourné le 2026-11-11, sans push ni PR. **Il ne reste qu'à planifier**
-(étape 5).
+La procédure est **la même pour quiconque clone le cadriciel** : chaque commande se lance
+depuis la racine de son clone. `planifier` écrit dans la crontab le chemin absolu de ce clone, et
+les dépôts visés (PR, clones) sont lus dans les `origin` des sous-modules du clone, jamais dans
+une liste écrite en dur. Seuls les deux jetons sont propres à chaque installation.
 
-Sur une machine neuve, les étapes sont les suivantes, toutes depuis la racine `dev/` :
+**Prérequis** : le lab installé (`bash scripts/install.sh`, qui construit l'image `lab-workspace`
+et configure le SMTP), un abonnement Claude, et des apps dont le dépôt est sur GitHub. À la fin,
+`install.sh` rappelle ces étapes.
 
-1. **Jeton Claude.** Lancer `claude setup-token` sur l'hôte (abonnement Claude), puis enregistrer
-   le jeton dans `.lab-state/auto/claude-token`, en mode 600 et dossier en 700.
-2. **Jeton GitHub à portée fine.** Propriétaire `Sacha37420`, accès aux dépôts des apps et à
-   `sso-lab`. Permissions : **Contents** et **Pull requests** en lecture et écriture, rien
-   d'autre. Il va dans `.lab-state/auto/github-token`, en mode 600. Seul l'hôte s'en sert, Claude
-   ne le reçoit jamais. Le `gh` de l'hôte (qui a la portée `delete_repo`) n'est jamais utilisé.
-3. **Vérifier.** `bash automatisation/bin/auto.sh verifier` doit conclure « Rien ne peut attendre
-   l'utilisateur ». Chaque ligne `✘ [point]` dit ce qui bloque.
-4. **Essai.** `bash automatisation/bin/auto.sh lancer --tache securite --essai` (6 tours de
-   Claude, ni push, ni PR, ni email), puis `bash automatisation/bin/auto.sh etat`.
-5. **Planifier.** `bash automatisation/bin/auto.sh planifier --check` ne fait rien et montre ce qui
-   sera posé. `bash automatisation/bin/auto.sh planifier` ajoute deux lignes à la crontab de
-   l'utilisateur : `0 0 * * *` pour `lancer` et `10 5 * * *` pour `rattraper`. Il ne touche aucune
-   autre ligne, donc la sauvegarde de 3 h reste en place. On utilise cron et pas systemd, parce
-   que `Linger=no` sur cet hôte.
-6. **Arrêter** : `bash automatisation/bin/auto.sh planifier --retirer` (les sessions déjà faites
-   et leurs PR restent).
+1. **Jeton Claude.** Sur l'hôte (abonnement Claude) :
+   ```bash
+   claude setup-token
+   ```
+   Puis enregistrer le jeton affiché (dossier en 700, fichier en 600) :
+   ```bash
+   install -d -m 700 .lab-state/auto
+   ( umask 077; printf '%s\n' '<jeton affiché>' > .lab-state/auto/claude-token )
+   ```
+2. **Jeton GitHub à portée fine.** Sur github.com : Settings → Developer settings →
+   *Fine-grained tokens*. Propriétaire : **le compte ou l'organisation qui possède tes dépôts**
+   (celui des `origin`). Accès : le dépôt racine et ceux des apps. Permissions : **Contents** et
+   **Pull requests** en lecture et écriture, rien d'autre (surtout pas *Administration*). Puis :
+   ```bash
+   ( umask 077; printf '%s\n' 'github_pat_…' > .lab-state/auto/github-token )
+   ```
+   Seul l'hôte s'en sert, Claude ne le reçoit jamais. Le `gh` de l'hôte n'est jamais utilisé.
+3. **Vérifier.** Doit conclure « Rien ne peut attendre l'utilisateur » ; chaque ligne
+   `✘ [point]` dit ce qui bloque :
+   ```bash
+   bash automatisation/bin/auto.sh verifier
+   ```
+4. **Essai** (6 tours de Claude, ni push, ni PR, ni email) :
+   ```bash
+   bash automatisation/bin/auto.sh lancer --tache securite --essai
+   bash automatisation/bin/auto.sh etat
+   ```
+5. **Planifier** — c'est cette commande qui rend le travail automatique :
+   ```bash
+   bash automatisation/bin/auto.sh planifier --check   # ne fait rien, montre ce qui sera posé
+   bash automatisation/bin/auto.sh planifier
+   ```
+   Elle ajoute deux lignes à la crontab de l'utilisateur, `0 0 * * *` pour `lancer` et
+   `10 5 * * *` pour `rattraper`, et ne touche aucune autre ligne (la sauvegarde de 3 h reste en
+   place). On utilise cron et pas une minuterie systemd utilisateur, qui demande `Linger=yes`.
+6. **Arrêter** (les sessions déjà faites et leurs PR restent) :
+   ```bash
+   bash automatisation/bin/auto.sh planifier --retirer
+   ```
 
 Après la première vraie nuit, vérifier qu'une PR a bien été ouverte. C'est la seule preuve que le
 jeton à portée fine a le droit d'écrire : l'API de GitHub rend les droits de l'utilisateur, pas
 ceux du jeton.
+
+**Sur ce lab, au 2026-11-14** : les étapes 1 à 4 sont faites. `verifier` conclut « Rien ne peut
+attendre l'utilisateur », et l'essai a tourné le 2026-11-11. Il ne reste que l'étape 5.
 
 ### 6.2 Les sessions : ce qu'elles font et pourquoi elles existent
 
