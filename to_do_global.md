@@ -457,7 +457,7 @@ guides par public.
 
 ### T8 — Ménage · P3 · S
 
-- [ ] Ⓟ **26 images `rollback/*:prev`**, dont 2 × 12,5 Go pour atelier-3d, et l'image orpheline `lab-admin-worker:latest`.
+- [x] Ⓟ **26 images `rollback/*:prev`**, dont 2 × 12,5 Go pour atelier-3d — **retirées le 2026-11-11** avec l'accord du propriétaire (38 étiquettes, images 111,4 → 98,6 Go). Reste l'image orpheline `lab-admin-worker:latest`.
       2026-11-08 [C] : **38** images `rollback/*` ; cache de construction 73 Go dont 34 Go récupérables
       (`docker system df`) ; disque à 59 %.
 - [ ] Code mort « legacy devdb » :
@@ -467,7 +467,7 @@ guides par public.
   - `setup2.sh:15`.
 - [ ] `scripts/verify-setup2-routine.md` (prompt de juillet, obsolète) et `infra/setup-keycloak-pgadmin.sh` (plus appelé) : à supprimer après un grep de confirmation.
 - [x] (fait : `chantiers/*` est dans `.gitignore`) Dépôt public : `chantiers/app-builder-lab/`, `essai-dev/` et `webcams/` ne sont ni suivis ni ignorés (l'exclusion des autres vit dans `.git/info/exclude`, local à la machine). Les ajouter à `.gitignore` (`chantiers/*`), sinon un `git add -A` publierait des rapports de défauts.
-- [ ] Branche `worktree-agent-a92726caa5e3e0dce` d'app-builder, déjà fusionnée.
+- [x] Branche `worktree-agent-a92726caa5e3e0dce` d'app-builder, déjà fusionnée — supprimée le 2026-11-11, avec toutes les branches locales `claude/nuit-2026-11-08`, `claude/nuit-auto`, `claude/app-builder-v2` déjà fusionnées.
 - [ ] `KEYCLOAK_URL` : `reset_url.sh` l'écrit dans chaque `.env` en `http://<IP WAN>:8080`, adresse morte
       depuis que 8080 n'est lié qu'à `127.0.0.1`. Aucune app ne la lit (vérifié le 2026-11-01) : retirer la clé
       des `.env`, des gabarits et de `reset_url.sh`.
@@ -680,7 +680,7 @@ n'a pas été modifié ; les points encore ouverts sont repris dans la feuille d
 2. Adresse fixe du NAS (U2), chiffrement des sauvegardes (T5), droits du compte `saver` sur le NAS.
 3. Commit du didacticiel `test-video` (U5), et son nom : le garder, ou recréer le projet sous un nom explicite.
 4. Chemin de la porte OGC de carto-lab (T1).
-5. Suppression des images `rollback/*` (T8).
+5. ~~Suppression des images `rollback/*` (T8).~~ Faite le 2026-11-11.
 6. Par app, détaillées dans chaque feuille de route :
    - restauration : socle de caisse NF525 ;
    - conciergerie : confidentialité entre co-propriétaires, `Remboursement.montant` ;

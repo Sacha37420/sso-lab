@@ -182,7 +182,9 @@ la bascule » en fin de section). Contrat complet, interfaces et preuves : `chan
   se joignent plus que par tunnel SSH (`ssh -L 8080:localhost:8080 …`).
 - **`lab-admin` a deux niveaux** : la porte (`admins,developers`) et l'administration (`admins`,
   permission DRF par défaut `IsLabAdmin`). Toute nouvelle vue est d'admin tant qu'elle ne déclare
-  rien ; toute nouvelle route Angular porte `adminGuard`. Ne jamais recréer `lab-admin-backend`
+  rien ; toute nouvelle route Angular porte `adminGuard`. Seule exception backend (2026-11-11) :
+  `/api/spec-links/<app>/` (`IsLabMember`, lignes de l'appelant seulement ; l'inventaire
+  `MEMBER_ROUTES` est tenu par `DefaultDenyTests`). Ne jamais recréer `lab-admin-backend`
   sur une image antérieure au commit `c4449e8` avec `KEYCLOAK_REQUIRED_GROUPS=admins,developers`.
 - **`code-server` (`/code`) est réservé au groupe `admins`** (`OAUTH2_PROXY_ALLOWED_GROUPS`,
   `sso-lab/docker-compose.yml`) : il monte tout le dépôt, le socket Docker, `~/.ssh` et
@@ -322,6 +324,38 @@ construction ». Contrat et rapports : `chantiers/app-builder-lab/`.
   retombe sur l'accueil (défaut `redirectUri` du gabarit, voir « Pièges constatés ») ;
   `lab-runner` accumulait des processus Chromium zombies (corrigé le 2026-10-31 : `init: true`).
 
+**App Builder v2 (chantier `chantiers/app-builder-v2/`, en service depuis le 2026-11-11 ;
+non éprouvés : un vrai appel Claude/Mistral avec outils, Claude Code réel relié par MCP)** :
+- **Forme universelle, additive** (migrations `0011`, `0012`) : rôles applicatifs distincts de la
+  porte (`required_groups`), accès par modèle (`access` : owner/shared/group/parent/public_read/
+  global), machines à états, contraintes, tâches de fond, intégrations **du lab** (liste fermée),
+  API externes, extensions typées, `Endpoint.auth` (jwt/public/api_key/hmac/internal_key/ticket).
+  Un accès non décrit est un **avertissement**, pas un blocage (décision de nuit : les specs
+  « prêtes » d'hier le restent). Inventaire qui la justifie : `etude/01-inventaire-apps.md`.
+- **L'IA écrit par des opérations atomiques, jamais par un patch JSON en texte** : outils
+  `lire_elements`, `proposer_operations` (essai à blanc), `proposer_choix`, `verifier_spec`, boucle
+  bornée côté serveur (6 appels, 90 s), même code pour Claude et Mistral ; seul du texte reste
+  dans l'historique ; la spec part en **index compact**, lue en base, jamais depuis le navigateur.
+  Une proposition s'applique par `POST /api/apps/<id>/operations/` avec `base_version` (409 si la
+  spec a changé). Ne pas réintroduire `PATCH_READY`/`CHOICES_*` ni de fusion côté TypeScript.
+- **Jeton d'abonnement Claude (`sk-ant-oat…`) refusé au coffre** : les conditions d'Anthropic
+  réservent l'OAuth d'abonnement à Claude Code et aux applications d'Anthropic (vérifié le
+  2026-11-11, code.claude.com/docs/en/legal-and-compliance). La voie « abonnement » est **Claude
+  Code ou Vibe de l'utilisateur, relié au serveur MCP d'App Builder** (`POST /app-builder-api/api/mcp/`,
+  jeton personnel `abt_…` haché, 90 j au plus, révocable, portée lire/écrire, éventuellement lié
+  à une spec ; page `/connexion-ia`). Un `abt_` n'ouvre que `/api/mcp/` ; un jeton Keycloak n'y
+  entre pas. **Limite assumée** : le jeton ne revérifie pas les groupes Keycloak de son titulaire
+  pendant sa durée de vie (il ne donne accès qu'à ses propres specs). Le jeton est posé par
+  l'utilisateur lui-même : ni lab-admin ni le moteur ne le transportent.
+- **Passerelle** : la remise porte `fingerprint` (sha256 du contenu remis, stable tant qu'il ne
+  change pas — `updated_at` change à chaque enregistrement automatique et ne sert pas de témoin) ;
+  lab-admin garde le lien projet ↔ spec (`spec_links`), signale une spec modifiée et la transmet
+  au projet par un **ticket** (`POST /projects/<app>/tickets`, route existante du moteur) que les
+  règles d'agent font traiter avant le lot suivant. Le moteur n'a pas changé.
+- Piège : `PUT /api/apps/<id>/` **recrée tous les éléments enfants avec de nouveaux ids**. Le graphe
+  et les liens `edit.query` passent par une correspondance d'ids côté front (`resolveId`) ; tout
+  nouveau lien par id vers un élément de spec doit en tenir compte (l'id de la spec, lui, est stable).
+
 ### Règles de développement imposées à tout projet (IA comprises)
 
 Chaque projet scaffoldé porte `FEUILLE_DE_ROUTE.md` (lots, tests à passer par lot, « vérifié le »),
@@ -431,6 +465,24 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
   depuis plus de deux semaines », verrou généré avec `--before=<date>` et installation par `npm ci`.
 - **L'image pgAdmin ne démarre pas sous `cap_drop ALL` seul** (son Python porte une capacité de
   fichier) : il lui faut `NET_BIND_SERVICE`. Démarrage : 35 à 55 s.
+- **L'email sert d'identité dans plusieurs apps — non résolu** (relevé de juin, repris de l'ancien
+  `.debug/` le 2026-11-11) : changer l'email d'un compte dans l'annuaire rend orphelines ses
+  données là où elles sont rattachées à l'email (`app-builder` : `app_specs.owner_email` et
+  `mcp_tokens.owner_email` ; `traitement-de-fichiers-compils` : `utilisateurs.email` ; plus
+  largement tout `owner_email` ; `google-agenda` de dev2 en clé primaire). Contournement : `UPDATE`
+  de l'ancien vers le nouvel email dans une transaction, parent avant enfants. Vrai correctif :
+  rattacher au `sub` Keycloak, immuable.
+- **Derrière un chemin Caddy qui retire le préfixe (`handle_path`), une URL absolue part hors de
+  l'app** : `/assets/…` est demandé à la racine du domaine et rend 404 (vu sur `apps.json` de
+  l'ancien cadriciel, puis sur les polices Foyer). Toujours une URL relative au `base href`.
+- **« Unexpected error when handling authentication request » à la connexion** : la vraie cause
+  n'est que dans `docker logs keycloak` (vu : `LDAP: error code 49`, mot de passe de bind LDAP
+  désynchronisé par une régénération de secrets jamais appliquée). Une édition à la main des
+  fichiers `olcDatabase=*.ldif` d'OpenLDAP doit retirer leur en-tête `# CRC32`, sinon
+  `slapd`/`slaptest` refusent la configuration.
+- **Les appels d'administration à Keycloak passent par l'adresse interne** (`keycloak:8080` depuis
+  un conteneur, `localhost:8080` sur l'hôte), jamais par l'URL publique : la box n'a pas toujours
+  le hairpin NAT, et le jeton reste sur la machine.
 
 ### État de la bascule
 

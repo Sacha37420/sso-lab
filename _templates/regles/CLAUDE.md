@@ -18,6 +18,13 @@ Si `CAHIER_DES_CHARGES.md` est à la racine (projet lancé depuis une spécifica
 métier, groupes — et les lots de la feuille de route en découlent. S'il contredit une règle de ce
 fichier, c'est la règle qui gagne : note l'écart dans le lot au lieu de le suivre.
 
+**Spécification modifiée après la création du projet** : lab-admin peut ouvrir un ticket GitHub
+titré « Spécification App Builder n° … modifiée » (marqueur `<!-- lab-spec-update … -->`). Avant
+d'ouvrir un lot, regarde s'il en existe un ouvert (`gh issue list --search "Spécification App Builder"`).
+S'il y en a un : compare-le à `CAHIER_DES_CHARGES.md`, **propose** au développeur la mise à jour du
+cahier et des lots « à faire » (jamais de réécriture d'un lot livré), applique seulement ce qu'il
+accepte, puis ferme le ticket en citant le commit.
+
 ## Déployer
 
 - **Par le moteur du lab uniquement** : outil MCP `deploy`, ou le bouton « Déployer » de lab-admin.

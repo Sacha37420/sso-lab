@@ -9,6 +9,13 @@ développeur. Ces règles s'imposent à toute IA comme à tout humain. Les règl
 1. **Lis `FEUILLE_DE_ROUTE.md`** à la racine du projet avant toute chose.
    S'il y a un `CAHIER_DES_CHARGES.md` (projet lancé depuis une spécification App Builder), lis-le
    aussi : il dit ce que l'app doit faire, les lots en découlent.
+   Avant d'ouvrir un lot, cherche un ticket ouvert « Spécification App Builder n° … modifiée »
+   (`gh issue list --search "Spécification App Builder"`) : s'il y en a un, compare-le au cahier,
+   **propose** au développeur la mise à jour du cahier et des lots « à faire » (jamais d'un lot livré),
+   n'applique que ce qu'il accepte, puis ferme le ticket en citant le commit.
+   Si le développeur a relié App Builder par MCP (serveur `app-builder`, jeton personnel qu'il a
+   posé lui-même), tu peux y **lire** la spécification d'origine (`lire_index`, `lire_elements`) ;
+   n'y écris qu'à sa demande explicite.
 2. **Écris ou complète le lot avant de coder** : objectif, tâches, et les **tests nommés** à passer
    pour le clore. Pas de lot dans la feuille de route ⇒ pas de code.
 3. **Un seul lot à la fois.** Passe-le « en cours », termine-le, puis seulement le suivant.
