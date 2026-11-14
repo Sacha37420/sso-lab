@@ -1230,7 +1230,8 @@ ceux du jeton.
 
 **Sur ce lab** : les étapes 1 à 5 sont faites. L'essai a tourné le 2026-11-11, la planification
 est posée depuis le 2026-11-14 et `verifier` conclut « Rien ne peut attendre l'utilisateur ».
-Premier passage réel : la nuit du 2026-11-14 au 2026-11-15 (samedi, tâche `interface`).
+Premier passage réel : le 2026-11-14 à 5 h 10 (rattrapage, tâche `interface` du samedi) ; puis 0 h
+chaque nuit.
 
 ### 6.2 Les sessions : ce qu'elles font et pourquoi elles existent
 
