@@ -364,6 +364,24 @@ class ActivityTests(unittest.IsolatedAsyncioTestCase):
         self.m.answers["healthz"] = Resp(200, {"lastHeartbeat": (now - 90) * 1000})
         self.assertAlmostEqual(await self.m._activity(self.ws), now - 30, delta=0.01)
 
+    async def test_battement_infini_ou_dans_le_futur_ignore(self):
+        """Le dev tient le processus qui répond sur `healthz` et la date du fichier de battement :
+        une valeur hors de l'horloge ne garde pas l'espace ouvert (même règle que `/activity`)."""
+        for label, beat in (("futur", (time.time() + 86400) * 1000), ("infini", float("inf"))):
+            self.m.answers["healthz"] = Resp(200, {"lastHeartbeat": beat})
+            self.assertEqual(await self.m._activity(self.ws), self.old, label)
+        self.m.answers["healthz"] = Resp(200, {"lastHeartbeat": 0})
+        path = os.path.join(self.m.home("alice"), ws_module.HEARTBEAT)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+        self.addCleanup(os.remove, path)
+        futur = time.time() + 86400
+        os.utime(path, (futur, futur))
+        self.assertEqual(await self.m._activity(self.ws), self.old, "fichier de battement daté du futur")
+        recent = time.time() - 2
+        os.utime(path, (recent, recent))
+        self.assertAlmostEqual(await self.m._activity(self.ws), recent, delta=0.01)
+
     async def test_ramasse_miettes_reel(self):
         """Le vrai `_reap` (limite 1,2 s) : gardé tant que la conversation vit, fermé ensuite."""
         closed = []
