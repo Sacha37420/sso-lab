@@ -38,7 +38,7 @@ _STEP = re.compile(r"\[lab-mcp\] étape « ([a-z0-9_]+) »")
 @dataclass
 class Job:
     id: str
-    kind: str                 # deploy | create | tests | tests_all | preview
+    kind: str                 # deploy | create | tests | tests_all | preview | modules
     app: str
     owner: str                # qui l'a lancé : un uid, ou « auto-deploy »
     state: str = "queued"     # queued | running | succeeded | failed  (les deux derniers sont terminaux)
@@ -105,6 +105,10 @@ class JobManager:
         part : un essai ne touche jamais à l'app en service, il ne bloque donc ni un déploiement ni
         un test du même projet, et inversement (la file les joue l'un après l'autre)."""
         for job in self._jobs.values():
+            if job.kind == "modules":
+                # (modules) famille à part elle aussi : `app` y vaut "", comme pour `tests_all`, sans
+                # qu'un job de l'une bloque l'autre. Un job modules ne se compare qu'à ses pareils (active).
+                continue
             if job.app == app and job.state in ("queued", "running") and (job.kind == "preview") == preview:
                 return job
         return None

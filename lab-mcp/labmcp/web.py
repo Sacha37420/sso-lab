@@ -124,6 +124,23 @@ def routes(engine: Engine) -> list[Route]:
     async def env_unset(r, c): return await call("env_unset", c, app=app(r), key=r.path_params["key"])
     async def run_all(r, c): return await call("run_all_tests", c)
 
+    # (modules, contrat modules v1, I4) — superutilisateur seul ; aucun outil MCP (D11)
+    def module_body(d: dict, allowed: tuple[str, ...]) -> dict:
+        unknown = sorted(k for k in d if k not in allowed)
+        if unknown:
+            raise LabError("invalid", "Champ(s) inconnu(s).", reasons=[f"champ inconnu : {k}" for k in unknown[:10]])
+        (mods,) = need(d, "modules")
+        return {"modules": mods, "reinstall": d.get("reinstall", False), "with_deps": d.get("with_deps", False),
+                **({"settings": d.get("settings")} if "settings" in allowed else {})}
+
+    async def modules(r, c): return await call("modules", c)
+    async def module(r, c): return await call("module", c, name=r.path_params["name"], check=flag(r, "check"))
+    async def module_plan(r, c):
+        return await call("module_plan", c, **module_body(await body(r), ("modules", "reinstall", "with_deps")))
+    async def module_install(r, c):
+        return await call("module_install", c,
+                          **module_body(await body(r), ("modules", "reinstall", "with_deps", "settings")))
+
     async def env_get(request: Request) -> Response:
         """Valeur d'une variable : comme le mot de passe de la base, jamais mise en cache."""
         caller = request.scope.get("lab.caller")
@@ -221,6 +238,8 @@ def routes(engine: Engine) -> list[Route]:
         Route(P + "/projects/{app}/env/{key}", env_get, methods=["GET"]),
         R("/projects/{app}/env/{key}", env_set, "PUT"), R("/projects/{app}/env/{key}", env_unset, "DELETE"),
         R("/tests/run-all", run_all, "POST"),
+        R("/modules", modules, "GET"), R("/modules/plan", module_plan, "POST"),
+        R("/modules/install", module_install, "POST"), R("/modules/{name}", module, "GET"),
         R("/projects/{app}/sql", sql, "POST"),
         R("/projects/{app}/tests", tests, "POST"),
         R("/projects/{app}/tickets", tickets, "POST"),

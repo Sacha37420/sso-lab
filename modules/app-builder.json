@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "name": "app-builder",
+  "label": "App Builder",
+  "description": "Générateur d'applications : modèles de données, endpoints, pages et pipelines de déploiement.",
+  "category": "cadriciel",
+  "required": false,
+  "priority": 20,
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [
+    {
+      "key": "ANTHROPIC_API_KEY",
+      "question": "Clé d'API Anthropic du chat IA d'App Builder (vide : chacun utilise sa propre clé, ou Mistral)",
+      "required": false,
+      "secret": true
+    },
+    {
+      "key": "MISTRAL_API_KEY",
+      "question": "Clé d'API Mistral du chat IA d'App Builder (vide : chacun utilise sa propre clé, ou Anthropic)",
+      "required": false,
+      "secret": true
+    }
+  ],
+  "groups": [
+    "developers",
+    "admins",
+    "famille",
+    "amis",
+    "manager",
+    "cuisinier",
+    "serveur"
+  ],
+  "install": null
+}

@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "name": "analyse-lora",
+  "label": "Analyse LoRa",
+  "description": "Suivi de capteurs LoRa : relevés, mesures calculées et droits d'accès par capteur.",
+  "category": "application",
+  "required": false,
+  "priority": 10,
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "developers",
+    "amis",
+    "famille"
+  ],
+  "install": null
+}

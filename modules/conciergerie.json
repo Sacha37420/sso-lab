@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "name": "conciergerie",
+  "label": "Conciergerie",
+  "description": "Gestion locative : biens, frais, co-propriétaires, synchronisation des réservations et bilan de capital.",
+  "category": "application",
+  "required": false,
+  "requires": {
+    "modules": [
+      {
+        "name": "storage",
+        "interface": "1"
+      }
+    ],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "proprietaires",
+    "admins"
+  ],
+  "install": null
+}

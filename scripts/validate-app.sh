@@ -106,6 +106,37 @@ quality_gates() {
   elif [[ -d "$APP_DIR/frontend" && ! -f "$APP_DIR/frontend/e2e/cloisonnement.spec.ts" ]]; then
     refuse cloisonnement "frontend/e2e/cloisonnement.spec.ts absent — une app avec frontend a son test de cloisonnement (à copier de _templates/django-angular/frontend/e2e/)"
   fi
+  module_gates
+}
+
+# ── Description du module et scripts d'installation (chantier « modules », I1/I3) ──
+#   [module]          description (lab-module.json, sinon modules/<app>.json) présente mais invalide ;
+#   [module-install]  scripts déclarés absents, liens symboliques, ou sans mode --check.
+# Une app SANS description reste acceptée (description déduite) : aucune app existante n'en porte.
+module_gates() {
+  local item src f
+  item="$(python3 -B "$SCRIPT_DIR/lib/modules.py" "$ROOT" show "$APP" 2>/dev/null)" || true
+  [[ -n "$item" ]] || { refuse module "description du module illisible (bash scripts/lab-modules.sh show $APP)"; return; }
+  src="$(jq -r '.source' <<< "$item" 2>/dev/null)"
+  if [[ "$(jq -r '.valid' <<< "$item" 2>/dev/null)" != "true" ]]; then
+    while IFS= read -r f; do
+      [[ -n "$f" ]] && refuse module "description du module ($([[ "$src" == module ]] && echo lab-module.json || echo "modules/$APP.json")) : $f"
+    done < <(jq -r '.errors[]' <<< "$item" 2>/dev/null)
+    return
+  fi
+  [[ "$(jq -r '.install != null' <<< "$item")" == "true" ]] || return 0
+  for f in install.sh install.bat; do
+    if [[ -L "$APP_DIR/$f" ]]; then refuse module-install "$f est un lien symbolique"
+    elif [[ ! -f "$APP_DIR/$f" ]]; then refuse module-install "$f déclaré par la description mais absent à la racine du dépôt (squelette : _templates/regles/)"
+    elif ! grep -q -- '--check' "$APP_DIR/$f"; then refuse module-install "$f ne traite pas --check (vérifier sans rien modifier)"
+    fi
+  done
+  if [[ -f "$APP_DIR/install.sh" && ! -L "$APP_DIR/install.sh" ]] && ! head -1 "$APP_DIR/install.sh" | grep -qE '^#!.*(bash|sh)'; then
+    refuse module-install "install.sh doit commencer par #!/usr/bin/env bash"
+  fi
+  if ! registry_is_superuser "$OWNER"; then
+    warn "scripts d'installation déclarés : ils ne sont PAS joués pour l'app d'un développeur (règle v1 du lab)"
+  fi
 }
 if $QUALITY_ONLY; then
   quality_gates

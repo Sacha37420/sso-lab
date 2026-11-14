@@ -15,6 +15,8 @@
 #   --acme-email <email>   contact Let's Encrypt
 #   --superuser <uid>      superutilisateur du lab         (défaut : celui du .env, sinon l'utilisateur courant)
 #   --no-apps              s'arrêter après le cadriciel (storage, oauth-hub, lab-admin, lab-mcp)
+#   --modules <a,b,…>      modules facultatifs à installer (avec leurs dépendances) — voir MODULES
+#   --all-modules          tous les modules facultatifs disponibles
 #   --no-workspace-image   ne pas construire lab-workspace (≈ 8 min)
 #   --until <n>            s'arrêter après l'étape n (1 à 12) — p. ex. --until 6 : tout ce qui
 #                          précède le premier démarrage de conteneur
@@ -36,6 +38,20 @@
 #   • ~/edge-router/ (répartiteur 80/443, hors dépôt) : sans lui, Caddy n'est
 #     pas joignable depuis l'extérieur — voir README, section 1.5.
 #
+# MODULES (chantier « modules », 2026-11-14) : le socle (sso-lab, infra, runner)
+# et les quatre services du cadriciel s'installent toujours. Les autres unités
+# (apps de deploiement/, app-builder, lab-media) sont des modules FACULTATIFS,
+# décrits par <module>/lab-module.json ou modules/<nom>.json. Le choix se fait à
+# l'étape 2, avant le premier conteneur ; les dépendances suivent d'elles-mêmes
+# (bash scripts/lab-modules.sh plan <nom> pour les voir). Qui choisit :
+#   --modules a,b    ceux-là (+ dépendances) ;  --all-modules  tous ;  --no-apps  aucun ;
+#   sinon            la sélection mémorisée (.lab-state/modules/selection.json) s'il y en a une
+#                    — un terminal propose alors seulement les modules nouveaux ;
+#                    sans sélection mémorisée : un menu au terminal, ou TOUS avec --yes /
+#                    sans terminal (comportement d'avant).
+# Rien de déjà en service n'est redéployé. Réglages déclarés par un module
+# (clés d'API…) : demandés au terminal, jamais réécrits s'ils sont posés.
+#
 # DOMAINE : la couche multi-dev (moteur lab-mcp, espaces de travail, lab-admin
 # « Projets ») exige HTTPS, donc DOMAIN. Sans domaine, l'installation va au bout
 # du lab « HTTP local » et dit que le moteur n'a pas été démarré.
@@ -50,7 +66,7 @@ source "$SCRIPT_DIR/lib/lock.sh"
 ROOT="$(registry_root)"
 cd "$ROOT" || exit 1
 
-CHECK=false; YES=false; NO_APPS=false; NO_WS=false; UNTIL=12
+CHECK=false; YES=false; NO_APPS=false; NO_WS=false; UNTIL=12; MODULES_ARG=""; ALL_MODULES=false
 LAN_IP="${LAB_LAN_IP:-}"; WAN="${LAB_WAN:-}"; DOMAIN_ARG="${LAB_DOMAIN:-}"; ACME_ARG="${LAB_ACME_EMAIL:-}"; SU_ARG="${LAB_SUPERUSER:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,17 +74,21 @@ while [[ $# -gt 0 ]]; do
     --yes|-y)             YES=true ;;
     --no-apps)            NO_APPS=true ;;
     --no-workspace-image) NO_WS=true ;;
+    --modules)    MODULES_ARG="${2:?}"; shift; [[ "$MODULES_ARG" =~ ^[a-z0-9][a-z0-9_-]{0,62}(,[a-z0-9][a-z0-9_-]{0,62})*$ ]] || { echo "--modules : noms séparés par des virgules" >&2; exit 2; } ;;
+    --all-modules) ALL_MODULES=true ;;
     --until)      UNTIL="${2:?}"; shift; [[ "$UNTIL" =~ ^([1-9]|1[0-2])$ ]] || { echo "--until : 1 à 12" >&2; exit 2; } ;;
     --lan-ip)     LAN_IP="${2:?}"; shift ;;
     --wan)        WAN="${2:?}"; shift ;;
     --domain)     DOMAIN_ARG="${2:?}"; shift ;;
     --acme-email) ACME_ARG="${2:?}"; shift ;;
     --superuser)  SU_ARG="${2:?}"; shift ;;
-    -h|--help)    sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)    sed -n '2,56p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Option inconnue : $1 (voir --help)" >&2; exit 2 ;;
   esac
   shift
 done
+_n_choice=0; $NO_APPS && _n_choice=$((_n_choice + 1)); $ALL_MODULES && _n_choice=$((_n_choice + 1)); [[ -n "$MODULES_ARG" ]] && _n_choice=$((_n_choice + 1))
+(( _n_choice <= 1 )) || { echo "--no-apps, --modules et --all-modules s'excluent" >&2; exit 2; }
 
 # ── Affichage et comptes ──────────────────────────────────────────────────────
 B='\033[1m'; G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; C='\033[0;36m'; N='\033[0m'
@@ -163,6 +183,129 @@ if [[ -f .gitmodules ]]; then
 fi
 [[ $N_TODO -eq 0 ]] && ok "tous les sous-modules déclarés sont extraits"
 
+# ── Choix des modules facultatifs (chantier « modules », contrat v1 D3-D5) ────
+# Fait ICI, avant le premier conteneur : les questions sont posées au début, pas
+# au milieu de plusieurs heures de builds, et `--until 6` / `--check` montrent
+# déjà la sélection et le plan. Les modules sont déployés à l'étape 10.
+INTERACTIVE=false; ! $CHECK && ! $YES && [[ -t 0 ]] && INTERACTIVE=true
+MODS_JSON="$(bash "$SCRIPT_DIR/lab-modules.sh" list --json 2> /dev/null)"
+[[ -n "$MODS_JSON" ]] || fail "catalogue des modules illisible (bash scripts/lab-modules.sh list)"
+mod_field() { jq -r --arg n "$1" --arg f "$2" '.modules[] | select(.name == $n) | .[$f] | if type == "array" then join(",") else tostring end' <<< "$MODS_JSON"; }
+mod_state() { case "$(mod_field "$1" state)" in installed) echo "installé" ;; stopped) echo "arrêté" ;; not_installed) echo "non installé" ;;
+                inaccessible) echo "inaccessible" ;; absent) echo "absent" ;; invalid) echo "description invalide" ;; *) echo "?" ;; esac; }
+mod_deps()  { jq -r --arg n "$1" '.modules[] | select(.name == $n) | .requires.modules[].name' <<< "$MODS_JSON"; }
+# Facultatifs = ni socle ni obligatoires. « Proposables » : ont un dossier déployable.
+mapfile -t OPTIONAL < <(jq -r '.modules[] | select((.required | not) and .category != "socle") | .name' <<< "$MODS_JSON")
+mapfile -t PROPOSABLE < <(jq -r '.modules[] | select((.required | not) and .category != "socle")
+                                 | select(.state == "installed" or .state == "stopped" or .state == "not_installed") | .name' <<< "$MODS_JSON")
+while IFS= read -r _l; do [[ -n "$_l" ]] && gap "$_l"; done < <(jq -r '.modules[] | select(.valid | not)
+    | "module \(.name) : description invalide — \(.errors | join(" ; ")) (bash scripts/lab-modules.sh show \(.name))"' <<< "$MODS_JSON")
+
+# Menu : whiptail s'il est là (LAB_NO_WHIPTAIL=1 : liste numérotée quand même), sinon une
+# liste numérotée. Rend les noms choisis, un par ligne.
+choose_modules() {  # choose_modules <titre> <nom>…
+  local title="$1" i n answer args=() picked=(); shift
+  [[ $# -gt 0 ]] || return 0
+  if [[ -z "${LAB_NO_WHIPTAIL:-}" ]] && command -v whiptail > /dev/null 2>&1; then
+    for n in "$@"; do args+=("$n" "$(mod_field "$n" label) — $(mod_state "$n")" ON); done
+    answer="$(whiptail --title "Modules du lab" --checklist "$title" 22 90 14 "${args[@]}" 3>&1 1>&2 2>&3 < /dev/tty)" || return 0
+    tr -d '"' <<< "$answer" | tr ' ' '\n' | sed '/^$/d'
+    return 0
+  fi
+  echo "" > /dev/tty
+  echo -e "  ${B}${title}${N}" > /dev/tty
+  i=0
+  for n in "$@"; do
+    i=$((i + 1))
+    printf '   %2d. %-30s %-24s dépend de : %s · build ≈ %s Mo%s\n' "$i" "$n" "($(mod_state "$n"))" \
+      "$(mod_deps "$n" | paste -sd, - | sed 's/^$/—/')" "$(jq -r --arg n "$n" '.modules[] | select(.name == $n) | .resources.build_ram_mb' <<< "$MODS_JSON")" \
+      "$(jq -r --arg n "$n" '.modules[] | select(.name == $n) | if .resources.heavy_build then " (lourd)" else "" end' <<< "$MODS_JSON")" > /dev/tty
+    printf '       %s\n' "$(mod_field "$n" description | cut -c1-110)" > /dev/tty
+  done
+  read -r -p "  Numéros séparés par des espaces, « tout », ou Entrée pour tout : " answer < /dev/tty
+  if [[ -z "$answer" || "$answer" =~ ^(tout|all|t)$ ]]; then printf '%s\n' "$@"; return 0; fi
+  for i in $answer; do
+    [[ "$i" =~ ^[0-9]+$ ]] && (( i >= 1 && i <= $# )) && picked+=("${!i}")
+  done
+  printf '%s\n' "${picked[@]}"
+}
+
+SEL=(); SEL_SOURCE=""
+SEL_MEMO="$(jq -r '.selection.memorized' <<< "$MODS_JSON")"
+mapfile -t SEL_MEMORIZED < <(jq -r '.selection.modules[]' <<< "$MODS_JSON")
+if $NO_APPS; then
+  SEL_SOURCE="--no-apps : aucun module facultatif"
+elif [[ -n "$MODULES_ARG" ]]; then
+  IFS=, read -ra SEL <<< "$MODULES_ARG"; SEL_SOURCE="--modules"
+elif $ALL_MODULES; then
+  SEL=("${PROPOSABLE[@]}"); SEL_SOURCE="--all-modules : tous les modules disponibles"
+elif [[ "$SEL_MEMO" == "true" ]]; then
+  SEL=("${SEL_MEMORIZED[@]}"); SEL_SOURCE="sélection mémorisée ($(jq -r '.selection.updated_at // "?"' <<< "$MODS_JSON"))"
+  if $INTERACTIVE; then
+    _new=()
+    for _m in "${PROPOSABLE[@]}"; do
+      [[ " ${SEL[*]} " == *" $_m "* ]] && continue
+      [[ "$(mod_field "$_m" state)" == "not_installed" ]] && _new+=("$_m")
+    done
+    if [[ ${#_new[@]} -gt 0 ]]; then
+      mapfile -t _add < <(choose_modules "Modules disponibles hors de votre sélection — lesquels ajouter ? (Entrée = tous ; 0 = aucun)" "${_new[@]}")
+      SEL+=("${_add[@]}")
+    fi
+  fi
+elif $INTERACTIVE; then
+  mapfile -t SEL < <(choose_modules "Quels modules installer ? (leurs dépendances suivent d'elles-mêmes)" "${PROPOSABLE[@]}")
+  SEL_SOURCE="choix au terminal"
+else
+  SEL=("${PROPOSABLE[@]}")
+  SEL_SOURCE="aucune sélection mémorisée : tous les modules disponibles (comportement d'avant)"
+fi
+SEL_CSV="$(printf '%s\n' "${SEL[@]}" | sed '/^$/d' | awk '!seen[$0]++' | paste -sd, -)"
+note "modules facultatifs — $SEL_SOURCE${SEL_CSV:+ : ${SEL_CSV//,/, }}"
+[[ "$SEL_MEMO" == "true" ]] || note "aucune sélection mémorisée : elle le sera au prochain passage d'install.sh (hors --check)"
+
+# Plan (affiché ici, recalculé à l'étape 10 sur l'état d'alors). Un module bloqué
+# n'arrête pas les autres ; ceux qui en dépendent sont bloqués avec lui.
+plan_of() { bash "$SCRIPT_DIR/lab-modules.sh" plan --json "$@" 2> /dev/null || true; }
+PLAN_JSON=""
+declare -A SETVAL=()
+if [[ -n "$SEL_CSV" ]]; then
+  PLAN_JSON="$(plan_of "$SEL_CSV")"
+  [[ -n "$PLAN_JSON" ]] || fail "plan d'installation incalculable (bash scripts/lab-modules.sh plan $SEL_CSV)"
+  _todo_mods="$(jq -r '[.steps[] | select(.action != "keep") | .module
+                         | select(IN("storage", "oauth-hub", "lab-admin", "lab-mcp") | not)] | join(", ")' <<< "$PLAN_JSON")"
+  if [[ -n "$_todo_mods" ]]; then note "seront installés après le cadriciel, dans cet ordre : $_todo_mods"
+  else ok "modules choisis : tous déjà en service"; fi
+  while IFS=$'\t' read -r _m _cause _reason; do
+    [[ -n "$_m" ]] || continue
+    case "$_cause" in
+      no_autodeploy) note "$_m ignoré (.no-autodeploy)" ;;
+      inaccessible|absent) if [[ -n "$MODULES_ARG" ]]; then gap "$_reason"; else note "$_reason — ignoré"; fi ;;
+      *) gap "$_reason" ;;
+    esac
+  done < <(jq -r '.blocked[] | [.module, .cause, .reason] | @tsv' <<< "$PLAN_JSON")
+  jq -r '.warnings[]' <<< "$PLAN_JSON" | while IFS= read -r _w; do note "⚠ $_w"; done
+  if $INTERACTIVE && [[ -n "$_todo_mods" ]]; then
+    read -r -p "  Continuer avec ce plan ? [O/n] " _r < /dev/tty
+    [[ "$_r" =~ ^[nN] ]] && { echo "Rien d'autre n'a été fait. Relancer : bash scripts/install.sh"; exit 0; }
+  fi
+  # Réglages déclarés par les modules à installer : demandés ici (terminal), écrits à l'étape 10
+  # dans le .env du module (lab-modules.sh settings : jamais réécrits s'ils sont posés).
+  while IFS=$'\t' read -r _m _k _req _sec _q; do
+    [[ -n "$_m" ]] || continue
+    if $INTERACTIVE; then
+      echo -e "  ${B}$_m${N} — $_q$([[ "$_req" == true ]] && echo " (requis)")"
+      if [[ "$_sec" == true ]]; then read -r -s -p "    $_k (non affiché, vide = plus tard) : " _v < /dev/tty; echo ""
+      else read -r -p "    $_k (vide = plus tard) : " _v < /dev/tty; fi
+      if [[ -n "$_v" && "$_v" != *$'\n'* ]]; then SETVAL["$_m|$_k"]="$_v"; fi
+      _v=""
+    fi
+    if [[ -z "${SETVAL["$_m|$_k"]:-}" ]]; then
+      if [[ "$_req" == true ]]; then gap "$_m : réglage requis $_k non fourni ($_q) — relancer install.sh au terminal, ou : printf '%s' '<valeur>' | bash scripts/app-env.sh set $_m $_k"
+      else note "$_m : réglage facultatif $_k non réglé ($_q)"; fi
+    fi
+  done < <(jq -r '.settings_missing[] | [.module, .key, (.required|tostring), (.secret|tostring), .question] | @tsv' <<< "$PLAN_JSON")
+fi
+
 # ══════════════════════════════════════════════════════════════════════════════
 step "3/12  Configuration de la machine (.env, bbox.env)"
 for pair in ".env.example:.env" "bbox.env.example:bbox.env"; do
@@ -237,49 +380,11 @@ step "4/12  Fichiers .env de chaque unité, annuaire, registre"
 #     Keycloak, coffre d'oauth-hub) ;
 #   • oauth-hub : la liste de confiance de départ inclut le moteur et lab-admin ;
 #   • lab-mcp : identités de CET hôte (id -u, id -g, GID du groupe docker).
-LAB_SERVICES=" lab-admin storage oauth-hub app-builder "
-fresh_env() {  # fresh_env <dossier de l'unité>
-  local dir="$1" unit env owner host key val tmp line
-  unit="$(basename "$dir")"; env="$dir/.env"
-  cp "$dir/.env.example" "$env" && chmod 600 "$env" || return 1
-  # Base
-  if grep -qE '^DB_NAME=' "$env"; then
-    host="$(envget "$env" DB_HOST)"
-    if [[ "$dir" == "$ROOT/deploiement/"* ]]; then
-      owner="$(registry_app_owner "$unit")"
-      if [[ "$host" == "postgis" ]]; then envset "$env" DB_NAME "gis_${owner}"; else envset "$env" DB_NAME "dev_${owner}"; fi
-      envset "$env" DB_USER "dev_${owner}"
-    elif [[ "$LAB_SERVICES" == *" $unit "* ]]; then
-      envset "$env" DB_NAME lab; envset "$env" DB_USER lab
-    fi
-  fi
-  # Secrets à CHANGE_ME (réécriture sans passer la valeur à une commande externe)
-  tmp="$(umask 077; mktemp "$env.XXXXXX")"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" =~ ^([A-Z][A-Z0-9_]*)=CHANGE_ME[[:space:]]*$ ]]; then
-      key="${BASH_REMATCH[1]}"
-      case "$key" in
-        DB_PASSWORD|POSTGIS_PASSWORD|KEYCLOAK_*|OAUTH_HUB_ENCRYPTION_KEY|CODE_SERVER_*|LDAP_*|POSTGRES_PASSWORD|PGADMIN_*|BBOX_*|SMTP_*) ;;
-        VAULT_ENCRYPTION_KEY)
-          # Clé Fernet (32 octets en base64 urlsafe) : une chaîne alphanumérique ne
-          # serait pas acceptée par cryptography et l'app ne démarrerait pas.
-          val="$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
-          line="${key}=${val}" ;;
-        *KEY*|*SECRET*|*PASSWORD*)
-          val="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 50 || true)"
-          line="${key}=${val}" ;;
-      esac
-    fi
-    printf '%s\n' "$line"
-  done < "$env" > "$tmp"
-  chmod 600 "$tmp"; mv "$tmp" "$env"
-  case "$unit" in
-    oauth-hub) grep -qE '^KEYCLOAK_TRUSTED_CLIENTS=' "$env" && envset "$env" KEYCLOAK_TRUSTED_CLIENTS "oauth-hub,lab-mcp,lab-admin" ;;
-    lab-mcp)   envset "$env" LAB_UID "$(id -u)"; envset "$env" LAB_GID "$(id -g)"
-               envset "$env" DOCKER_GID "$(getent group docker | cut -d: -f3)" ;;
-    infra)     envset "$env" PGADMIN_DEFAULT_PASSWORD "$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)" ;;
-  esac
-}
+# (Détail des ajustements : scripts/lib/fresh-env.sh, partagé depuis le 2026-11-14 avec
+# `lab-modules.sh prepare` ; un réglage déclaré par un module reste à CHANGE_ME pour être demandé.)
+# shellcheck source=lib/fresh-env.sh
+source "$SCRIPT_DIR/lib/fresh-env.sh"
+fresh_env() { lab_fresh_env "$1"; }
 _before=$N_TODO
 while IFS= read -r _ex; do
   _dir="$(dirname "$_ex")"
@@ -550,36 +655,79 @@ else todo "démarrer le runner E2E"; run bash "$SCRIPT_DIR/recompose_docker.sh" 
        || { $CHECK || gap "lab-runner n'a pas démarré (best-effort : les tests de cloisonnement ne tourneront pas)"; }; fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-step "10/12  Cadriciel, puis applications"
+step "10/12  Cadriciel, puis modules choisis"
 # Dans l'ordre de leurs dépendances. Une unité qui a déjà un conteneur en
 # service n'est PAS redéployée : l'installation complète, elle ne met pas à jour
-# (pour cela : bash scripts/setup2.sh <app> --yes).
+# (pour cela : bash scripts/setup2.sh <app> --yes). deploy_unit rend 1 si le
+# déploiement a échoué (les modules qui en dépendent sont alors sautés).
 deploy_unit() {
   local unit="$1"
   [[ -f "$(registry_app_dir "$unit")/docker-compose.yml" ]] || return 0
   if unit_running "$unit"; then ok "$unit en service"; return 0; fi
-  if [[ "$unit" == "lab-mcp" ]] && ! $HAS_DOMAIN; then gap "lab-mcp non démarré : il exige DOMAIN (HTTPS)"; return 0; fi
+  if [[ "$unit" == "lab-mcp" ]] && ! $HAS_DOMAIN; then gap "lab-mcp non démarré : il exige DOMAIN (HTTPS)"; return 1; fi
   todo "déployer $unit (setup_unit.sh)"
   $CHECK && return 0
   if bash "$SCRIPT_DIR/setup_unit.sh" "$unit" --yes > "$STATE_DIR/install-$unit.log" 2>&1; then
     ok "$unit déployée"
   else
-    gap "$unit : déploiement en échec (journal : $STATE_DIR/install-$unit.log) — $(grep -a 'ERROR' "$STATE_DIR/install-$unit.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-160)"
+    gap "$unit : déploiement en échec (journal : $STATE_DIR/install-$unit.log) — $(grep -a 'ERROR' "$STATE_DIR/install-$unit.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-160) — relancer : bash scripts/install.sh --modules $unit"
+    return 1
   fi
 }
-for _u in storage oauth-hub lab-admin lab-mcp; do deploy_unit "$_u"; done
-if $NO_APPS; then note "--no-apps : les applications ne sont pas déployées"
+FAILED=" "
+for _u in storage oauth-hub lab-admin lab-mcp; do deploy_unit "$_u" || FAILED+="$_u "; done
+if [[ -z "$SEL_CSV" ]]; then
+  if $NO_APPS; then note "--no-apps : les applications ne sont pas déployées"
+  else note "aucun module facultatif choisi"; fi
 else
-  # Ordre de scripts/app-priorities.conf, puis alphabétique.
-  while IFS= read -r _u; do
-    case "$_u" in sso-lab|infra|runner|storage|oauth-hub|lab-admin|lab-mcp) continue ;; esac
-    [[ -e "$(registry_app_dir "$_u" 2>/dev/null || echo "$_u")/.no-autodeploy" || -e "$_u/.no-autodeploy" ]] && { note "$_u ignorée (.no-autodeploy)"; continue; }
-    deploy_unit "$_u"
-  done < <(while IFS= read -r _dir; do
-             _n="$(basename "$_dir")"
-             _p="$(awk -F: -v a="$_n" '$1 == a { print $2; exit }' "$SCRIPT_DIR/app-priorities.conf" 2>/dev/null)"
-             printf '%s|%s\n' "${_p:-50}" "$_n"
-           done < <(registry_dirs_with docker-compose.yml) | sort -t'|' -k1,1n -k2,2 | cut -d'|' -f2)
+  # Plan recalculé sur l'état d'ORA : le cadriciel vient peut-être de démarrer.
+  PLAN_JSON="$(plan_of "$SEL_CSV")"
+  [[ -n "$PLAN_JSON" ]] || fail "plan d'installation incalculable (bash scripts/lab-modules.sh plan $SEL_CSV)"
+  BLOCKED=" $(jq -r '[.blocked[].module] | join(" ")' <<< "$PLAN_JSON") "
+  while IFS=$'\t' read -r _u _action; do
+    [[ -n "$_u" ]] || continue
+    case " storage oauth-hub lab-admin lab-mcp " in *" $_u "*) continue ;; esac   # déjà traités ci-dessus
+    _bad=""
+    for _d in $(mod_deps "$_u"); do
+      [[ "$FAILED$BLOCKED" == *" $_d "* ]] && { _bad="$_d"; break; }
+    done
+    if [[ -n "$_bad" ]]; then
+      gap "$_u non installé : il dépend de $_bad, qui n'a pas pu l'être — relancer après correction : bash scripts/install.sh --modules $_u"
+      FAILED+="$_u "; continue
+    fi
+    if [[ "$_action" != "keep" ]]; then
+      # Réglages requis encore manquants : le module n'est pas déployé (l'étape 2 l'a dit).
+      _miss="$(jq -r --arg m "$_u" '[.settings_missing[] | select(.module == $m and .required) | .key] | join(" ")' <<< "$PLAN_JSON")"
+      _left=""
+      for _k in $_miss; do [[ -n "${SETVAL["$_u|$_k"]:-}" ]] || _left+="$_k "; done
+      if [[ -n "$_left" ]]; then FAILED+="$_u "; note "$_u non déployé : réglage(s) requis manquant(s) — $_left"; continue; fi
+      if ! $CHECK; then
+        _lines=""
+        for _key in "${!SETVAL[@]}"; do
+          [[ "$_key" == "$_u|"* ]] && _lines+="${_key#*|}=${SETVAL[$_key]}"$'\n'
+        done
+        if [[ -n "$_lines" ]]; then
+          printf '%s' "$_lines" | bash "$SCRIPT_DIR/lab-modules.sh" settings "$_u" | sed 's/^/  · réglage /'
+          _lines=""
+        fi
+      fi
+    fi
+    deploy_unit "$_u" || FAILED+="$_u "
+  done < <(jq -r '.steps[] | [.module, .action] | @tsv' <<< "$PLAN_JSON")
+  for _key in "${!SETVAL[@]}"; do SETVAL[$_key]=""; done
+  # Modules en service hors de la sélection : rien n'y est touché, on les nomme.
+  for _u in "${OPTIONAL[@]}"; do
+    [[ ",$(jq -r '[.steps[].module] | join(",")' <<< "$PLAN_JSON")," == *",$_u,"* ]] && continue
+    unit_running "$_u" && ok "$_u en service (hors sélection)"
+  done
+  # Sélection mémorisée (I5) : les modules choisis qui ont pu être installés.
+  _keep=""
+  for _u in ${SEL_CSV//,/ }; do [[ "$FAILED$BLOCKED" == *" $_u "* ]] || _keep+="${_keep:+,}$_u"; done
+  if [[ -n "$_keep" ]] && ! $CHECK; then
+    bash "$SCRIPT_DIR/lab-modules.sh" selection add "$_keep" --by "$SU" > /dev/null \
+      && ok "sélection mémorisée : ${_keep//,/, } (.lab-state/modules/selection.json)" \
+      || gap "sélection non mémorisée (dossier d'état inaccessible ?)"
+  fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "name": "storage",
+  "label": "Stockage",
+  "description": "Stockage de fichiers du lab : espaces personnels, partages par groupe et accès depuis les autres applications.",
+  "category": "cadriciel",
+  "required": true,
+  "priority": 1,
+  "provides": {
+    "interface": "1"
+  },
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "famille",
+    "amis",
+    "developers",
+    "admins",
+    "manager",
+    "cuisinier",
+    "serveur",
+    "proprietaires"
+  ],
+  "install": null
+}

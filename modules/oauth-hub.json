@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "name": "oauth-hub",
+  "label": "OAuth Hub",
+  "description": "Identifiants OAuth des sites externes (GitHub, GitLab, Google) et jetons remis aux apps autorisées, au nom de l'utilisateur.",
+  "category": "cadriciel",
+  "required": true,
+  "priority": 2,
+  "provides": {
+    "interface": "1"
+  },
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "developers",
+    "admins",
+    "famille",
+    "amis",
+    "manager",
+    "cuisinier",
+    "serveur",
+    "proprietaires"
+  ],
+  "install": null
+}

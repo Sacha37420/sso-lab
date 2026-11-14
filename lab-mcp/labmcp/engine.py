@@ -59,6 +59,11 @@ GROUP_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 JOB_RE = re.compile(r"^[0-9a-f]{16}$")
 APP_TYPES = {"django": "3", "django-angular": "4", "angular": "5"}
 MAX_LOG_LINES = 4000
+# (modules, contrat modules v1, I4)
+MODULE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+MODULES_MAX = 20
+SETTING_MAX = 4096
+MODULES_JOB_TIMEOUT = 6 * 3600     # plusieurs déploiements à la suite ; un seul déploiement : 3 h
 
 # Ce qu'un jeton d'espace de travail peut appeler (I5) — sur SON projet seulement.
 # (v8) `sql` en fait partie : c'est le projet du dev, l'IA qui y travaille doit pouvoir lire sa base —
@@ -165,7 +170,7 @@ class Engine:
         except Exception as exc:
             # Message générique : un détail d'exception interne n'a rien à faire chez l'appelant.
             audit(c.label, op, app, "error", f"interne:{type(exc).__name__}", c.entrance)
-            if "smtp" in op or op == "database_password":
+            if "smtp" in op or op in ("database_password", "module_install"):
                 # Opérations qui manipulent un secret : ni message ni trace d'exception au journal.
                 log.error("erreur interne dans %s : %s", op, type(exc).__name__)
             else:
@@ -321,7 +326,14 @@ class Engine:
 
     # ── jobs ────────────────────────────────────────────────────────────────
     def _submit(self, kind: str, app: str, launched_by: str, work) -> dict:
-        active = self.jobs.active_for(app, preview=(kind == "preview"))
+        if kind == "modules":
+            # (modules) Un job modules n'est refusé que par un autre job modules : `app` y vaut "", comme
+            # pour `tests_all`, sans que l'un bloque l'autre (jobs.active_for écarte les jobs modules).
+            active = next(iter(self.jobs.active("modules")), None)
+            if active:
+                raise LabError("job_exists", "Une installation de modules est déjà en file ou en cours.",
+                               job_id=active.id)
+        active = None if kind == "modules" else self.jobs.active_for(app, preview=(kind == "preview"))
         if active:
             what = f"pour « {app} »" if app else "(lancement de tous les tests de cloisonnement)"
             raise LabError("job_exists", f"Un job est déjà en file ou en cours {what}.", job_id=active.id)
@@ -331,12 +343,14 @@ class Engine:
             raise LabError("queue_full", "Trop de jobs en attente sur le lab — réessayez plus tard.") from None
         return {"job_id": job.id, "kind": kind, "app": app, "state": job.state, "jobs_ahead": self.jobs.position(job)}
 
-    def _chain(self, chain_args: list[str], token: str = "", seed: dict | None = None):
+    def _chain(self, chain_args: list[str], token: str = "", seed: dict | None = None,
+               settings: dict | None = None, timeout: float = 3 * 3600):
         """Travail d'un job : un enchaînement lancé PAR lab-lock.sh (chain.py).
 
         `seed` (création seulement) : comme le jeton, la graine vit dans la fermeture du job, de sa
         mise en file à sa fin. Elle est remise à la chaîne par un FICHIER 0600 dont seul le chemin
-        passe (LAB_MCP_SEED_FILE) : jamais un argument (lisible par `ps`), jamais le journal."""
+        passe (LAB_MCP_SEED_FILE) : jamais un argument (lisible par `ps`), jamais le journal.
+        `settings` (modules seulement) : les réglages fournis, par la même voie (LAB_MCP_SETTINGS_FILE)."""
         cfg = self.cfg
 
         async def work(job: Job) -> dict:
@@ -348,6 +362,11 @@ class Engine:
                 fd, seed_path = tempfile.mkstemp(prefix="lab-mcp-seed-", suffix=".json")   # créé en 0600
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     json.dump(seed, fh)
+            settings_path = ""
+            if settings:
+                fd, settings_path = tempfile.mkstemp(prefix="lab-mcp-settings-", suffix=".json")   # 0600
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(settings, fh)
             env = procs.base_env(cfg, cfg.job_lock_timeout)
             env.update({
                 "LAB_ROOT": cfg.root,
@@ -360,13 +379,17 @@ class Engine:
                 env["LAB_GIT_TOKEN"] = token
             if seed_path:
                 env["LAB_MCP_SEED_FILE"] = seed_path
+            if settings_path:
+                env["LAB_MCP_SETTINGS_FILE"] = settings_path
             argv = procs.script(cfg, "lab-lock.sh") + [sys.executable, "-m", "labmcp.chain", *chain_args]
             try:
-                code, _, err = await procs.run(argv, env, cwd=cfg.root, timeout=3 * 3600, on_line=job.add_line)
+                code, _, err = await procs.run(argv, env, cwd=cfg.root, timeout=timeout, on_line=job.add_line)
             finally:
-                if seed_path:       # la chaîne l'a déjà supprimé en le lisant ; ceci couvre « verrou occupé »
-                    with contextlib.suppress(OSError):
-                        os.unlink(seed_path)
+                # La chaîne les a déjà supprimés en les lisant ; ceci couvre « verrou occupé » et l'échec.
+                for path in (seed_path, settings_path):
+                    if path:
+                        with contextlib.suppress(OSError):
+                            os.unlink(path)
             result: dict = {}
             try:
                 with open(result_path, encoding="utf-8") as fh:
@@ -1352,6 +1375,126 @@ class Engine:
 
         job = self._submit("tests_all", "", uid, work)
         return {"job_id": job["job_id"], "kind": "tests_all", "apps": apps}
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # Modules (chantier « modules », contrat v1, I4) — superutilisateur seul, entrée web seule
+    #
+    # Le moteur ne lit aucune description de module : tout vient de `scripts/lab-modules.sh` (I2),
+    # rendu tel quel. Une installation est un job `modules` (app "") qui enchaîne, sous le verrou,
+    # le même déploiement qu'un `deploy` pour chaque pas du plan (chain.py, `modules`).
+    # ═════════════════════════════════════════════════════════════════════════
+    def _superuser(self, c: Caller) -> str:
+        uid = self._dev(c)
+        if not c.is_superuser:
+            raise LabError("forbidden", "Réservé au superutilisateur.")
+        return uid
+
+    async def _lab_modules(self, args: list[str], timeout: float = 60) -> tuple[int, dict]:
+        """`lab-modules.sh <args>` : une ligne JSON (codes 0 et 1 la rendent tous deux, I2)."""
+        code, out, err = await self._script("lab-modules.sh", args, timeout=timeout)
+        data = None
+        if code in (0, 1):
+            try:
+                data = json.loads(out.strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                data = None
+        if not isinstance(data, dict):
+            raise LabError("failed", f"lab-modules.sh {args[0]} a rendu {code} sans réponse lisible : {self._last(err)}")
+        return code, data
+
+    @staticmethod
+    def _module_args(modules: Any, reinstall: Any, with_deps: Any) -> list[str]:
+        if (not isinstance(modules, list) or not 1 <= len(modules) <= MODULES_MAX
+                or not all(isinstance(m, str) and MODULE_RE.fullmatch(m) for m in modules)):
+            raise LabError("invalid", f"modules : liste de 1 à {MODULES_MAX} noms de module "
+                                      "(minuscules, chiffres, « - » et « _ »).")
+        bad = [k for k, v in (("reinstall", reinstall), ("with_deps", with_deps)) if not isinstance(v, bool)]
+        if bad:
+            raise LabError("invalid", "reinstall et with_deps : true ou false.",
+                           reasons=[f"{k} : booléen attendu" for k in bad])
+        return (["--for-engine"] + (["--reinstall"] if reinstall else []) + (["--with-deps"] if with_deps else [])
+                + [",".join(modules)])
+
+    async def op_modules(self, c: Caller) -> dict:
+        self._superuser(c)
+        _, data = await self._lab_modules(["list", "--json"])
+        active = next(iter(self.jobs.active("modules")), None)
+        return {**data, "job": active.id if active else None}
+
+    async def op_module(self, c: Caller, name: str, check: bool = False) -> dict:
+        self._superuser(c)
+        if not isinstance(name, str) or not MODULE_RE.fullmatch(name):
+            raise LabError("not_found", "Module inconnu du lab.")
+        code, data = await self._lab_modules(["show", name, "--json"] + (["--check"] if check is True else []),
+                                             timeout=120)
+        if data.get("error") == "not_found":
+            raise LabError("not_found", str(data.get("detail") or "Module inconnu du lab.")[:300])
+        if code != 0 or "error" in data:
+            raise LabError("failed", f"lab-modules.sh show a rendu {code}.")
+        return data
+
+    async def op_module_plan(self, c: Caller, modules: Any = None, reinstall: Any = False,
+                             with_deps: Any = False) -> dict:
+        self._superuser(c)
+        _, plan = await self._lab_modules(["plan", "--json"] + self._module_args(modules, reinstall, with_deps))
+        return plan
+
+    async def op_module_install(self, c: Caller, modules: Any = None, reinstall: Any = False,
+                                with_deps: Any = False, settings: Any = None) -> dict:
+        """Les VALEURS des réglages ne sortent de cette fonction que vers le fichier 0600 du job :
+        ni `detail`, ni `reasons`, ni le journal, ni l'audit n'en citent une."""
+        uid = self._superuser(c)
+        args = self._module_args(modules, reinstall, with_deps)
+        if settings is None:
+            settings = {}
+        if not isinstance(settings, dict):
+            raise LabError("invalid", "settings : objet {module: {CLÉ: valeur}} attendu.")
+        reasons: list[str] = []
+        given: dict[str, dict[str, str]] = {}
+        for mod, kv in settings.items():
+            if not isinstance(mod, str) or not MODULE_RE.fullmatch(mod) or not isinstance(kv, dict):
+                reasons.append("settings : nom de module invalide, ou réglages qui ne sont pas un objet")
+                continue
+            for key, value in kv.items():
+                if not isinstance(key, str) or not KEY_RE.fullmatch(key):
+                    reasons.append(f"{mod} : clé invalide (majuscules, chiffres et « _ », 64 au plus)")
+                elif (not isinstance(value, str) or len(value) > SETTING_MAX
+                      or any(ch in value for ch in "\r\n\x00")):
+                    reasons.append(f"{mod} : {key} — valeur : chaîne d'une seule ligne, {SETTING_MAX} caractères au plus")
+                elif value:     # vide = non fourni : rien n'est écrit, le réglage reste à faire
+                    given.setdefault(mod, {})[key] = value
+        if reasons:
+            raise LabError("invalid", "settings : réglages refusés — rien n'a été lancé.", reasons=reasons)
+
+        _, plan = await self._lab_modules(["plan", "--json"] + args)
+        if not plan.get("ok"):
+            raise LabError("invalid", "Ce plan n'est pas réalisable — rien n'a été lancé.",
+                           reasons=[str(b.get("reason") or b.get("module")) for b in plan.get("blocked") or []])
+        declared = {st.get("module"): {s.get("key") for s in st.get("settings") or []}
+                    for st in plan.get("steps") or [] if st.get("action") in ("install", "reinstall")}
+        undeclared = [f"{mod} : {key} non déclaré par un module à installer"
+                      for mod, kv in settings.items() for key in kv
+                      if key not in declared.get(mod, set())]
+        if undeclared:
+            raise LabError("invalid", "settings : clé(s) que le plan ne demande pas — rien n'a été lancé.",
+                           reasons=undeclared)
+        missing = [f"{m.get('module')} : {m.get('key')} requis" for m in plan.get("settings_missing") or []
+                   if m.get("required") and m.get("key") not in given.get(m.get("module"), {})]
+        if missing:
+            raise LabError("invalid", "Réglage(s) requis manquant(s) — rien n'a été lancé.", reasons=missing)
+
+        chain_args = ["modules", uid, "1" if reinstall else "0", "1" if with_deps else "0", ",".join(modules)]
+        inner = self._chain(chain_args, settings=given or None, timeout=MODULES_JOB_TIMEOUT)
+
+        async def work(job: Job) -> dict:
+            result = await inner(job)
+            result.pop("exit_code", None)          # forme d'I4 : ok, step, results, skipped, error
+            result.setdefault("results", [])
+            result.setdefault("skipped", [])
+            return result
+
+        ticket = self._submit("modules", "", uid, work)
+        return {**ticket, "plan": plan}
 
     # ── tickets ─────────────────────────────────────────────────────────────
     async def op_open_ticket(self, c: Caller, title: str, body: str, scope: str = "app", app: str = "") -> dict:

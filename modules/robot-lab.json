@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "name": "robot-lab",
+  "label": "Robot Lab",
+  "description": "Robots de navigation web : enregistrement d'un parcours, assistant IA pour le modifier, exécution avec récupération des fichiers téléchargés.",
+  "category": "application",
+  "required": false,
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "developers"
+  ],
+  "install": null
+}

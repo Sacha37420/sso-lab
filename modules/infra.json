@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "name": "infra",
+  "label": "Bases de données (infra)",
+  "description": "PostgreSQL et PostGIS du lab, pgAdmin partagé ; possède aussi le volume de storage.",
+  "category": "socle",
+  "required": true,
+  "priority": 0,
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {},
+  "settings": [],
+  "groups": [],
+  "install": null
+}

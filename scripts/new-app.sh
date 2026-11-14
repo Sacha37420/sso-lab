@@ -1251,6 +1251,25 @@ else
   err "Gabarit des règles introuvable ($_RULES_TMPL) — une app sans feuille de route ne serait pas déployable."
 fi
 
+# ── Description du module et scripts d'installation (chantier « modules », I1/I3) ──
+# lab-module.json : dépendances, réglages à demander, ressources de build — lue par
+# install.sh, le moteur et lab-admin. install.sh / install.bat : squelettes sans
+# effet, déclarés par la description (le lab joue install.sh avant chaque build).
+_MOD_TMPL="$DEV_DIR/_templates/module"
+if [[ -d "$_MOD_TMPL" ]]; then
+  _title="$(echo "${APP_NAME}" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2); print}')"
+  _groups_json="$(printf '%s' "${REQUIRE_GROUP:-}" | python3 -c 'import json,sys; print(json.dumps([g for g in sys.stdin.read().split(",") if g]))')"
+  sed -e "s|__APP_NAME__|${APP_NAME}|g" -e "s|__APP_TITLE__|${_title}|g" -e "s|__GROUPS_JSON__|${_groups_json}|g" \
+      "$_MOD_TMPL/lab-module.json" > "$APP_DIR/lab-module.json"
+  for _mf in install.sh install.bat; do
+    sed -e "s|__APP_NAME__|${APP_NAME}|g" "$_MOD_TMPL/$_mf" > "$APP_DIR/$_mf"
+  done
+  chmod 755 "$APP_DIR/install.sh"
+  ok "lab-module.json, install.sh, install.bat (description du module)"
+else
+  warn "Gabarit du module introuvable ($_MOD_TMPL) — l'app aura une description déduite."
+fi
+
 case "$APP_TYPE" in
 
   # ── 1) Spring Boot seul ──────────────────────────────────────────────────────

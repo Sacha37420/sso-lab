@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "name": "lab-media",
+  "label": "Flux audio et vidéo (lab-media)",
+  "description": "MediaMTX et capture des périphériques de l'hôte (webcams, micro, haut-parleur) ; les apps décident de la lecture par leur hook.",
+  "category": "cadriciel",
+  "required": false,
+  "provides": {
+    "interface": "1"
+  },
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [],
+  "install": null
+}

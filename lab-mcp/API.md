@@ -1,4 +1,4 @@
-# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v11, I9 v7, I10 v9 ; espace-chat v1 ; app-builder-lab v1 ; essai-dev v1)
+# API du moteur du lab — description faisant foi (contrat multi-dev, I5 v11, I9 v7, I10 v9 ; espace-chat v1 ; app-builder-lab v1 ; essai-dev v1 ; modules v1)
 
 Écrite à partir de ce que le code rend réellement (`labmcp/engine.py`). Là où la table d'I5 et ce
 document divergent sur une **forme**, ce document l'emporte.
@@ -38,6 +38,12 @@ spécification, posés dans le premier commit). Sans `seed`, rien ne change pour
 `preview_status`, `preview_stop`) pour l'**adresse d'essai** d'un développeur (§3.9), un genre de job
 de plus (`preview`, §4) et une erreur de plus (`no_workspace`, §2). Rien d'existant ne change : un job
 d'essai ne bloque ni un déploiement ni un test du même projet, et inversement.
+
+**Ajout du chantier « modules » (contrat v1, I4)** — compatible : quatre routes, **web seulement** et
+**réservées au superutilisateur** (`GET /modules`, `GET /modules/<nom>`, `POST /modules/plan`,
+`POST /modules/install`, §3.10), un genre de job de plus (`modules`, §3.10). **Aucun outil MCP**
+(décision D11 du contrat). Rien d'existant ne change : un job `modules` ne bloque ni ne se fait bloquer
+par un `tests_all`, un déploiement ou un test.
 
 **Écarts avec la table d'I5** :
 - routes **en plus** : `GET /mcp/api/groups` (v6) ; `GET /mcp/api/me/database-password`,
@@ -764,6 +770,125 @@ tenu (la veille n'attend pas : elle repasse). Chaque démontage laisse une ligne
 
 Rien de ce que rend le script ne décide d'un droit : qui peut agir sur un projet est décidé avant,
 par le registre. Un résultat qui ne nomme pas le développeur et le projet demandés est un échec.
+
+### 3.10 Modules du lab (chantier « modules », contrat v1, I4)
+
+Un **module** est une unité du lab (service du cadriciel ou app) avec sa description (dépendances,
+réglages à demander, ressources…). Le moteur ne lit **aucune** description lui-même : chaque route
+lance `scripts/lab-modules.sh` (interface I2 du contrat) et en rend la sortie **telle quelle**. Les
+formes de `list`, `show` et `plan` sont donc celles d'I2 (`chantiers/modules/CONTRAT.md` §4) ; elles
+sont rappelées ici dans leurs grandes lignes seulement.
+
+**Accès** : les quatre routes sont **réservées au superutilisateur** (`LAB_SUPERUSER`) —
+`403 forbidden`, `detail` « Réservé au superutilisateur. » pour tout autre développeur ; compte hors
+`developers` : `403 forbidden` ; pas encore initialisé : `409 not_initialized`. Un jeton d'espace de
+travail est refusé (`403 forbidden` : l'entrée web ne l'accepte pas, et ces opérations sont hors de ce
+qu'il peut appeler). Aucun outil MCP ne les expose.
+
+#### `GET /modules` ✅ → `list --json` d'I2, plus `job`
+```json
+{"schema": 1,
+ "selection": {"memorized": true, "modules": ["alpha"], "updated_at": "2026-11-14T10:02:11+0100", "by": "sacha"},
+ "modules": [{"name": "peripheriques", "label": "Périphériques", "category": "application", "required": false,
+              "state": "installed", "requires": {"modules": [{"name": "lab-media", "interface": "1"}], "…": "…"},
+              "settings": [{"key": "PERIPHERIQUES_BRIDGE_KEY", "question": "…", "required": false, "secret": true, "set": true}],
+              "…": "autres champs de l'Item d'I2"}],
+ "job": "3f0c9a1b2d4e5f60"}
+```
+`job` : identifiant du job `modules` **en file ou en cours** (à suivre par `GET /jobs/<id>`), sinon
+`null`. Aucune valeur de `.env` n'est jamais rendue (`set` dit seulement qu'un réglage est posé).
+
+#### `GET /modules/<nom>` ✅ → `show --json` d'I2 · `?check=1` → avec `--check`
+Sans `check` : l'Item du module. Avec `?check=1` (ou `?check=true`) : l'Item plus `checks`
+(`[{what, ok: true|false|null, detail, output}]`) et `ok` — prérequis système, domaine, réglages,
+dépendances, groupes, script `install.sh --check` du module. Délai : 120 s. Module inconnu, ou nom
+hors `^[a-z0-9][a-z0-9_-]{0,62}$` : `404 not_found`.
+
+#### `POST /modules/plan` ✅ — `{"modules": ["nom", …], "reinstall": false, "with_deps": false}` → `plan --json --for-engine` d'I2
+Rendu **tel quel**, y compris un plan **non réalisable** (`200`, `"ok": false`, `blocked` dit pourquoi :
+`unknown`, `inaccessible`, `absent`, `invalid`, `cycle`, `no_autodeploy`, `system`, `domain`,
+`interface`, `socle`, `engine_self`, `dependency`). `--for-engine` : `lab-mcp` n'est jamais qu'un
+`keep` (le moteur ne se redéploie pas lui-même, `engine_self`).
+```json
+{"ok": true, "requested": ["peripheriques"], "reinstall": false, "with_deps": false,
+ "steps": [{"module": "lab-media", "action": "install", "reason": "dépendance de peripheriques", "hook": false,
+            "resources": {"build_ram_mb": 1500, "disk_mb": null, "build_minutes": null, "heavy_build": false},
+            "settings": []},
+           {"module": "peripheriques", "action": "install", "reason": "demandé", "hook": false, "resources": {"…": "…"},
+            "settings": [{"key": "PERIPHERIQUES_BRIDGE_KEY", "question": "…", "required": false, "secret": true, "set": false}]}],
+ "blocked": [], "settings_missing": [{"module": "peripheriques", "key": "PERIPHERIQUES_BRIDGE_KEY", "question": "…",
+                                      "required": false, "secret": true}], "warnings": []}
+```
+
+**Corps** (plan et install) — refusé en `400 invalid` sinon, rien n'est lancé :
+- `modules` : **obligatoire**, liste de 1 à 20 noms `^[a-z0-9][a-z0-9_-]{0,62}$` ;
+- `reinstall`, `with_deps` : facultatifs (défaut `false`), **booléens JSON stricts** (`"true"`, `1`,
+  `null` refusés) ;
+- tout autre champ est refusé (`reasons: ["champ inconnu : …"]`) — `settings` n'est admis que par
+  `install`.
+
+#### `POST /modules/install` ✅ — même corps, plus `"settings": {"<module>": {"<CLÉ>": "<valeur>"}}` (facultatif)
+```json
+{"job_id": "3f0c9a1b2d4e5f60", "kind": "modules", "app": "", "state": "queued", "jobs_ahead": 0,
+ "plan": {"ok": true, "…": "le plan recalculé par le moteur, forme de POST /modules/plan"}}
+```
+Le moteur **recalcule le plan** (le même que `POST /modules/plan`), puis refuse en `400 invalid`, rien
+n'étant lancé :
+
+| Cas | `reasons` |
+|---|---|
+| plan non réalisable (`ok: false`) | le `reason` de chaque module de `blocked` |
+| `settings` qui n'est pas un objet `{module: {CLÉ: valeur}}`, nom de module ou clé mal formés | une raison par entrée, **sans la valeur** |
+| valeur qui n'est pas une chaîne, ou de plus de 4096 caractères, ou avec `\n`, `\r` ou un octet nul | `"<module> : <CLÉ> — valeur : …"` |
+| clé qui n'est pas déclarée par un pas `install`/`reinstall` du plan (module absent du plan, ou seulement `keep`) | `"<module> : <CLÉ> non déclaré par un module à installer"` |
+| réglage **requis** du plan (`settings_missing`, `required: true`) ni réglé ni fourni | `"<module> : <CLÉ> requis"` |
+
+Une valeur **vide** vaut « non fournie » : rien n'est écrit, le réglage reste à faire (et s'il est
+requis, c'est un refus). Un réglage déjà posé dans le `.env` du module n'est **jamais réécrit**
+(`lab-modules.sh settings` le dit « déjà réglé »). Autres erreurs : `409 job_exists` (`job_id`) si un job
+`modules` est déjà en file ou en cours — **seul un autre job `modules` bloque** ; `429 queue_full`.
+
+**Les valeurs de réglage ne sont jamais rendues, journalisées ni auditées** : du serveur à la chaîne,
+elles passent par un fichier `0600` dont seul le chemin transite (`LAB_MCP_SETTINGS_FILE`, retiré de
+l'environnement de la chaîne dès son démarrage, supprimé dès qu'il est lu, et par le serveur à la fin du
+job), puis par l'entrée standard de `lab-modules.sh settings`. Jamais un argument de processus.
+
+#### Le job `modules`
+`GET /jobs/<id>` (forme du §4) : `kind: "modules"`, `app: ""`, `launched_by` = le superutilisateur.
+Sous le verrou du lab (`lab-lock.sh python -m labmcp.chain modules …`), délai total 6 h :
+1. le plan est **recalculé** (`lab-modules.sh plan --json --for-engine …`) ; s'il n'est plus réalisable,
+   rien n'est lancé (`step: "plan"`) ;
+2. pour chaque pas, dans l'ordre du plan, une **étape** de journal
+   `══ [lab-mcp] étape « module_<nom, - → _> » — <action> de <nom>` (le `step` du job en cours nomme
+   donc le module) ;
+3. `keep` : une ligne, rien d'autre ; `install` / `reinstall` : `lab-modules.sh prepare <nom>` →
+   `lab-modules.sh settings <nom>` (seulement si des valeurs sont fournies pour ce module ; le journal
+   ne montre que `CLÉ: écrit | déjà réglé | refusé`) → **le même enchaînement qu'un déploiement**
+   (`app-sync.sh` — seul un commit présent sur GitHub —, `validate-app.sh` selon les portes,
+   `setup2.sh <nom> --yes`, relecture d'`app-status.sh`), annoncé en sous-étapes `   ── sync — …`,
+   `   ── validate — …`, `   ── setup — …` → `storage-shares.sh` **si `storage` est en service**
+   (état relu par `lab-modules.sh show storage --json` après chaque module : un échec des partages est
+   signalé `⚠`, il ne fait pas échouer le module) → `lab-modules.sh selection add <nom> --by <uid>` ;
+4. un pas en échec n'arrête pas les autres : seuls ceux qui **en dépendent** (directement ou par un
+   module sauté) sont sautés, `⤼ sauté : dépend de <x>, en échec`.
+
+`result` (rien d'autre, pas d'`exit_code`) :
+```json
+{"ok": false, "step": "gamma",
+ "results": [{"module": "epsilon", "action": "install", "ok": true, "step": "done", "sha": "<40 hex>"},
+             {"module": "gamma", "action": "install", "ok": false, "step": "build", "sha": "<40 hex>",
+              "error": "build en échec — rien n'a été mis en service. La version précédente reste en service."}],
+ "skipped": [{"module": "delta", "reason": "dépend de gamma, en échec"}],
+ "error": "1 module(s) en échec : gamma ; 1 sauté(s) : delta"}
+```
+- `ok` : tous les pas `install`/`reinstall` réussis (aucun en échec, aucun sauté) ; `step` : `"done"`, ou
+  le premier module en échec (à défaut le premier sauté) ;
+- `results` : un objet par pas `install`/`reinstall` joué (les `keep` n'y figurent pas). `step` d'un
+  module : `prepare` · `settings` · `sync` · `validate` · `build` · `tests_backend` · `setup` (sens du
+  tableau `deploy` du §4) · `done` ; `sha` : `null` tant que le commit n'est pas résolu ;
+- échecs du job entier, `results` et `skipped` vides : `step: "lock"` (verrou du lab occupé trop
+  longtemps — rien n'a été lancé), `"plan"` (plan devenu non réalisable, ou illisible), `"arguments"`
+  (arguments ou réglages refusés par la chaîne elle-même), `"interne"`.
 
 ---
 

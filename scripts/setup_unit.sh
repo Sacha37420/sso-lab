@@ -98,6 +98,19 @@ if kc_probe_in_container; then
   esac
 fi
 
+# ── Script d'installation du module (chantier « modules », I3) ────────────────
+# Seulement si la description du module en déclare un (aucune app ne le faisait
+# avant le 2026-11-14 : rien ne change pour elles). APRÈS les contrôles, AVANT
+# tout nettoyage ou build : un échec n'arrête rien, la version en service tourne.
+if [[ -n "$(python3 -B "$SCRIPT_DIR/lib/modules.py" "$ROOT_DIR" hook "$APP_NAME" 2>/dev/null)" ]] \
+   || ! python3 -B "$SCRIPT_DIR/lib/modules.py" "$ROOT_DIR" hook "$APP_NAME" > /dev/null 2>&1; then
+  echo -e "\033[0;36m══ $APP_NAME — script d'installation du module (install.sh)\033[0m"
+  if ! bash "$SCRIPT_DIR/module-hook.sh" "$APP_NAME"; then
+    echo -e "\033[0;31m✗ ERROR : $APP_NAME — script d'installation du module en échec : rien n'a été arrêté ni construit, la version précédente tourne toujours.\033[0m" >&2
+    exit 1
+  fi
+fi
+
 if $GATED; then
   echo -e "\033[0;36m══ $APP_NAME — pas de nettoyage préalable : la version en service reste en place jusqu'aux tests\033[0m"
 else

@@ -68,6 +68,9 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
 - **Sauvegardes : chiffrement à faire.** Elles tournent chaque nuit (voir « Sauvegardes ») mais
   **en clair**, par décision du propriétaire du 2026-10-12 : à brancher dans `seal()` de
   `scripts/backup.sh` (clé publique sur le serveur, clé privée chez lui).
+- **Modules — décision P1 attendue** (`chantiers/modules/CONTRAT.md` § 9) : jouer ou non le
+  `install.sh` de l'app d'un **développeur** (aujourd'hui : jamais ; option préparée : conteneur
+  jetable `--network none`, contrôle de sûreté rejoué après).
 - **Constats de relecture** (`chantiers/multi-dev/rapports/`) : tous réglés — documentation d'API
   et `.env` du conteneur nginx (gabarit, 2026-10-11), un seul lanceur de tests (le moteur), « Apps du
   lab » redirigée vers « Projets ».
@@ -365,6 +368,10 @@ feuille de route présente et bien formée, `frontend/e2e/cloisonnement.spec.ts`
 backend verts avant mise en service, verdicts enregistrés avec chaque déploiement
 (`<LAB_STATE_DIR>/deployed/<app>.json`). Non imposable : la qualité des tests écrits.
 
+Depuis le 2026-11-14, tout projet scaffoldé porte aussi **`lab-module.json`** (description du module :
+dépendances, réglages, ressources), `install.sh` et `install.bat` (squelettes, `_templates/module/`) ;
+`validate-app.sh` refuse une description invalide ou un script déclaré absent (section « Modules »).
+
 Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to_do_<sujet>.md`
 (lots, tests par lot, date de vérification), et le régime chantier garde son contrat.
 
@@ -589,6 +596,51 @@ de Keycloak, domaine, routeur, `~/edge-router/`) : `README.md` §1.2.
 - Un projet privé enregistré comme sous-module porte `update = none` dans `.gitmodules` (posé par
   `app-register.sh`) : sans cela, `git clone --recurse-submodules` avorte pour quiconque n'y a pas
   accès, et n'extrait aucun sous-module.
+
+---
+
+## Modules : description, dépendances, installation (2026-11-14, chantier `chantiers/modules/`)
+
+Le lab s'installe par **modules**. Socle (`sso-lab`, `infra`, `runner`) et cadriciel obligatoire
+(`storage`, `oauth-hub`, `lab-admin`, `lab-mcp`) : toujours. Facultatifs : les apps de
+`deploiement/`, `app-builder`, `lab-media`. Format et commandes : `modules/README.md` ; ce qu'une app
+doit fournir : `chantiers/modules/REGLES_MODULE.md` (versionné par exception au `.gitignore`).
+
+- **Description** : `<module>/lab-module.json`, sinon catalogue central `modules/<nom>.json`, sinon
+  déduite (sans dépendances). Le premier présent gagne **en entier**, sans fusion ; présent mais
+  invalide ⇒ état « description invalide » et déploiement refusé (`[module]`), jamais de repli.
+  Les 14 dépôts d'apps n'ont pas été touchés : tout vient du catalogue central.
+- **Un seul analyseur, une seule résolution** : `scripts/lib/modules.py`, appelé par
+  `scripts/lab-modules.sh` — qu'utilisent `install.sh`, le moteur (`lab-modules.sh` est dans
+  `procs.ALLOWED_SCRIPTS`) et, par le moteur, lab-admin. Ne pas réécrire la résolution ailleurs.
+- **`install.sh`** : choix à l'**étape 2** (avant le premier conteneur, donc visible avec
+  `--check` et `--until`), déploiement à l'étape 10 dans l'ordre du plan (topologique, puis
+  `priority`, puis nom). `--yes` sans `--modules` = sélection mémorisée, sinon **tous** (règle
+  d'avant). Sélection : `.lab-state/modules/selection.json` (`by` = uid, jamais un email). Sans
+  sélection mémorisée, `--check` le *note* et conclut quand même « Rien à faire ».
+- **Réglages déclarés** (`settings`) : demandés au terminal ou saisis dans lab-admin, écrits par
+  `lab-modules.sh settings` (→ `app-env.sh set`, donc jamais une clé gérée), **jamais réécrits**
+  s'ils sont posés. `lib/fresh-env.sh` (sorti d'`install.sh`) laisse un réglage déclaré à
+  `CHANGE_ME` au lieu de le tirer au hasard (une « clé Mistral » aléatoire n'en est pas une).
+- **Scripts d'installation** (`install.sh` du module, déclaré) : joués par `scripts/module-hook.sh`
+  dans `setup_unit.sh`, **après les contrôles et avant tout nettoyage ou build** — donc à chaque
+  déploiement, par tous les chemins ; un échec ne coupe rien. Environnement vide, délai
+  `timeout_s`. **Jamais pour l'app d'un développeur** (il tournerait avec le groupe `docker` après
+  `validate-app.sh` et pourrait réécrire `docker-compose.yml`/`.env` validés) : décision P1 en
+  attente du propriétaire (`chantiers/modules/CONTRAT.md` § 9). `install.bat` n'est jamais joué.
+- **Moteur** : `GET /mcp/api/modules`, `GET /modules/{name}` (`?check=1`), `POST /modules/plan`,
+  `POST /modules/install` — **superutilisateur seul** (jamais sur la foi d'un groupe), aucun outil
+  MCP. L'installation suit le chemin de déploiement standard (`app-sync.sh` : seul un commit
+  présent sur GitHub), un pas en échec ne saute que ses dépendants, et **le moteur ne se
+  réinstalle jamais lui-même** (`engine_self`). Réglages : fichier 0600, chemin seul transmis.
+- **Groupes** d'un module : vérifiés (Keycloak, adresse interne), jamais créés — ils viennent de
+  l'annuaire.
+- **Windows** : `install.bat` racine explique « non pris en charge » (hôte Linux exigé).
+- Tests : `bash scripts/tests/modules/run.sh` (faux lab, sans Docker) ; il vérifie aussi que tout
+  `modules/*.json` est valide, sans cycle ni dépendance inconnue.
+- Écart connu : les secrets **croisés** entre deux modules (`lab-media` ↔ `peripheriques` :
+  `LAB_MEDIA_APP_PERIPHERIQUES_*` / `MEDIA_*`) sont tirés au hasard séparément par `fresh_env` sur
+  une machine neuve — non relié par ce chantier, à faire avant la première vraie installation.
 
 ---
 
@@ -1610,7 +1662,9 @@ ci-dessous, lancé avec `bash sso-lab/…`).
 
 | Script | Rôle |
 |---|---|
-| `install.sh [--check]` | Installation rejouable du lab ; `--check` ne fait rien et dit ce qui manque |
+| `install.sh [--check]` | Installation rejouable du lab ; `--check` ne fait rien et dit ce qui manque ; `--modules a,b`, `--all-modules` |
+| `lab-modules.sh list\|show\|plan\|selection\|settings\|prepare` | Modules : catalogue et état, vérification, plan, sélection mémorisée (section « Modules ») |
+| `module-hook.sh <module> [--check]` | Joue le `install.sh` déclaré par un module (appelé par `setup_unit.sh`, avant le build) |
 | `lab-doctor.sh` | Bilan de santé en lecture seule (installation, pg_hba, partages, sauvegarde, jokers et PKCE Keycloak, scope nonce, ports, conteneurs oubliés, cloisonnement, disque) ; code 1 si un problème |
 | `backup-cron.sh [--check]` | Planifie `backup.sh` à 3 h dans la crontab (ne change jamais une ligne existante) et vérifie les prérequis NAS ; appelé par `install.sh` |
 | `new-app.sh [--owner <uid>]` | Scaffold d'une nouvelle app dans `deploiement/` (appelé par le moteur) |

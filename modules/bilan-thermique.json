@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "name": "bilan-thermique",
+  "label": "Bilan Thermique",
+  "description": "Simulation thermique 1D d'une paroi multicouche par éléments finis : conduction, capacité thermique et apports solaires directs/diffus.",
+  "category": "application",
+  "required": false,
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "developers",
+    "famille",
+    "amis"
+  ],
+  "install": null
+}
