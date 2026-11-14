@@ -711,7 +711,12 @@ def _config_writer(state: State) -> None:
         if applied is False:
             log('config', written=False, reason='MediaMTX n\'a pas rechargé : réécriture')
             time.sleep(max(0.0, state.last_write + CONFIG_SPACING_S - time.monotonic()))
-            write_config(state, state.env, force=True)
+            try:
+                write_config(state, state.env, force=True)
+            except OSError as exc:
+                # Comme la première écriture : un échec ne doit pas arrêter ce fil pour de bon
+                # (plus rien n'atteindrait MediaMTX, sans un mot) ; la vérification suivante réessaie.
+                log('config', written=False, reason=f'écriture impossible ({type(exc).__name__})')
             continue
         pending_check = False
 

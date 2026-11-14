@@ -319,10 +319,17 @@ class WorkspaceManager:
             beat = float(r.json().get("lastHeartbeat") or 0) / 1000 if r is not None and r.status_code == 200 else 0
         except (ValueError, TypeError, AttributeError):
             beat = 0
+        # Même règle que pour la conversation : le dev tient le processus qui répond sur
+        # `healthz` et la date du fichier de battement. Un battement infini ou dans le futur
+        # est une erreur, pas une activité — il garderait l'espace ouvert indéfiniment.
+        if not math.isfinite(beat) or beat > time.time() + CLOCK_SLACK:
+            beat = 0
         if not beat:
             try:  # repli : le même battement, écrit par code-server dans la maison
                 beat = os.stat(os.path.join(self.home(ws.uid), HEARTBEAT)).st_mtime
             except OSError:
+                beat = 0
+            if beat > time.time() + CLOCK_SLACK:
                 beat = 0
         return max(last, beat)
 

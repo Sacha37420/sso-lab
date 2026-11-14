@@ -21,8 +21,9 @@ const testMatch = ['cloisonnement.spec.ts', ...(process.env.E2E_GESTES ? ['geste
 // partagé). Sans ça, Chromium sortirait vers l'IP WAN publique pour ensuite
 // rentrer sur le même réseau — hairpin NAT, pas garanti sur toutes les box
 // (cf. reset_url.sh). SNI/Host restent le vrai domaine : le certificat Caddy
-// valide normalement, et le client Keycloak a un redirectUris:["*"] (voir
-// create-app-client.sh), donc rien à adapter côté redirection OAuth.
+// valide normalement, et l'URI de retour est celle du domaine public, que le
+// client Keycloak déclare déjà (plus de joker `*` depuis le 2026-11-01 :
+// create-app-client.sh --prune-uris), donc rien à adapter côté redirection OAuth.
 const domain = process.env.E2E_DOMAIN;
 const resolverArgs = domain ? [`--host-resolver-rules=MAP ${domain} caddy`] : [];
 
