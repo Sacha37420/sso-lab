@@ -58,13 +58,26 @@ export class AppComponent {
       this.mobileOpen.set(false);
       this.mobileClosing.set(false);
       document.body.style.overflow = '';
-      this.burgerBtnRef?.nativeElement.focus();
+      // setTimeout : .shell est encore inerte à cet instant (voir app.html) — sans lui le focus
+      // n'est pas rendu au bouton du menu.
+      setTimeout(() => this.burgerBtnRef?.nativeElement.focus());
     }, reduced ? 0 : MOBILE_CLOSE_ANIM_MS);
   }
 
   @HostListener('document:keydown.escape')
   onEscape(): void {
     if (this.mobileOpen()) this.closeMobile();
+  }
+
+  /** Passage à ≥ 900 px panneau ouvert (rotation d'une tablette) : le CSS le masque, mais .shell
+   *  resterait inerte et le défilement bloqué — page figée. On le ferme, sans animation. */
+  @HostListener('window:resize')
+  onResize(): void {
+    if (this.mobileOpen() && window.matchMedia('(min-width: 900px)').matches) {
+      this.mobileOpen.set(false);
+      this.mobileClosing.set(false);
+      document.body.style.overflow = '';
+    }
   }
 
   get username(): string {

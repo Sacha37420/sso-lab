@@ -69,6 +69,17 @@ export class AppComponent {
     if (this.mobileOpen()) this.closeMobile();
   }
 
+  /** Passage à ≥ 900 px panneau ouvert (rotation d'une tablette) : le CSS le masque, mais .shell
+   *  resterait inerte et le défilement bloqué — page figée. On le ferme, sans animation. */
+  @HostListener('window:resize')
+  onResize(): void {
+    if (this.mobileOpen() && window.matchMedia('(min-width: 900px)').matches) {
+      this.mobileOpen.set(false);
+      this.mobileClosing.set(false);
+      document.body.style.overflow = '';
+    }
+  }
+
   get username(): string {
     return this.kc.username || this.kc.email;
   }
