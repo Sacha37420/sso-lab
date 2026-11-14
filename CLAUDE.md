@@ -68,9 +68,6 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
 - **Sauvegardes : chiffrement à faire.** Elles tournent chaque nuit (voir « Sauvegardes ») mais
   **en clair**, par décision du propriétaire du 2026-10-12 : à brancher dans `seal()` de
   `scripts/backup.sh` (clé publique sur le serveur, clé privée chez lui).
-- **Modules — décision P1 attendue** (`chantiers/modules/CONTRAT.md` § 9) : jouer ou non le
-  `install.sh` de l'app d'un **développeur** (aujourd'hui : jamais ; option préparée : conteneur
-  jetable `--network none`, contrôle de sûreté rejoué après).
 - **Constats de relecture** (`chantiers/multi-dev/rapports/`) : tous réglés — documentation d'API
   et `.env` du conteneur nginx (gabarit, 2026-10-11), un seul lanceur de tests (le moteur), « Apps du
   lab » redirigée vers « Projets ».
@@ -623,11 +620,14 @@ doit fournir : `chantiers/modules/REGLES_MODULE.md` (versionné par exception au
   s'ils sont posés. `lib/fresh-env.sh` (sorti d'`install.sh`) laisse un réglage déclaré à
   `CHANGE_ME` au lieu de le tirer au hasard (une « clé Mistral » aléatoire n'en est pas une).
 - **Scripts d'installation** (`install.sh` du module, déclaré) : joués par `scripts/module-hook.sh`
-  dans `setup_unit.sh`, **après les contrôles et avant tout nettoyage ou build** — donc à chaque
-  déploiement, par tous les chemins ; un échec ne coupe rien. Environnement vide, délai
-  `timeout_s`. **Jamais pour l'app d'un développeur** (il tournerait avec le groupe `docker` après
-  `validate-app.sh` et pourrait réécrire `docker-compose.yml`/`.env` validés) : décision P1 en
-  attente du propriétaire (`chantiers/modules/CONTRAT.md` § 9). `install.bat` n'est jamais joué.
+  dans `setup_unit.sh` (`--if-new`), **après les contrôles et avant tout nettoyage ou build** ; un
+  échec ne coupe rien. Environnement vide, délai `timeout_s`. **Décision P1 du propriétaire
+  (2026-11-14)** : joués **à l'installation seulement** — premier lancement (`install.sh`), ou
+  module encore absent du serveur (aucun conteneur, démarré ou non) installé depuis lab-admin ou
+  `install.sh --modules` ; une mise à jour (`setup2.sh`, redéploiement, « Réinstaller ») ne les
+  rejoue pas. Et **seulement pour les apps du superutilisateur** (dépôts `Sacha37420`) : jamais
+  pour l'app d'un développeur (il tournerait avec le groupe `docker` après `validate-app.sh` et
+  pourrait réécrire `docker-compose.yml`/`.env` validés). `install.bat` n'est jamais joué.
 - **Moteur** : `GET /mcp/api/modules`, `GET /modules/{name}` (`?check=1`), `POST /modules/plan`,
   `POST /modules/install` — **superutilisateur seul** (jamais sur la foi d'un groupe), aucun outil
   MCP. L'installation suit le chemin de déploiement standard (`app-sync.sh` : seul un commit

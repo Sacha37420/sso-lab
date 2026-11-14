@@ -43,8 +43,12 @@ gestion au démarrage (`CMD`). C'est la seule voie pour une app de développeur.
 
 ## 4. Quand le lab les joue
 
-À **chaque déploiement** (installation, réinstallation depuis lab-admin, `setup2.sh`), par
-`scripts/module-hook.sh` : après les contrôles (`validate-app.sh`, portes de qualité), **avant**
+À l'**installation seulement** (décision du propriétaire du 2026-11-14) : premier lancement du lab
+(`install.sh`), ou module encore absent du serveur — aucun conteneur, démarré ou non — installé
+depuis lab-admin ou par `install.sh --modules`. **Une mise à jour ne le rejoue pas** (`setup2.sh`,
+redéploiement, « Réinstaller » d'un module présent) : ce qui doit suivre chaque version va dans
+l'image. Seulement pour une app du superutilisateur, jamais pour celle d'un développeur. Joué par
+`scripts/module-hook.sh --if-new` : après les contrôles (`validate-app.sh`, portes de qualité), **avant**
 tout nettoyage ou build ; dans le dossier du module, environnement vide (`PATH`, `HOME`, `LANG`,
 `LAB_ROOT`, `LAB_MODULE`, `LAB_MODULE_DIR`), délai `timeout_s`. Journal :
 `══ <app> — script d'installation du module (install.sh)` puis la sortie indentée. Échec ⇒ ligne

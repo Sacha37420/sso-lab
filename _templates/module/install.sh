@@ -5,7 +5,8 @@
 #   bash install.sh           fait ce qui manque (idempotent : relancé, il ne refait rien)
 #   bash install.sh --check   ne modifie RIEN, dit ce qui manque (code 1 s'il manque quelque chose)
 #
-# Joué par le lab à chaque déploiement, AVANT le build, dans le dossier du projet, avec un
+# Joué par le lab à l'INSTALLATION seulement (premier lancement, ou projet encore absent du
+# serveur ; jamais à une mise à jour par setup2.sh), AVANT le build, dans le dossier du projet, avec un
 # environnement vide (seulement PATH, HOME, LANG, LAB_ROOT, LAB_MODULE, LAB_MODULE_DIR) et le
 # délai `install.timeout_s` de lab-module.json. Code ≠ 0 ⇒ rien n'est construit ni arrêté.
 #
