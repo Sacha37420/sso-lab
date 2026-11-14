@@ -1,13 +1,18 @@
 """
-Settings pour Test Django.
+Settings pour __APP_TITLE__.
 Les variables sensibles sont lues depuis le fichier .env via python-decouple.
 """
 from decouple import config
 
 # ── Sécurité ──────────────────────────────────────────────────────────────────
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-test_django-change-in-production')
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-__APP_SLUG__-change-in-production')
 DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*').split(',')
+
+# ── Reverse proxy (Caddy) ──────────────────────────────────────────────────────
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+FORCE_SCRIPT_NAME = config('SCRIPT_NAME', default='')
 
 # ── Répertoires de templates ──────────────────────────────────────────────────
 import os
@@ -30,7 +35,7 @@ ROOT_URLCONF = 'config.urls'
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # ── Base de données ────────────────────────────────────────────────────────────
-_DB_SCHEMA = config('DB_SCHEMA', default='test_django')
+_DB_SCHEMA = config('DB_SCHEMA', default='__APP_SLUG__')
 
 DATABASES = {
     'default': {
@@ -86,7 +91,7 @@ REST_FRAMEWORK = {
 }
 
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Test Django API',
+    'TITLE': '__APP_TITLE__ API',
     'DESCRIPTION': 'Documentation interactive OpenAPI/Swagger',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
@@ -111,8 +116,8 @@ SPECTACULAR_SETTINGS = {
     },
     # Swagger UI servi localement (paquet drf-spectacular-sidecar, route
     # api/docs/sidecar/ de config/urls.py) — jamais un CDN en `@latest`.
-    'SWAGGER_UI_DIST': '/api/docs/sidecar',
-    'SWAGGER_UI_FAVICON_HREF': '/api/docs/sidecar/favicon-32x32.png',
+    'SWAGGER_UI_DIST': f'{FORCE_SCRIPT_NAME}/api/docs/sidecar',
+    'SWAGGER_UI_FAVICON_HREF': f'{FORCE_SCRIPT_NAME}/api/docs/sidecar/favicon-32x32.png',
     # Configure Swagger UI OAuth2 (initOAuth) to work with Keycloak
     'SWAGGER_UI_OAUTH2_CONFIG': {
         'clientId': KEYCLOAK_CLIENT_ID,
@@ -120,7 +125,7 @@ SPECTACULAR_SETTINGS = {
         'scope': 'openid profile email',
         'authorizationUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/auth',
         'tokenUrl': f'{_KEYCLOAK_ISSUER_FOR_UI}/protocol/openid-connect/token',
-        'oauth2RedirectUrl': '/api/docs/oauth2-redirect.html',
+        'oauth2RedirectUrl': f'{FORCE_SCRIPT_NAME}/api/docs/oauth2-redirect.html',
     },
     # Ensure components.securitySchemes exists even if drf-spectacular cannot
     # infer it from custom authentication backends.

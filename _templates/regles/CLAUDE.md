@@ -51,7 +51,27 @@ fichier, c'est la règle qui gagne : note l'écart dans le lot au lieu de le sui
   que `dev-net`/`sso-net`, pas d'autre port que ceux du projet, chemins Caddy `/__APP_NAME__` et
   `/__APP_NAME__-api` seulement. Le déploiement refuse le reste et dit pourquoi.
 
+## Règles de code tenues par le gabarit — ne pas les défaire
+
+- **Aucune route ne rend la liste des comptes** (pas d'annuaire) : `/api/me/` suffit.
+- **`/api/schema/` et `/api/docs/` n'existent qu'en `DEBUG`** (404 en service).
+- **`backend/gunicorn.conf.py`** retire `SCRIPT_NAME` de l'environnement du worker et n'a pas de
+  journal d'accès (il écrirait en clair les paramètres d'URL) : garde les deux.
+- **Une exception `requests` porte l'URL demandée** : ne renvoie ni ne journalise `str(exc)`,
+  rends un message fixe.
+- **Un sérialiseur appelé sans `request`** dans son contexte ne sait pas qui lit : un champ réservé
+  au propriétaire y est masqué par défaut.
+- **Une clé d'API d'un utilisateur** se garde chiffrée côté serveur, jamais dans `localStorage` ;
+  une réponse d'API dit seulement si elle est réglée, jamais sa valeur.
+- **Frontend** : `pkceMethod: 'S256'` à `kc.init()` ; le jeton n'est joint qu'aux adresses de
+  `tokenBases()` (`core/env.ts`) — une API de plus s'y ajoute ; le retour après connexion passe par
+  `core/redirect-uri.ts`, jamais par un paramètre d'URL. Fichiers servis par `storage` : jeton en
+  en-tête `Authorization`, jamais `?token=`.
+- **`docker-compose.yml`** : tout port publié est lié à `127.0.0.1` ; un frontend ne reçoit jamais
+  `env_file: .env`.
+
 ## En cas de blocage
 
 Ne contourne pas une règle pour avancer. Écris ce qui bloque dans la feuille de route et ouvre un
-ticket (`gh issue create` depuis le terminal du projet, ou le bouton « Ticket » de lab-admin).
+ticket (`gh issue create` depuis le terminal du projet, ou le bloc « Signaler un problème » de
+la page du projet dans lab-admin).
