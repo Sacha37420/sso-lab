@@ -84,7 +84,7 @@ elle dépend, demande ses réglages, puis la déploie. Règles complètes : `mod
   avec une `question` claire — **jamais de valeur** dans ce fichier, jamais une clé gérée par le lab.
 - **Tout ce qui peut aller dans l'image Docker y va** (Dockerfile : paquets, données de référence,
   migrations et commandes de gestion au démarrage).
-- Sinon, **`install.sh`** (joué par le lab à chaque déploiement, avant le build, dans le dossier du
+- Sinon, **`install.sh`** (joué par le lab à l'installation seulement — premier lancement, ou projet encore absent du serveur ; pas à une mise à jour —, avant le build, dans le dossier du
   projet, environnement vide) et **`install.bat`** (même chose pour un poste Windows, jamais joué par
   le lab) : idempotents, `--check` qui ne modifie rien et dit ce qui manque (code 1 s'il manque
   quelque chose), sans `sudo` ni `apt`, sans secret, sans toucher un fichier suivi par git. Un

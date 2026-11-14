@@ -89,9 +89,10 @@ sur GitHub, portes, tests) et ne se réinstalle jamais lui-même.
 Règles complètes : `chantiers/modules/REGLES_MODULE.md` et les règles servies aux IA
 (`_templates/regles/CLAUDE.md`, section « Module »). En bref : ce qui peut aller dans l'image va dans
 le Dockerfile ; sinon `install.sh` (et `install.bat`, pour un poste Windows) à la racine, déclarés
-par `install`, idempotents, avec `--check`, sans `sudo` ni secret. Le lab joue `install.sh` à chaque
-déploiement, après les contrôles et avant le build (`scripts/module-hook.sh`) ; jamais pour l'app
-d'un développeur (règle v1).
+par `install`, idempotents, avec `--check`, sans `sudo` ni secret. Le lab joue `install.sh` **à l'installation
+seulement** (premier lancement, ou module absent du serveur), après les contrôles et avant le build
+(`scripts/module-hook.sh --if-new`) ; une mise à jour par `setup2.sh` ne le rejoue pas ; jamais pour
+l'app d'un développeur (décision P1 du 2026-11-14).
 
 ## Ajouter un module au catalogue
 

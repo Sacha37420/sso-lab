@@ -205,6 +205,22 @@ out="$(bash "$T/scripts/module-hook.sh" m 2>&1)"; rc=$?
 is "script en échec : code 1"                      "$rc" "1"
 has "… ligne ERROR"                                "$out" "ERROR"
 bash "$T/scripts/module-hook.sh" i > /dev/null 2>&1; is "description invalide : refus" "$?" "1"
+printf '#!/usr/bin/env bash\n[[ "${1:-}" == --check ]] && exit 0\ntouch joue-if-new\n' > "$T/deploiement/m/install.sh"
+_ps_m="$T/ps-m"
+printf 'm\texited\n' > "$_ps_m"
+out="$(LAB_MODULES_PS="$_ps_m" bash "$T/scripts/module-hook.sh" m --if-new 2>&1)"; rc=$?
+is "--if-new, module déjà sur le serveur : non rejoué" "$rc" "0"
+has "… dit « mise à jour »"                        "$out" "mise à jour"
+is "… rien n'a tourné"                             "$([[ -f "$T/deploiement/m/joue-if-new" ]] && echo oui || echo non)" "non"
+printf 'm\trunning\n' > "$_ps_m"
+LAB_MODULES_PS="$_ps_m" bash "$T/scripts/module-hook.sh" m --if-new > /dev/null 2>&1
+is "--if-new, module en service : non rejoué"      "$([[ -f "$T/deploiement/m/joue-if-new" ]] && echo oui || echo non)" "non"
+: > "$_ps_m"
+LAB_MODULES_PS="$_ps_m" bash "$T/scripts/module-hook.sh" m --if-new > /dev/null 2>&1; rc=$?
+is "--if-new, module absent du serveur : joué"     "$rc/$([[ -f "$T/deploiement/m/joue-if-new" ]] && echo oui || echo non)" "0/oui"
+rm -f "$T/deploiement/m/joue-if-new"
+out="$(LAB_MODULES_PS="$_ps_m" bash "$T/scripts/module-hook.sh" m-dev --if-new 2>&1)"
+has "--if-new, app d'un développeur : jamais"      "$out" "NON joué"
 
 echo "════ validate-app.sh — portes du module"
 printf '## Lot 1 — x   ·   statut : à faire\n' > "$T/deploiement/m/FEUILLE_DE_ROUTE.md"

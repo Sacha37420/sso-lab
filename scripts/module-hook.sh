@@ -4,21 +4,25 @@
 # Chantier « modules », contrat v1, I3.
 #
 # Usage :
-#   bash scripts/module-hook.sh <module> [--check]
+#   bash scripts/module-hook.sh <module> [--check | --if-new]
 #
 # Ce qui est joué : <dossier du module>/install.sh, SEULEMENT s'il est déclaré
 # par la description du module (`"install": {"script": "install.sh", …}`, voir
 # modules/README.md). Un install.sh présent mais non déclaré n'est jamais joué.
 #
-# Appelé par setup_unit.sh à CHAQUE déploiement, après les contrôles
-# (validate-app.sh, portes de qualité) et AVANT tout nettoyage ou build : un
-# échec ne coupe rien, la version en service continue de tourner.
+# Appelé par setup_unit.sh avec --if-new, après les contrôles (validate-app.sh,
+# portes de qualité) et AVANT tout nettoyage ou build : un échec ne coupe rien.
+# --if-new (décision P1 du propriétaire, 2026-11-14) : le script n'est joué qu'à
+# l'INSTALLATION — premier lancement du lab, ou module encore absent du serveur
+# (aucun conteneur, démarré ou non). Une mise à jour (setup2.sh, redéploiement,
+# « Réinstaller ») ne le rejoue pas. Appel direct sans option : joué.
 #
 # Garde-fous :
-#   • app d'un DÉVELOPPEUR (propriétaire ≠ superutilisateur) : jamais joué (v1).
-#     Le script tournerait avec les droits du lab — le groupe docker, donc root —
+#   • app d'un DÉVELOPPEUR (propriétaire ≠ superutilisateur) : jamais joué
+#     (décision P1 du 2026-11-14 : seules les apps du superutilisateur). Le
+#     script tournerait avec les droits du lab — le groupe docker, donc root —
 #     et APRÈS le contrôle de sûreté : il pourrait réécrire docker-compose.yml ou
-#     .env une fois validés. Décision en attente du propriétaire (CONTRAT P1) ;
+#     .env une fois validés ;
 #   • environnement repartant de zéro : PATH, HOME, LANG, LAB_ROOT, LAB_MODULE,
 #     LAB_MODULE_DIR — rien de l'appelant (aucun jeton, aucun mot de passe) ;
 #   • répertoire courant = dossier du module ; délai = install.timeout_s ;
@@ -38,8 +42,8 @@ source "$SCRIPT_DIR/lib/registry.sh"
 ROOT="$(registry_root)"
 
 APP="${1:-}"; MODE="${2:-}"
-[[ -n "$APP" && ( -z "$MODE" || "$MODE" == "--check" ) && $# -le 2 ]] \
-  || { echo "Usage : bash scripts/module-hook.sh <module> [--check]" >&2; exit 2; }
+[[ -n "$APP" && ( -z "$MODE" || "$MODE" == "--check" || "$MODE" == "--if-new" ) && $# -le 2 ]] \
+  || { echo "Usage : bash scripts/module-hook.sh <module> [--check | --if-new]" >&2; exit 2; }
 DIR="$(registry_app_dir "$APP")" || { echo "nom de module invalide : '$APP'" >&2; exit 2; }
 RESULT="${LAB_HOOK_RESULT_FILE:-}"
 
@@ -61,6 +65,20 @@ read -r _script _timeout <<< "$decl"
 
 if ! registry_is_superuser "$(registry_app_owner "$APP")"; then
   skip "script d'installation NON joué : app d'un développeur (règle v1 du lab — CLAUDE.md, « Modules »)"
+fi
+if [[ "$MODE" == "--if-new" ]]; then
+  _state="$(python3 -B "$SCRIPT_DIR/lib/modules.py" "$ROOT" show "$APP" 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])' 2>/dev/null)"
+  case "$_state" in
+    not_installed) ;;
+    installed|stopped) skip "mise à jour : script d'installation non rejoué (seulement à l'installation d'un module absent du serveur)" ;;
+    *) [[ -n "$RESULT" ]] && printf '1
+état du module illisible
+' > "$RESULT"
+       echo -e "\033[0;31m✗ ERROR : $APP — état du module illisible (« ${_state:-?} ») : script d'installation non joué.\033[0m" >&2
+       exit 1 ;;
+  esac
+  MODE=""
 fi
 HOOK="$DIR/install.sh"
 if [[ ! -f "$HOOK" || -L "$HOOK" ]]; then
