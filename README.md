@@ -1228,8 +1228,9 @@ Après la première vraie nuit, vérifier qu'une PR a bien été ouverte. C'est 
 jeton à portée fine a le droit d'écrire : l'API de GitHub rend les droits de l'utilisateur, pas
 ceux du jeton.
 
-**Sur ce lab, au 2026-11-14** : les étapes 1 à 4 sont faites. `verifier` conclut « Rien ne peut
-attendre l'utilisateur », et l'essai a tourné le 2026-11-11. Il ne reste que l'étape 5.
+**Sur ce lab** : les étapes 1 à 5 sont faites. L'essai a tourné le 2026-11-11, la planification
+est posée depuis le 2026-11-14 et `verifier` conclut « Rien ne peut attendre l'utilisateur ».
+Premier passage réel : la nuit du 2026-11-14 au 2026-11-15 (samedi, tâche `interface`).
 
 ### 6.2 Les sessions : ce qu'elles font et pourquoi elles existent
 
