@@ -35,6 +35,7 @@ client Keycloak, build Docker, ports réseau, rotation des secrets.
 3. [Gestion des fichiers](#3--gestion-des-fichiers)
 4. [Gestion des bases de données](#4--gestion-des-bases-de-données)
 5. [Annexes](#5--annexes)
+6. [Travail automatique de Claude — les sessions de nuit](#6--travail-automatique-de-claude--les-sessions-de-nuit)
 
 ---
 
@@ -1159,3 +1160,130 @@ dev/
 
 > **Journal de bugs** : les incidents rencontrés et leurs corrections sont documentés dans
 > `.debug/` (ignoré par git).
+
+---
+
+
+## 6 — Travail automatique de Claude — les sessions de nuit
+
+Chaque nuit, Claude Code relit une partie du lab, corrige ce qui est petit et sûr, et ouvre des
+PR **déjà testées**. **Rien n'est déployé.** Fusionner une PR et cliquer sur « Déployer » restent
+des gestes humains. Ce chapitre dit comment activer ce travail, ce que fait chaque session et à
+quoi elle sert, et comment se servir de ce qu'elle produit. Le détail technique est dans
+`automatisation/README.md`, les règles dans `CLAUDE.md` (« Tâches de nuit »). Le contrat de
+conception est dans `chantiers/nuit-auto/CONTRAT.md`.
+
+### 6.1 Activer les sessions automatiques
+
+**État au 2026-11-14** : tout est en place sauf la planification. `auto.sh verifier` conclut
+« Rien ne peut attendre l'utilisateur » (jetons, image, pare-feu, Claude authentifié, jeton
+GitHub, SMTP), et un essai a tourné le 2026-11-11, sans push ni PR. **Il ne reste qu'à planifier**
+(étape 5).
+
+Sur une machine neuve, les étapes sont les suivantes, toutes depuis la racine `dev/` :
+
+1. **Jeton Claude.** Lancer `claude setup-token` sur l'hôte (abonnement Claude), puis enregistrer
+   le jeton dans `.lab-state/auto/claude-token`, en mode 600 et dossier en 700.
+2. **Jeton GitHub à portée fine.** Propriétaire `Sacha37420`, accès aux dépôts des apps et à
+   `sso-lab`. Permissions : **Contents** et **Pull requests** en lecture et écriture, rien
+   d'autre. Il va dans `.lab-state/auto/github-token`, en mode 600. Seul l'hôte s'en sert, Claude
+   ne le reçoit jamais. Le `gh` de l'hôte (qui a la portée `delete_repo`) n'est jamais utilisé.
+3. **Vérifier.** `bash automatisation/bin/auto.sh verifier` doit conclure « Rien ne peut attendre
+   l'utilisateur ». Chaque ligne `✘ [point]` dit ce qui bloque.
+4. **Essai.** `bash automatisation/bin/auto.sh lancer --tache securite --essai` (6 tours de
+   Claude, ni push, ni PR, ni email), puis `bash automatisation/bin/auto.sh etat`.
+5. **Planifier.** `bash automatisation/bin/auto.sh planifier --check` ne fait rien et montre ce qui
+   sera posé. `bash automatisation/bin/auto.sh planifier` ajoute deux lignes à la crontab de
+   l'utilisateur : `0 0 * * *` pour `lancer` et `10 5 * * *` pour `rattraper`. Il ne touche aucune
+   autre ligne, donc la sauvegarde de 3 h reste en place. On utilise cron et pas systemd, parce
+   que `Linger=no` sur cet hôte.
+6. **Arrêter** : `bash automatisation/bin/auto.sh planifier --retirer` (les sessions déjà faites
+   et leurs PR restent).
+
+Après la première vraie nuit, vérifier qu'une PR a bien été ouverte. C'est la seule preuve que le
+jeton à portée fine a le droit d'écrire : l'API de GitHub rend les droits de l'utilisateur, pas
+ceux du jeton.
+
+### 6.2 Les sessions : ce qu'elles font et pourquoi elles existent
+
+Le calendrier est `automatisation/calendrier.conf`. Le jour compté est celui où le passage démarre
+à 0 h. Chaque session reçoit `prompts/_commun.md` (les règles communes), puis le prompt de sa
+tâche.
+
+| Quand | Tâche (prompt) | Cibles | Raison d'être | Ce qu'elle produit |
+|---|---|---|---|---|
+| lun, mer, ven 0 h | `securite` | 2 apps, à tour de rôle | Le lab est exposé sur Internet, et une app change sans que personne relise ses vues ni ses dépendances. Cette tâche contrôle l'authentification (`azp`, groupes), les permissions vue par vue, le cloisonnement des données, les fuites (`str(exc)`, journaux), les dépendances visées par des avis publics | Corrections petites et sûres, avec un test pour chacune ; constats classés par gravité |
+| mar, jeu 0 h | `metier-ux` | 2 apps, à tour de rôle | Une app peut passer ses tests et faire faux : un solde mal calculé, une règle du cahier des charges oubliée, un écran qui égare. Cette tâche confronte l'app à sa `FEUILLE_DE_ROUTE.md` et à son cahier des charges, puis vérifie que l'interface est simple | Corrections de comportement contraire à la feuille de route, tests métier ajoutés, libellés, états vides, accessibilité ; fonctionnalités nouvelles **proposées seulement** |
+| sam 0 h | `interface`, puis `interface-suite` si la charge est faible | `lab-admin` et `_templates/` | `lab-admin` est la seule interface du lab multi-dev, et le gabarit est le point de départ de toutes les apps futures : un défaut là se recopie partout | Corrections dans lab-admin et le gabarit (Foyer, garde d'admin, jeton limité à `tokenBases()`) ; en phase 2, accessibilité fine, robustesse des écrans, cohérence de la langue |
+| dim 0 h | `services`, puis `services-suite` si la charge est faible | Dépôt racine, `lab-admin`, `storage`, `oauth-hub`, `app-builder` | Vérifier que ce que dit `CLAUDE.md` est vrai dans le code et dans l'état du serveur (bilan `lab-doctor.sh`, liste des conteneurs, relevés par l'hôte juste avant) | Corrections hors `sso-lab/` et `infra/`, qui sont refusés ; en phase 2, **un plan sans code** : quel code répété d'app en app gagnerait à devenir un service du cadriciel ou une bibliothèque du gabarit |
+| dès que les tests sont rouges | `_correction` | les mêmes | Une seule chance de réparer ou de retirer la modification fautive : mieux vaut une PR plus petite et verte qu'aucune PR | Correctif retesté ; encore rouge, il ne reste que le rapport |
+| 5 h 10 | `_reprise` (par `--resume`) | les mêmes | Une session coupée à 5 h ou par la limite d'usage ne doit pas laisser un travail à moitié écrit | Rapport et modifications remis d'accord, puis la suite là où la session s'était arrêtée ; arrêt à 8 h |
+
+Chaque tâche à tour de rôle avance dans la liste triée des apps du superutilisateur, et chaque
+tâche a son propre compteur (`.lab-state/auto/rotation-<tache>`). Avec 17 apps, chaque app passe
+en `securite` environ toutes les trois semaines (6 apps par semaine) et en `metier-ux` environ
+toutes les quatre semaines (4 par semaine).
+
+**La nuit lancée à la main** (exemple : `chantiers/nuit-2026-11-08/PROMPT.md`) est d'une autre
+nature. C'est une consigne écrite pour une nuit, lancée depuis une session sur l'hôte en régime
+chantier (skill `chantier`), qui traverse tout le lab : installation, documentation face au code,
+feuilles de route, analyse de l'infrastructure. Elle convient à un **bilan d'ensemble ponctuel**
+(avant d'ouvrir le lab à un autre développeur, après une grosse bascule). Les sessions
+automatiques font le **travail régulier, app par app**. Son rapport est recopié dans
+`rapports-auto/nuit-<date>.md`.
+
+Limites voulues : une session ne modifie jamais `Dockerfile*`, `docker-compose*.yml`,
+`nginx*.conf`, `.env*`, `.github/`, `sso-lab/`, `infra/`, `.claude/` ni `CLAUDE.md`. Elle ne
+commite pas, ne pousse pas, ne déploie pas : l'hôte calcule le correctif sans réseau, le refuse
+en entier s'il touche un de ces chemins, le teste, puis ouvre la PR.
+
+### 6.3 Se servir de ce qu'elles produisent
+
+**Où lire** :
+- l'**email du matin**, envoyé à `LAB_BACKUP_EMAIL`, sinon à `SMTP_FROM` : le rapport et les PR ;
+- la **PR** sur GitHub, branche `auto/<date>-<tache>` : son corps est le rapport ;
+- `bash automatisation/bin/auto.sh etat`, ou `--json` pour un script : statut de chaque passage ;
+- `.lab-state/auto/runs/<date>-<tache>/` : `rapport-publie.md`, `sortie/resume.json` (constats
+  structurés : gravité, cible, fichier, corrigé ou non), `tests/<cible>/` (sorties des tests, motif
+  d'un refus) et `journal.txt`.
+
+**Le matin, dans cet ordre** :
+1. **Statut.** `fini`, c'est terminé. `limite`, `refuse` ou `manque` : le rattrapage de 5 h 10
+   s'en est chargé, lire son résultat. `echec` : le moteur n'a pas pu lancer la session (clone,
+   Docker, verrou de déploiement occupé), lire `journal.txt` et relancer au besoin
+   `auto.sh lancer --date <date>`.
+2. **Relire le diff de chaque PR, puis la fusionner** (une PR **brouillon** signale un constat
+   critique non corrigé : à traiter avant tout). Les tests sont déjà passés, mais ils ont tourné
+   sur une base jetable ; un changement de comportement annoncé Ⓟ demande ta décision.
+3. **Mettre à jour le pointeur** de l'app dans `~/dev`, puis déployer :
+   ```bash
+   git -C <dossier de l'app> pull --ff-only     # dossier donné par registry_app_dir
+   git add <dossier de l'app> && git commit -m "chore: pointeur <app> après la PR auto/<date>"
+   ```
+   Le déploiement se fait ensuite par le bouton « Déployer » de `lab-admin` (chemin à portes,
+   tests rejoués). Ne pas laisser une PR ouverte d'un passage à l'autre : le passage suivant part
+   de `main` sur GitHub et ne la voit pas, ce qui donne des doublons ou des conflits.
+4. **Ranger les constats non corrigés.** Ils ne vivent que dans le rapport, et rien ne les reprend
+   tout seul :
+   - un constat propre à une app devient un lot ou une ligne de sa `FEUILLE_DE_ROUTE.md` ;
+   - un constat qui revient dans plusieurs apps (par exemple `SECRET_KEY` avec une valeur par
+     défaut, pas de CSP dans `nginx.conf`, conteneur lancé en root, versions Python non
+     épinglées, vus dès l'essai du 2026-11-11) se corrige **une fois, dans `_templates/`**, puis
+     dans chaque app, par un chantier humain : ces fichiers sont refusés aux sessions de nuit, qui
+     le signaleraient donc à chaque passage. On l'ajoute à `to_do_global.md`, en ligne datée ;
+   - une décision Ⓟ va dans `to_do_global.md` tant qu'elle n'est pas prise ;
+   - le plan de `services-suite` (nouveau service mutualisé) devient un chantier T de
+     `to_do_global.md`, qui sera mené en régime chantier.
+5. **Améliorer les sessions elles-mêmes.** Un faux constat qui revient, un point que la session
+   n'a pas vu, une consigne mal suivie : on corrige le prompt concerné dans
+   `automatisation/prompts/`, par une PR comme le reste. Une règle que la session découvre et
+   qui vaut pour tout le lab va dans `CLAUDE.md` (et dans `_templates/regles/` si elle concerne
+   toutes les apps) ; si elle peut être contrôlée par une machine, elle va dans `validate-app.sh`.
+   C'est ce qui fait que la relecture suivante part de plus haut.
+
+**Points à surveiller** :
+- La sauvegarde (3 h) tourne pendant le passage de nuit (0 h à 5 h). Sur 2 vCPU, les deux
+  ralentissent, sans se bloquer : Claude est limité à 1 CPU et 2 Go, les tests passent sous
+  `lab-lock.sh`, la sauvegarde a son propre verrou.
+- Les branches `auto/…` s'accumulent sur GitHub. On peut les supprimer après fusion ; aucune
+  session ne le fait.
