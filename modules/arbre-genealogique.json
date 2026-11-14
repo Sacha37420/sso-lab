@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "name": "arbre-genealogique",
+  "label": "Arbre généalogique",
+  "description": "Affichage et édition d'arbres généalogiques : personnes, relations et périodes d'union.",
+  "category": "application",
+  "required": false,
+  "priority": 30,
+  "requires": {
+    "modules": [
+      {
+        "name": "storage",
+        "interface": "1"
+      }
+    ],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [],
+  "install": null
+}

@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "name": "runner",
+  "label": "Runner de tests",
+  "description": "Playwright et Chromium pour les tests de cloisonnement de toutes les apps.",
+  "category": "socle",
+  "required": true,
+  "priority": 0,
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {},
+  "settings": [],
+  "groups": [],
+  "install": null
+}

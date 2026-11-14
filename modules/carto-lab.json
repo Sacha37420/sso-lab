@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "name": "carto-lab",
+  "label": "Carto Lab",
+  "description": "Traitement cartographique : import de cartes, systèmes de coordonnées, calculs géo et cartographies climatiques Météo-France.",
+  "category": "application",
+  "required": false,
+  "priority": 40,
+  "requires": {
+    "modules": [
+      {
+        "name": "storage",
+        "interface": "1"
+      }
+    ],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "developers"
+  ],
+  "install": null
+}

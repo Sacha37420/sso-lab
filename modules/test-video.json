@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "name": "test-video",
+  "label": "Test vidéo",
+  "description": "Bac à sable vidéo (projet privé).",
+  "category": "application",
+  "required": false,
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "admins",
+    "developers"
+  ],
+  "install": null
+}

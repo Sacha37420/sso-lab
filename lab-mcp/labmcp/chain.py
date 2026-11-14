@@ -4,6 +4,7 @@ Ce module n'est jamais importé par le serveur : il est LANCÉ par lui, ainsi �
 
     bash scripts/lab-lock.sh python3 -m labmcp.chain deploy <app> [<sha>]
     bash scripts/lab-lock.sh python3 -m labmcp.chain create <uid> <nom> <type> <visibilité> <groupes>
+    bash scripts/lab-lock.sh python3 -m labmcp.chain modules <uid> <reinstall 0|1> <with_deps 0|1> <noms,…>
 
 POURQUOI UN PROCESSUS À PART : le contrat demande que la création et le
 déploiement s'enchaînent « sous le verrou », et interdit au serveur de poser son
@@ -51,6 +52,8 @@ GITHUB_WEB = os.environ.pop("GITHUB_WEB_URL", "https://github.com").rstrip("/")
 HOOK_BASE = os.environ.pop("LAB_HOOK_BASE", "").rstrip("/")
 # Retiré de l'environnement comme le jeton : aucun script lancé d'ici ne connaît ce chemin.
 SEED_FILE = os.environ.pop("LAB_MCP_SEED_FILE", "")
+# (modules) Réglages fournis à l'installation : même règle que la graine — fichier 0600, chemin seul.
+SETTINGS_FILE = os.environ.pop("LAB_MCP_SETTINGS_FILE", "")
 
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
@@ -130,15 +133,23 @@ def run_streaming(name: str, args: list[str], watch) -> int:
 def deploy(app: str, sha: str) -> None:
     if not valid_app(app) or (sha and not SHA_RE.fullmatch(sha)):
         finish({"ok": False, "step": "arguments", "error": "arguments invalides"}, 2)
+    result, code = deploy_steps(app, sha, step)
+    finish(result, code)
+
+
+def deploy_steps(app: str, sha: str, mark) -> "tuple[dict, int]":
+    """Le déploiement lui-même. Rend (résultat, code) au lieu de terminer : `deploy` le termine,
+    `modules` l'enchaîne pour chaque module. `mark(nom, libellé)` annonce chaque étape — `step` pour
+    un déploiement (journal inchangé), une sous-étape pour un module (une seule étape par module)."""
     registry = Registry(ROOT)
 
-    step("sync", f"alignement de {app} sur un commit présent sur origin (app-sync.sh)")
+    mark("sync", f"alignement de {app} sur un commit présent sur origin (app-sync.sh)")
     code, out = run_script("app-sync.sh", [app] + ([sha] if sha else []), capture_stdout=True)
     resolved = out.strip().splitlines()[-1].strip() if out.strip() else ""
     if code != 0 or not re.fullmatch(r"[0-9a-f]{40}", resolved):
-        finish({"ok": False, "step": "sync", "exit_code": code,
+        return {"ok": False, "step": "sync", "exit_code": code,
                 "error": "app-sync.sh a refusé — voir le journal (commit absent d'origin, dépôt injoignable, "
-                         "clé de déploiement absente ou refusée, fichier réservé suivi par git…)"}, 1)
+                         "clé de déploiement absente ou refusée, fichier réservé suivi par git…)"}, 1
     say(f"   commit déployable : {resolved}")
 
     # Mêmes portes que setup2.sh/setup_unit.sh (I4 v5), dites ici d'abord pour que
@@ -154,17 +165,17 @@ def deploy(app: str, sha: str) -> None:
     elif registry.has_owner_line(app):
         gate_args = [app, "--quality-only"]
     if gate_args:
-        step("validate", "contrôle du dépôt (validate-app.sh" + (" --quality-only)" if len(gate_args) > 1 else ")"))
+        mark("validate", "contrôle du dépôt (validate-app.sh" + (" --quality-only)" if len(gate_args) > 1 else ")"))
         code, out = run_script("validate-app.sh", gate_args, capture_stdout=True)
         if code != 0:
             reasons = [ln for ln in out.splitlines() if ln.strip()]
             for ln in reasons:
                 say(f"   ✗ {ln}")
-            finish({"ok": False, "step": "validate", "exit_code": code, "sha": resolved,
-                    "reasons": reasons, "error": "validate-app.sh a refusé le dépôt — rien n'a été lancé"}, 1)
+            return {"ok": False, "step": "validate", "exit_code": code, "sha": resolved,
+                    "reasons": reasons, "error": "validate-app.sh a refusé le dépôt — rien n'a été lancé"}, 1
         say("   ✓ contenu validé")
 
-    step("setup", f"déploiement (setup2.sh {app} --yes)")
+    mark("setup", f"déploiement (setup2.sh {app} --yes)")
     # setup2.sh ne rend qu'un code : l'étape en échec se lit sur sa ligne ERROR
     # (build, tests backend). C'est un classement d'affichage, pas une interface.
     seen = {"at": "setup"}
@@ -188,7 +199,7 @@ def deploy(app: str, sha: str) -> None:
                            + ". La version précédente reste en service."}
         if seen["at"] == "tests_backend":
             result["tests"] = {"backend": "ko", "cloisonnement": "non-lancé"}
-        finish(result, 1)
+        return result, 1
     # Résultat des tests enregistré par le déploiement (I4 v5), relu par la
     # commande qui fait foi : app-status.sh.
     tests, at = None, None
@@ -199,7 +210,7 @@ def deploy(app: str, sha: str) -> None:
     except ValueError:
         pass
     say(f"══ [lab-mcp] {app} déployée au commit {resolved}" + (f" — tests : {json.dumps(tests, ensure_ascii=False)}" if tests else ""))
-    finish({"ok": True, "step": "done", "sha": resolved, "tests": tests, "at": at}, 0)
+    return {"ok": True, "step": "done", "sha": resolved, "tests": tests, "at": at}, 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -405,6 +416,182 @@ def create(uid: str, name: str, app_type: str, visibility: str, groups: str) -> 
             "auto_deploy_available": bool(auto["secret"])}, 0)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# modules = plan recalculé (lab-modules.sh plan --for-engine) → pour chaque pas install/reinstall :
+#           lab-modules.sh prepare → [lab-modules.sh settings] → déploiement (deploy_steps) →
+#           [storage-shares.sh] → lab-modules.sh selection add            (contrat modules v1, I4)
+# ─────────────────────────────────────────────────────────────────────────────
+MODULE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+SETTING_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_SETTINGS_LINE = re.compile(r"^(\?|[A-Z][A-Z0-9_]{0,63}): (écrit|déjà réglé|non déclaré|refusé|ligne ignorée \(CLÉ=valeur attendu\))$")
+
+
+def read_settings() -> "dict[str, dict[str, str]]":
+    """Les réglages déposés par le serveur ({module: {CLÉ: valeur}}), ou {} s'il n'y en a pas. Le
+    fichier est supprimé dès qu'il est lu. Illisible ou mal formé : rien n'est installé."""
+    if not SETTINGS_FILE:
+        return {}
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        data = None
+    finally:
+        try:
+            os.unlink(SETTINGS_FILE)
+        except OSError:
+            pass
+    ok = isinstance(data, dict) and all(
+        isinstance(m, str) and MODULE_RE.fullmatch(m) and isinstance(kv, dict) and all(
+            isinstance(k, str) and SETTING_KEY_RE.fullmatch(k) and isinstance(v, str) and len(v) <= 4096
+            and not any(ch in v for ch in "\r\n\x00") for k, v in kv.items())
+        for m, kv in data.items())
+    if not ok:
+        finish({"ok": False, "step": "arguments", "error": "réglages illisibles ou non recevables",
+                "results": [], "skipped": []}, 2)
+    return data
+
+
+def _modules_json(args: list[str]) -> "tuple[int, dict | None]":
+    """lab-modules.sh <args> (I2) : une ligne JSON sur stdout, codes 0/1 avec JSON, 2 = usage."""
+    code, out = run_script("lab-modules.sh", args, capture_stdout=True)
+    try:
+        data = json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        data = None
+    return code, data if isinstance(data, dict) else None
+
+
+def substep(name: str, label: str) -> None:
+    """Sous-étape d'un module : SANS le marqueur « étape », pour que le job garde une étape par module."""
+    say(f"   ── {name} — {label}")
+
+
+def install_module(mod: str, action: str, values: "dict[str, str]", uid: str) -> dict:
+    out = {"module": mod, "action": action, "ok": False, "step": "prepare", "sha": None}
+
+    substep("prepare", f"lab-modules.sh prepare {mod}")
+    code, _ = run_script("lab-modules.sh", ["prepare", mod])
+    if code != 0:
+        out["error"] = f"lab-modules.sh prepare a échoué (code {code}) — voir le journal"
+        return out
+
+    if values:
+        out["step"] = "settings"
+        substep("settings", f"réglages fournis : {', '.join(sorted(values))} (lab-modules.sh settings {mod})")
+        # Valeurs sur stdin, jamais en argument ni au journal ; seules les lignes « CLÉ: état » de la
+        # sortie sont relayées (forme d'I2, sans valeur), toute autre ligne est écartée.
+        code, text = run_script("lab-modules.sh", ["settings", mod], capture_stdout=True,
+                                stdin="".join(f"{k}={v}\n" for k, v in values.items()))
+        refused = []
+        for line in text.splitlines():
+            found = _SETTINGS_LINE.fullmatch(line.strip())
+            if found:
+                say(f"   {found.group(0)}")
+                if found.group(2) != "écrit" and found.group(2) != "déjà réglé":
+                    refused.append(found.group(1))
+        if code != 0:
+            out["error"] = ("réglage(s) refusé(s) : " + ", ".join(refused) if refused
+                            else f"lab-modules.sh settings a rendu {code}") + " — rien n'a été déployé"
+            return out
+
+    res, code = deploy_steps(mod, "", substep)
+    out["step"], out["sha"] = res.get("step", "setup"), res.get("sha")
+    if not res.get("ok"):
+        out["error"] = res.get("error") or "déploiement en échec — voir le journal"
+        return out
+
+    # Partages de groupe de storage (storage-shares.conf) : seulement si storage tourne — relu ici, après
+    # chaque module, puisque storage a pu être installé par un pas précédent. L'état vient de
+    # lab-modules.sh (I2), pas d'un `docker inspect` du moteur : le moteur ne compose aucune commande
+    # docker. storage-shares.sh revérifie lui-même storage-backend. Un échec est SIGNALÉ, sans faire
+    # échouer le module (il est déployé et en service ; storage-shares.sh se rejoue sans risque).
+    _, storage = _modules_json(["show", "storage", "--json"])
+    if storage and storage.get("state") == "installed":
+        substep("storage_shares", "partages de groupe de storage (storage-shares.sh)")
+        code, _ = run_script("storage-shares.sh", [])
+        if code != 0:
+            say(f"   ⚠ storage-shares.sh a rendu {code} — partages à reprendre (bash scripts/storage-shares.sh)")
+    else:
+        say("   · storage n'est pas en service : partages de groupe non vérifiés")
+
+    substep("selection", f"sélection mémorisée (lab-modules.sh selection add {mod} --by {uid})")
+    code, _ = run_script("lab-modules.sh", ["selection", "add", mod, "--by", uid], capture_stdout=True)
+    if code != 0:
+        say(f"   ⚠ sélection non mise à jour (code {code})")
+    out["ok"], out["step"] = True, "done"
+    return out
+
+
+def modules(uid: str, reinstall: str, with_deps: str, names: str) -> None:
+    listed = names.split(",")
+    if (not valid_uid(uid) or reinstall not in ("0", "1") or with_deps not in ("0", "1")
+            or not 1 <= len(listed) <= 20 or not all(MODULE_RE.fullmatch(n) for n in listed)):
+        finish({"ok": False, "step": "arguments", "error": "arguments invalides", "results": [], "skipped": []}, 2)
+    settings = read_settings()
+
+    flags = ["--for-engine"] + (["--reinstall"] if reinstall == "1" else []) + (["--with-deps"] if with_deps == "1" else [])
+    say(f"══ [lab-mcp] plan recalculé sous le verrou (lab-modules.sh plan --json {' '.join(flags)} {names})")
+    code, plan = _modules_json(["plan", "--json", *flags, names])
+    if plan is None or code not in (0, 1):
+        finish({"ok": False, "step": "plan", "results": [], "skipped": [],
+                "error": f"lab-modules.sh plan a rendu {code} sans plan lisible — rien n'a été lancé"}, 1)
+    if not plan.get("ok"):
+        reasons = [str(b.get("reason") or b.get("module")) for b in plan.get("blocked") or []]
+        for r in reasons:
+            say(f"   ✗ {r}")
+        finish({"ok": False, "step": "plan", "results": [], "skipped": [],
+                "error": "le plan n'est plus réalisable — rien n'a été lancé : " + " ; ".join(reasons)}, 1)
+    steps = [st for st in plan.get("steps") or [] if isinstance(st, dict)]
+    for st in steps:
+        say(f"   {st.get('module')} : {st.get('action')} ({st.get('reason')})")
+
+    # Dépendances directes de chaque module (I2, list --json) : un pas dont une dépendance a échoué
+    # ou a été sautée est sauté à son tour ; les autres sont joués.
+    _, catalogue = _modules_json(["list", "--json"])
+    requires = {m.get("name"): [d.get("name") for d in (m.get("requires") or {}).get("modules") or []]
+                for m in (catalogue or {}).get("modules") or [] if isinstance(m, dict)}
+
+    results: list[dict] = []
+    skipped: list[dict] = []
+    failed: set[str] = set()
+    jumped: set[str] = set()
+    for st in steps:
+        mod, action = str(st.get("module")), str(st.get("action"))
+        step(f"module_{mod.replace('-', '_')}", f"{action} de {mod}")
+        if action not in ("install", "reinstall"):
+            say("   déjà en service — inchangé")
+            continue
+        bad = next((d for d in requires.get(mod, []) if d in failed or d in jumped), None)
+        if bad:
+            reason = f"dépend de {bad}, " + ("en échec" if bad in failed else "sauté")
+            say(f"   ⤼ sauté : {reason}")
+            skipped.append({"module": mod, "reason": reason})
+            jumped.add(mod)
+            continue
+        res = install_module(mod, action, settings.get(mod) or {}, uid)
+        results.append(res)
+        if res["ok"]:
+            say(f"   ✓ {mod} : {action} terminé")
+        else:
+            failed.add(mod)
+            say(f"   ✗ {mod} : {res['error']}")
+
+    ok = not failed and not skipped
+    result: dict = {"ok": ok, "step": "done" if ok else (next(r["module"] for r in results if not r["ok"])
+                                                         if failed else skipped[0]["module"]),
+                    "results": results, "skipped": skipped}
+    if not ok:
+        parts = []
+        if failed:
+            parts.append(f"{len(failed)} module(s) en échec : " + ", ".join(r["module"] for r in results if not r["ok"]))
+        if skipped:
+            parts.append(f"{len(skipped)} sauté(s) : " + ", ".join(s["module"] for s in skipped))
+        result["error"] = " ; ".join(parts)
+    say("══ [lab-mcp] modules : " + ("tout est installé" if ok else result["error"]))
+    finish(result, 0 if ok else 1)
+
+
 def main(argv: list[str]) -> None:
     if not ROOT or not os.path.isdir(SCRIPTS) or not os.environ.get("LAB_LOCK_HELD"):
         # Lancé hors de lab-lock.sh : on refuse plutôt que d'agir sans verrou.
@@ -414,9 +601,11 @@ def main(argv: list[str]) -> None:
         deploy(argv[1], argv[2] if len(argv) == 3 else "")
     elif len(argv) == 6 and argv[0] == "create":
         create(*argv[1:])
+    elif len(argv) == 5 and argv[0] == "modules":
+        modules(*argv[1:])
     else:
-        print("usage : labmcp.chain deploy <app> [sha] | create <uid> <nom> <type> <visibilité> <groupes>",
-              file=sys.stderr)
+        print("usage : labmcp.chain deploy <app> [sha] | create <uid> <nom> <type> <visibilité> <groupes> "
+              "| modules <uid> <0|1> <0|1> <noms,…>", file=sys.stderr)
         sys.exit(2)
 
 

@@ -78,7 +78,7 @@ erreurs : `API.md` §3.9.
 
 Jeton Keycloak `azp = lab-admin` (celui du frontend), même origine que lab-admin. Toutes les routes
 de la table d'I5, plus celles ajoutées depuis (liste : `API.md`, « Écarts avec la table d'I5 », et
-§3.9 pour l'adresse d'essai). **Tout est décrit dans [`API.md`](API.md)** : formes,
+§3.9 pour l'adresse d'essai, §3.10 pour les modules). **Tout est décrit dans [`API.md`](API.md)** : formes,
 format d'erreur unique, états d'un job, quatre profils de `GET /me`.
 
 ---
@@ -338,6 +338,17 @@ que le compose ne les transmet pas (relu le 2026-11-08).
   exactes, propriété (un autre développeur : `404`, rien n'est lancé), jeton d'espace, lecture sans
   verrou, chaque résultat absent, illisible ou incohérent, arrêt, terme (échu, build en cours ou en
   file, verrou occupé, date illisible, projet retiré), redémarrage du moteur et veille de fond.
+  Aucune image construite, aucun réseau, racine du lab factice.
+- `tests/test_modules.py` et `tests/modules/` — modules du lab (chantier « modules », I4) :
+  `bash lab-mcp/tests/modules/run.sh` (≈ 1 min) joue les quatre routes contre une **copie** des vrais
+  `scripts/` (dont `lab-modules.sh` et `lib/modules.py`) où `app-sync.sh`, `validate-app.sh`,
+  `setup2.sh`, `storage-shares.sh` et `app-status.sh` sont des doubles (`tests/modules/scripts/`),
+  sous le vrai `lab-lock.sh` : formes d'I2 rendues telles quelles, refus (dev non superutilisateur,
+  compte hors `developers`, jeton d'espace, corps et réglages), ordre exact des scripts d'une
+  installation avec dépendance, relance, pas en échec (dépendants sautés, indépendants joués), un seul
+  job modules à la fois sans bloquer `tests_all`, verrou occupé, et l'absence de toute valeur de réglage
+  dans le journal, l'audit, les réponses et les arguments des processus. Il compare enfin des
+  **déploiements** entre le moteur d'avant (`MODULES_BASELINE`, défaut `b28471c`) et le moteur courant.
   Aucune image construite, aucun réseau, racine du lab factice.
 
 ### Ce qui reste à vérifier en réel

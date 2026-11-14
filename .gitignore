@@ -39,3 +39,8 @@ atelier-3d-spike/
 
 # Contrats et rapports de chantier : ils décrivent des défauts ouverts, et ce dépôt est public.
 chantiers/*
+# … sauf les règles d'un module (chantier « modules ») : elles ne décrivent aucun défaut, et
+# toute app du lab (dont la refonte de bilan-thermique) les cite.
+!chantiers/modules/
+chantiers/modules/*
+!chantiers/modules/REGLES_MODULE.md

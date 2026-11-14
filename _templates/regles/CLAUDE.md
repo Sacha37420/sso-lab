@@ -58,6 +58,27 @@ accepte, puis ferme le ticket en citant le commit.
   que `dev-net`/`sso-net`, pas d'autre port que ceux du projet, chemins Caddy `/__APP_NAME__` et
   `/__APP_NAME__-api` seulement. Le déploiement refuse le reste et dit pourquoi.
 
+## Module — description et installation
+
+Le lab installe chaque app comme un **module** : il lit sa description, installe d'abord ce dont
+elle dépend, demande ses réglages, puis la déploie. Règles complètes : `modules/README.md` du lab.
+
+- **`lab-module.json`** (à la racine) décrit l'app. Tiens-le à jour dans le même commit que le code :
+  chaque service du lab appelé va dans `requires.modules` (`storage` pour les fichiers, `oauth-hub`
+  pour un jeton GitHub, `lab-media` pour un flux, avec `"interface": "1"`) ; une commande de
+  **l'hôte** exigée dans `requires.system` ; chaque réglage à demander (clé d'API…) dans `settings`
+  avec une `question` claire — **jamais de valeur** dans ce fichier, jamais une clé gérée par le lab.
+- **Tout ce qui peut aller dans l'image Docker y va** (Dockerfile : paquets, données de référence,
+  migrations et commandes de gestion au démarrage).
+- Sinon, **`install.sh`** (joué par le lab à chaque déploiement, avant le build, dans le dossier du
+  projet, environnement vide) et **`install.bat`** (même chose pour un poste Windows, jamais joué par
+  le lab) : idempotents, `--check` qui ne modifie rien et dit ce qui manque (code 1 s'il manque
+  quelque chose), sans `sudo` ni `apt`, sans secret, sans toucher un fichier suivi par git. Un
+  échec arrête le déploiement avant le build : la version en service continue.
+- **Projet d'un développeur** : le lab ne joue pas `install.sh` (règle actuelle) ; tout doit passer
+  par l'image. Le journal du déploiement le dit.
+- Le déploiement refuse une description invalide ou un script déclaré absent ou sans `--check`.
+
 ## Règles de code tenues par le gabarit — ne pas les défaire
 
 - **Aucune route ne rend la liste des comptes** (pas d'annuaire) : `/api/me/` suffit.

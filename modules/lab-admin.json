@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "name": "lab-admin",
+  "label": "Administration",
+  "description": "Portail du lab (réservé aux admins) : applications déployées, éditeur de code, création de projet et gestion des utilisateurs.",
+  "category": "cadriciel",
+  "required": true,
+  "priority": 3,
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "admins",
+    "developers"
+  ],
+  "install": null
+}

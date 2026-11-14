@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "name": "lab-mcp",
+  "label": "Moteur du lab (lab-mcp)",
+  "description": "Moteur du lab multi-dev : projets, déploiements, espaces de travail, pgAdmin par développeur. Seul composant qui monte le socket Docker.",
+  "category": "cadriciel",
+  "required": true,
+  "priority": 4,
+  "requires": {
+    "modules": [
+      {
+        "name": "oauth-hub",
+        "interface": "1"
+      }
+    ],
+    "system": [],
+    "domain": true
+  },
+  "resources": {
+    "build_ram_mb": 800,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "developers"
+  ],
+  "install": null
+}

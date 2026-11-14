@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "name": "traitement-de-fichiers-compils",
+  "label": "Traitement de fichiers",
+  "description": "Dépôt de fichiers avec édition, suivi des modifications et historique.",
+  "category": "application",
+  "required": false,
+  "priority": 70,
+  "requires": {
+    "modules": [
+      {
+        "name": "storage",
+        "interface": "1"
+      }
+    ],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "developers"
+  ],
+  "install": null
+}

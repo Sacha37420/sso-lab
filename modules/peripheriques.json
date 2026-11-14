@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "name": "peripheriques",
+  "label": "Périphériques",
+  "description": "Caméra, micro et haut-parleur de l'hôte en direct et en relecture, avec des droits par personne et par périphérique.",
+  "category": "application",
+  "required": false,
+  "requires": {
+    "modules": [
+      {
+        "name": "lab-media",
+        "interface": "1"
+      }
+    ],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [
+    {
+      "key": "PERIPHERIQUES_BRIDGE_KEY",
+      "question": "Clé du pont vers google-agenda (dev2), 64 hexadécimaux (vide : pont fermé)",
+      "required": false,
+      "secret": true
+    }
+  ],
+  "groups": [
+    "developers",
+    "admins",
+    "famille",
+    "amis",
+    "manager",
+    "cuisinier",
+    "serveur",
+    "proprietaires"
+  ],
+  "install": null
+}

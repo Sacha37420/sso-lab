@@ -26,6 +26,7 @@ client Keycloak, build Docker, ports réseau, rotation des secrets.
    - [1.3 Exposition sur le WAN](#13-exposition-sur-le-wan)
    - [1.4 HTTPS via Caddy + nom de domaine (DDNS)](#14-https-via-caddy--nom-de-domaine-ddns)
    - [1.5 Plusieurs cadriciels sur une même IP WAN — le répartiteur](#15-plusieurs-cadriciels-sur-une-même-ip-wan--le-répartiteur)
+   - [1.6 Modules : choisir, ajouter, relancer depuis lab-admin](#16-modules--choisir-ajouter-relancer-depuis-lab-admin)
 2. [Créer une nouvelle application](#2--créer-une-nouvelle-application)
    - [2.1 La méthode standard](#21-la-méthode-standard)
    - [2.2 Règles d'infrastructure et de sécurité](#22-règles-dinfrastructure-et-de-sécurité)
@@ -135,7 +136,8 @@ bash scripts/install.sh --domain mon-lab.example.org --acme-email moi@example.or
 
 `install.sh` enchaîne, en regardant à chaque étape l'état réel de la machine :
 
-1. contrôle des prérequis, extraction des sous-modules manquants ;
+1. contrôle des prérequis, extraction des sous-modules manquants, puis **choix des modules
+   facultatifs** et affichage du plan d'installation (menu au terminal, voir 1.6) ;
 2. `.env` et `bbox.env` de la machine : IP LAN et WAN détectées (ou `--lan-ip`, `--wan`),
    `DOMAIN`, `ACME_EMAIL`, `LAB_SUPERUSER` (`--superuser`, défaut : l'utilisateur courant) ;
 3. un `.env` pour **chaque** unité qui a un `.env.example` et pas de `.env` — à la racine comme
@@ -157,8 +159,8 @@ bash scripts/install.sh --domain mon-lab.example.org --acme-email moi@example.or
 8. `infra`, puis `dev-db.sh ensure-lab` (rôle et base `lab`), `dev-db.sh ensure <superutilisateur>
    --gis`, propagation des mots de passe de base, `dev-db.sh lockdown-connect --apply` ;
 9. runner de tests ;
-10. `storage`, `oauth-hub`, `lab-admin`, `lab-mcp`, puis chaque application (`--no-apps` pour
-    s'arrêter au cadriciel) ;
+10. `storage`, `oauth-hub`, `lab-admin`, `lab-mcp`, puis les modules choisis et leurs dépendances,
+    dans l'ordre du plan (`--no-apps` pour s'arrêter au cadriciel) ;
 11. image `lab-workspace:latest` (≈ 8 min ; `--no-workspace-image` pour la remettre à plus tard),
     partages de groupe de `storage`, sauvegarde nocturne planifiée à 3 h (`backup-cron.sh`),
     `ports.env`, page 404 ;
@@ -230,8 +232,7 @@ bash scripts/install.sh --check         # l'installation est-elle toujours compl
 bash scripts/lab-doctor.sh              # bilan de santé : bases, sauvegarde, Keycloak, ports, conteneurs
 ```
 
-> Sur la machine en service, `install.sh --check` ne conclut pas encore « rien à faire » : il
-> voudrait déployer `test-video`, jamais déployée (to_do_global.md, T2).
+> Sur la machine en service, `install.sh --check` conclut « Rien à faire » (relu le 2026-11-14).
 
 `bash scripts/setup2.sh --yes` (sans nom) redéploie **tout** le lab ; il suppose l'installation
 déjà faite.
@@ -508,6 +509,60 @@ nécessaire, `edge-net` peut rester connecté sans effet tant que `ports:` repub
 > faire en connaissance de cause, jamais sans vérifier l'état des autres cadriciels avant.
 > N'utiliser ce mécanisme que si l'hôte héberge réellement plusieurs cadriciels — un seul
 > cadriciel n'a aucune raison de perdre l'exposition directe décrite en 1.3/1.4.
+
+---
+
+### 1.6 Modules : choisir, ajouter, relancer depuis lab-admin
+
+Le lab s'installe **par modules**. Le socle (`sso-lab`, `infra`, `runner`) et les quatre services
+du cadriciel (`storage`, `oauth-hub`, `lab-admin`, `lab-mcp`) s'installent toujours ; les apps de
+`deploiement/`, `app-builder` et `lab-media` sont **facultatives**. Chaque module a une
+**description** (dépendances, prérequis système, réglages à demander, poids de build, groupes,
+scripts d'installation) : `<module>/lab-module.json`, sinon le catalogue `modules/<nom>.json`.
+Format et exemple complet : [`modules/README.md`](modules/README.md) ; ce qu'une app doit fournir :
+`chantiers/modules/REGLES_MODULE.md`.
+
+**Première installation** — `install.sh` demande à l'étape 2 quels modules installer (menu
+`whiptail` s'il est présent, sinon liste numérotée ; `LAB_NO_WHIPTAIL=1` pour la liste), montre
+le plan (« seront installés après le cadriciel, dans cet ordre : … »), demande confirmation puis
+les réglages des modules choisis (clés d'API ; un secret n'est pas affiché), et installe tout à
+l'étape 10, dépendances d'abord. Le choix est mémorisé dans `.lab-state/modules/selection.json`.
+
+```bash
+bash scripts/install.sh --check                         # montre la sélection et le plan, ne fait rien
+bash scripts/install.sh --modules peripheriques,craft-lab   # ceux-là et leurs dépendances (lab-media, storage, oauth-hub)
+bash scripts/install.sh --all-modules                   # tous
+bash scripts/install.sh --no-apps                       # aucun : socle et cadriciel seulement
+bash scripts/install.sh --yes                           # la sélection mémorisée ; sans elle, tous (comme avant)
+```
+
+Un module qui échoue n'arrête pas les autres ; ceux qui en dépendent sont sautés, et le bilan
+donne la commande pour relancer (`bash scripts/install.sh --modules <nom>`).
+
+**Plus tard, sur l'hôte** :
+
+```bash
+bash scripts/lab-modules.sh list                        # catalogue et état de chaque module
+bash scripts/lab-modules.sh show <nom> --check          # prérequis, réglages, dépendances, groupes, install.sh --check
+bash scripts/lab-modules.sh plan --reinstall --with-deps <nom>   # ce qu'une relance ferait
+bash scripts/install.sh --modules <nom>                 # installer un module non installé
+bash scripts/setup2.sh <nom> --yes                      # relancer l'installation d'un module installé
+```
+
+**Depuis lab-admin** (superutilisateur) : page **Modules** — liste et état, « Vérifier », choix
+d'un ou plusieurs modules, options « réinstaller » et « avec ses dépendances », plan affiché avant
+confirmation, saisie des réglages manquants (envoyés une fois au moteur, jamais relus), suivi du
+job. Le moteur installe par le chemin de déploiement standard (commit présent sur GitHub,
+contrôles, tests backend) et ne se réinstalle jamais lui-même (`lab-mcp` : sur l'hôte,
+`bash scripts/setup2.sh lab-mcp --yes`).
+
+**Ajouter un module** : une app créée par lab-admin ou `new-app.sh` naît avec `lab-module.json`,
+`install.sh` et `install.bat` (squelettes sans effet). Une app existante sans description reçoit
+une description déduite (sans dépendances) : lui écrire `modules/<nom>.json` ou, mieux, un
+`lab-module.json` dans son dépôt, puis `bash scripts/tests/modules/run.sh`.
+
+**Windows** : le lab ne s'installe pas sous Windows (`install.bat` à la racine l'explique) — il faut
+un hôte Linux avec Docker. Le `install.bat` d'un module sert au poste d'un développeur.
 
 ---
 
@@ -1089,7 +1144,9 @@ Tous lancés avec `bash scripts/<nom>` depuis la racine `dev/` (résolvent eux-m
 
 | Script | Rôle |
 |---|---|
-| `install.sh [--check]` | Installation rejouable du lab ; `--check` ne fait rien et dit ce qui manque |
+| `install.sh [--check]` | Installation rejouable du lab ; `--check` ne fait rien et dit ce qui manque ; `--modules a,b`, `--all-modules` |
+| `lab-modules.sh list\|show\|plan\|selection\|settings\|prepare` | Modules du lab : catalogue et état, vérification, plan d'installation, sélection mémorisée (voir 1.6) |
+| `module-hook.sh <module> [--check]` | Joue le `install.sh` déclaré par un module (appelé par `setup_unit.sh`, avant le build) |
 | `lab-doctor.sh` | Bilan de santé en lecture seule : installation, bases, sauvegarde, Keycloak, ports, conteneurs, cloisonnement, disque |
 | `backup.sh [--check\|--list\|--local]` | Sauvegarde nocturne : bases, annuaire, volumes, configuration hors dépôt ; copie locale et NAS |
 | `backup-cron.sh [--check]` | Planifie `backup.sh` dans la crontab (rejouable) et vérifie les prérequis de la copie NAS |

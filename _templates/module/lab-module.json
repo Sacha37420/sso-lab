@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "__APP_NAME__",
+  "label": "__APP_TITLE__",
+  "description": "",
+  "category": "application",
+  "required": false,
+  "requires": { "modules": [], "system": [], "domain": false },
+  "resources": { "build_ram_mb": 1500, "heavy_build": false },
+  "settings": [],
+  "groups": __GROUPS_JSON__,
+  "install": { "script": "install.sh", "windows": "install.bat", "timeout_s": 900 }
+}

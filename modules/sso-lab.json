@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "name": "sso-lab",
+  "label": "Identité (sso-lab)",
+  "description": "Keycloak, annuaire LDAP, Caddy, code-server : l'identité et l'entrée HTTPS du lab.",
+  "category": "socle",
+  "required": true,
+  "priority": 0,
+  "requires": {
+    "modules": [],
+    "system": [],
+    "domain": false
+  },
+  "resources": {},
+  "settings": [],
+  "groups": [],
+  "install": null
+}

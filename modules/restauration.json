@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "name": "restauration",
+  "label": "Restauration",
+  "description": "Gestion de restaurant : fournisseurs, recettes, commandes, paiements, planning et analyses de ventes.",
+  "category": "application",
+  "required": false,
+  "priority": 60,
+  "requires": {
+    "modules": [
+      {
+        "name": "storage",
+        "interface": "1"
+      }
+    ],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "manager",
+    "cuisinier",
+    "serveur"
+  ],
+  "install": null
+}

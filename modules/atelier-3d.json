@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "name": "atelier-3d",
+  "label": "Atelier 3D",
+  "description": "Reconstruction 3D à partir de photos ou vidéo (COLMAP+OpenMVS, CPU-only), impression 3D, mouvements et sémantique de bâtiment.",
+  "category": "application",
+  "required": false,
+  "priority": 5,
+  "requires": {
+    "modules": [
+      {
+        "name": "storage",
+        "interface": "1"
+      }
+    ],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 4000,
+    "heavy_build": true
+  },
+  "settings": [],
+  "groups": [
+    "developers",
+    "famille",
+    "amis"
+  ],
+  "install": null
+}

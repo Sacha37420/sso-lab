@@ -36,6 +36,9 @@ ALLOWED_SCRIPTS = frozenset({
     "app-smtp.sh", "app-restart.sh",
     # essai-dev : adresse d'essai d'un développeur (up/down lancés PAR lab-lock.sh, status sans verrou)
     "app-preview.sh",
+    # modules (contrat modules v1, I2) : catalogue, plan, préparation, réglages, sélection — et les
+    # partages de groupe de storage, rejoués après chaque module installé par le moteur
+    "lab-modules.sh", "storage-shares.sh",
 })
 
 LOCK_BUSY = 75  # code rendu par les scripts quand le verrou de déploiement est occupé
@@ -65,6 +68,11 @@ def base_env(cfg: Config, lock_timeout: int) -> dict[str, str]:
     # test l'a reçu explicitement (docker-compose.yml ne le définit pas).
     if cfg.allow_file_origin:
         env["LAB_GIT_ALLOW_FILE"] = "1"
+    # LAB_MODULES_PS : état des conteneurs lu dans un fichier au lieu de `docker ps` par
+    # lab-modules.sh — TESTS UNIQUEMENT (tests/modules/). Même règle que ci-dessus : transmis
+    # seulement si le conteneur l'a reçu explicitement ; docker-compose.yml ne le définit pas.
+    if os.environ.get("LAB_MODULES_PS"):
+        env["LAB_MODULES_PS"] = os.environ["LAB_MODULES_PS"]
     return env
 
 

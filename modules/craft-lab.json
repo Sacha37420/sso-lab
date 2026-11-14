@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "name": "craft-lab",
+  "label": "Craft Lab",
+  "description": "Jeu de construction/survie 2D façon Minecraft/Terraria, jouable en multijoueur : catalogue d'objets/monstres/cartes, génération procédurale de terrain, combat et artisanat.",
+  "category": "application",
+  "required": false,
+  "requires": {
+    "modules": [
+      {
+        "name": "storage",
+        "interface": "1"
+      },
+      {
+        "name": "oauth-hub",
+        "interface": "1"
+      }
+    ],
+    "system": [],
+    "domain": false
+  },
+  "resources": {
+    "build_ram_mb": 1500,
+    "heavy_build": false
+  },
+  "settings": [],
+  "groups": [
+    "famille",
+    "amis",
+    "developers"
+  ],
+  "install": null
+}
