@@ -43,6 +43,39 @@ Précédent de référence : `.claude/plans/sharing-model-orchestration.md` (cha
 `storage/` + un secteur par app) — écrit à la main avant l'existence de la skill, il en applique
 déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement.
 
+## Session sur l'hôte — uid fictif `host` (2026-11-15)
+
+Une session Claude lancée **sur l'hôte** (VS Code par SSH, terminal) travaille comme un développeur
+du lab, sous l'uid fictif **`host`** — même principe que `auto` pour les tâches de nuit. `host` n'est
+**pas un compte** : ni annuaire LDAP, ni `.devs`, ni base `dev_host` ; c'est une convention de dossiers
+et de branches. Raison : `deploiement/<app>` et `/home/sacha/dev` sont ce que le lab construit et met en
+service — du travail en cours dedans est un déploiement en attente (un `setup2.sh` l'embarque).
+
+**Applications** (`deploiement/<app>` et services du cadriciel en sous-module) :
+- travailler dans un clone **`~/lab-work/host/<app>`** (clone du dépôt GitHub ou `git worktree` du
+  sous-module), sur une branche **`host/<sujet>`** ; ne jamais modifier `deploiement/<app>` ni un
+  sous-module en place ;
+- vérifier dans des environnements jetables (`chantiers/tests/essai.sh`, base et réseau jetables,
+  Keycloak simulé) — jamais sur les conteneurs ou la base en service ;
+- pousser, ouvrir une PR, fusionner ; **déployer par le moteur** (bouton « Déployer » / outil `deploy`) ;
+- le pointeur du sous-module dans `dev/` n'avance qu'après fusion, sur un commit de `main`.
+
+**Racine du lab** (`infra/`, `sso-lab/`, `scripts/`, `lab-mcp/`, `runner/`, `workspace/`, `CLAUDE.md`…) :
+- écrire dans le worktree **`~/lab-work/host/sso-lab`** (`git worktree add -b host/<sujet> …` depuis
+  `/home/sacha/dev`), puis branche, PR, fusion ;
+- **ne jamais rien exécuter depuis ce worktree** : les scripts y résolvent la racine sur un dossier sans
+  `.env`, `.ports`, `.owners`, `.lab-state/` ni `init.ldif` ; un `docker compose` y prendrait le même
+  nom de projet que le service (le nom du dossier) et **recréerait les vrais conteneurs**. Seuls les
+  bancs prévus pour tourner hors service y sont permis (`scripts/tests/*/run.sh`, `lab-media/verify.sh`,
+  `automatisation/tests/run.sh`…) ;
+- l'infra n'a pas d'adresse d'essai : la PR sert à relire et à tracer. **Appliquer** = après fusion,
+  `git pull` dans `/home/sacha/dev`, puis la commande de service (`up -d --no-build`,
+  `create-app-client.sh`…) — toujours en présence du propriétaire, comme le reste des règles
+  `edge-net` / Caddy / Keycloak.
+
+Limites assumées : pas d'adresse d'essai `/dev-host` (`app-preview.sh` exige le propriétaire de l'app) ;
+la session pousse encore avec le `gh` de l'hôte (portée `delete_repo`), faute de jeton propre à `host`.
+
 ---
 
 ## Chantiers ouverts (à traiter, pas encore faits)
