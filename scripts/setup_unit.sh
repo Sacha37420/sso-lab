@@ -242,6 +242,13 @@ registry_record_deployed "$APP_NAME" "$BACKEND_TESTS" "non-lancé" \
   || echo -e "\033[1;33m⚠ SHA déployé non enregistré (dossier d'état inaccessible) — app-status.sh rendra l'ancien.\033[0m"
 echo -e "\033[0;32m✓ $APP_NAME déployée.\033[0m"
 
+# Page 404 publique (vitrine) : régénérée après chaque déploiement réussi, pour que ses liens
+# suivent les labels Caddy réellement déployés — c'est la même lecture que les liens de la page
+# Projets de lab-admin (moteur, registry.caddy_paths). Sans effet si rien n'a changé ; un échec
+# ne remet jamais en cause le déploiement.
+bash "$SCRIPT_DIR/complete_404.sh" > /dev/null 2>&1 \
+  || echo -e "\033[1;33m⚠ Page 404 non régénérée (bash scripts/complete_404.sh pour voir pourquoi).\033[0m"
+
 # (Contrat v11, I4 : plus de synchronisation d'un catalogue de tests vers
 # lab-admin ici — ni appel à son `catalog-sync`, ni génération de
 # SETUP_CATALOG_KEY dans son .env. Un déploiement n'écrit plus rien chez lab-admin.)

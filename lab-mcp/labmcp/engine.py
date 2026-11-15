@@ -772,16 +772,17 @@ class Engine:
             state = "stopped" if (services or deployed) else "never_deployed"
         ws = self.ws.get(owner)
         origin = self.cfg.public_origin
+        front_path, api_path = self.registry.caddy_paths(app)
         item = {
             "name": app, "owner": owner,
             # (v10) Nature du projet : c'est son EMPLACEMENT réel qui décide, pas une liste de noms —
             # une application vit dans deploiement/, un outil du lab à la racine du dépôt.
             "kind": "application" if self.registry.in_deploiement(app) else "outil",
             "repo_url": self.registry.repo_url(app) or None,
-            # Chemins de la convention du lab (/<app>/ et /<app>-api/) : exacts pour tout projet créé
-            # par le moteur ; une app historique peut servir un autre chemin.
-            "urls": {"app": f"{origin}/{app}/" if (front or back) else None,
-                     "api": f"{origin}/{app}-api/" if (back and front) else None},
+            # Chemins LUS dans les labels Caddy de l'app (registry.caddy_paths), comme la page 404 :
+            # une app historique peut servir un autre chemin que son nom (analyse-lora → /lora/).
+            "urls": {"app": f"{origin}{front_path}" if front_path else None,
+                     "api": f"{origin}{api_path}" if api_path else None},
             "ports": {"backend": int(back) if back.isdigit() else None,
                       "frontend": int(front) if front.isdigit() else None},
             "state": state, "deployed": deployed,

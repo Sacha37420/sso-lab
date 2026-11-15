@@ -280,4 +280,7 @@ for _k in "$(registry_state_dir)/deploy-keys/$APP" "$(registry_state_dir)/deploy
 done
 # deploiement/ vide après le retrait de sa dernière app : on ne le laisse pas traîner.
 rmdir "$ROOT/deploiement" 2>/dev/null || true
+# Page 404 publique : l'app retirée n'y a plus de ligne (complete_404.sh saute une app sans
+# docker-compose.yml). Un échec ne remet pas en cause le retrait.
+bash "$SCRIPT_DIR/complete_404.sh" > /dev/null 2>&1 || log "⚠ Page 404 non régénérée (bash scripts/complete_404.sh)."
 log "✓ '$APP' retirée. (Le dépôt distant n'est pas supprimé.)"
