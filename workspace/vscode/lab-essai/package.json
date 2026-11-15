@@ -1,32 +1,76 @@
 {
   "name": "lab-essai",
   "displayName": "Lab : essai",
-  "description": "Tâches du lab pour l'adresse d'essai du développeur : construire, état, arrêter. Elles lancent la commande lab-essai de l'espace ; rien n'est écrit dans le dépôt du projet.",
+  "description": "Tâches du lab pour l'adresse d'essai du développeur : construire, état, arrêter ; et le lancement complet dans le volet Run and Debug. Elles lancent la commande lab-essai de l'espace ; rien n'est écrit dans le dépôt du projet.",
   "publisher": "lab",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "license": "MIT",
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Other"],
-  "extensionKind": ["workspace"],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
   "main": "./extension.js",
-  "activationEvents": ["onStartupFinished", "onTaskType:lab-essai"],
+  "activationEvents": [
+    "onStartupFinished",
+    "onTaskType:lab-essai",
+    "onCommand:lab-essai.lancer",
+    "onDebugDynamicConfigurations:lab-essai",
+    "onDebugResolve:lab-essai"
+  ],
   "capabilities": {
-    "untrustedWorkspaces": { "supported": true },
+    "untrustedWorkspaces": {
+      "supported": true
+    },
     "virtualWorkspaces": false
   },
   "contributes": {
     "taskDefinitions": [
       {
         "type": "lab-essai",
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
         "properties": {
           "action": {
             "type": "string",
-            "enum": ["construire", "etat", "arreter"],
+            "enum": [
+              "construire",
+              "etat",
+              "arreter"
+            ],
             "description": "construire : lab-essai · etat : lab-essai status · arreter : lab-essai stop"
           }
         }
+      }
+    ],
+    "commands": [
+      {
+        "command": "lab-essai.lancer",
+        "title": "lancer l'essai complet",
+        "category": "Lab"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "lab-essai",
+        "label": "Lab",
+        "configurationAttributes": {
+          "launch": {
+            "properties": {}
+          }
+        }
+      }
+    ],
+    "viewsWelcome": [
+      {
+        "view": "debug",
+        "contents": "Lancer le projet complet (backend et frontend) à votre adresse d'essai, tel qu'il est dans le dossier de travail :\n[Lab : lancer l'essai complet](command:lab-essai.lancer)"
       }
     ]
   }

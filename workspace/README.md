@@ -194,6 +194,14 @@ lab-essai stop       # arrête l'essai (sa base est conservée)
 (tâche de build par défaut : `Ctrl+Maj+B`), « Lab : état de l'essai », « Lab : arrêter l'essai »
 (*Terminal → Run Task… → lab-essai*). Elles lancent `lab-essai` directement, sans shell.
 
+**Volet Run and Debug.** Le lancement complet y est proposé sous le nom « Lab : lancer l'essai
+complet » : un lien dans l'écran d'accueil du volet (projet sans `launch.json`), et une
+configuration **dynamique** du type « Lab » (menu de lancement, *Debug: Select and Start
+Debugging*). Les deux lancent la tâche « construire » et rien d'autre. Aucune session de débogage
+ne s'ouvre et aucun `launch.json` n'est écrit. Pas de points d'arrêt : le code de l'essai tourne
+dans les conteneurs du lab, que l'espace ne joint pas. Lancer seulement le backend ou seulement le
+frontend dans l'espace n'est pas possible, pour la même raison (ni base, ni Keycloak joignables).
+
 Elles viennent d'une **extension intégrée à code-server** (`vscode/lab-essai/`), et non d'un
 `.vscode/tasks.json` ni des réglages de l'éditeur, parce que :
 - le dépôt du projet (`/work/<app>`) ne doit rien recevoir du lab ;
