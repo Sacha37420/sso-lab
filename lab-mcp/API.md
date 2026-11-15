@@ -245,7 +245,7 @@ d'un dev avec.
   "tests": {"cloisonnement": {"verdict": "ok", "at": "2026-10-11T10:20:00Z",          // (v11)
             "cases": [{"title": "non-membre : refusé au premier login", "status": "PASSED"}]}},
   "repo_url": "https://github.com/hassan-gh/mon-app.git",      // null si le projet n'a pas de dépôt enregistré
-  "urls": {"app": "https://<DOMAIN>/mon-app/", "api": "https://<DOMAIN>/mon-app-api/"},
+  "urls": {"app": "https://<DOMAIN>/mon-app/", "api": "https://<DOMAIN>/mon-app-api/"},   // chemins LUS dans les labels caddy.handle_path (comme la page 404) ; null si l'app n'en sert pas
           // convention du lab : app = interface (ou l'API seule pour un projet « django ») ;
           // api = null sans frontend ; les deux null sans port. Une app historique peut servir un autre chemin.
   "ports": {"backend": 8102, "frontend": 4216},                 // entiers ou null

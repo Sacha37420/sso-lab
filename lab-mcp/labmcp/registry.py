@@ -123,6 +123,28 @@ class Registry:
                 out[parts[0]] = parts[2] if len(parts) > 2 else ""
         return out
 
+    # Label Caddy d'un chemin servi : « caddy.handle_path: "/x/*" » ou « caddy_2.handle_path: … ».
+    # Un chemin calculé (« ${VAR:-x} ») n'est pas lisible ici : il est ignoré.
+    _HANDLE_PATH_RE = re.compile(r'caddy(?:_\d+)?\.handle_path:\s*["\']?(/[A-Za-z0-9._~-]+)/\*["\']?')
+
+    def caddy_paths(self, app: str) -> tuple[str | None, str | None]:
+        """Chemins publics (front, API) de l'app, LUS dans les labels `caddy.handle_path` de son
+        docker-compose.yml — même règle que scripts/complete_404.sh (la page 404) : le front est
+        `/<app>` s'il est servi, sinon le premier chemin qui ne finit pas par `-api` ; l'API est
+        `/<app>-api` s'il est servi, sinon le premier chemin en `-api`. Rend `/<chemin>/` ou None.
+        Le fichier n'est que LU comme du texte. Une app historique peut servir un autre chemin que
+        son nom (`analyse-lora` → `/lora/`) : la convention `/<app>/` ne se suppose jamais."""
+        try:
+            with open(os.path.join(self.app_dir(app), "docker-compose.yml"), encoding="utf-8") as fh:
+                paths = self._HANDLE_PATH_RE.findall(fh.read())
+        except OSError:
+            return None, None
+        fronts = [p for p in paths if not p.endswith("-api")]
+        apis = [p for p in paths if p.endswith("-api")]
+        front = f"/{app}" if f"/{app}" in fronts else (fronts[0] if fronts else None)
+        api = f"/{app}-api" if f"/{app}-api" in apis else (apis[0] if apis else None)
+        return (front + "/" if front else None), (api + "/" if api else None)
+
     def has_spec(self, app: str) -> bool:
         return os.path.isfile(os.path.join(self.app_dir(app), "frontend", "e2e", "cloisonnement.spec.ts"))
 
