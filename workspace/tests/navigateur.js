@@ -127,6 +127,46 @@ const prefixe = new URL(URL_WS).pathname;
     await page.keyboard.press('Escape');
     await page.waitForTimeout(6000);
   });
+  // Volet Run and Debug : le lancement complet y est proposé (lien d'accueil, puis configuration
+  // dynamique « Lab »), sans launch.json. Chaque voie doit lancer la tâche « construire » une fois :
+  // verify.sh compte les preview_deploy dans le journal du faux serveur.
+  const lignesVisibles = () => page.evaluate(() =>
+    [...document.querySelectorAll('.quick-input-widget .monaco-list-row')]
+      .filter(e => e.getBoundingClientRect().height > 0)
+      .map(e => (e.getAttribute('aria-label') || e.textContent || '').trim()));
+  await etape('run_debug_lien', async () => {
+    await page.waitForTimeout(12000);            // la construction précédente (faux moteur) se termine
+    await commandeExacte('View: Show Run and Debug');
+    const lien = page.locator('.welcome-view-content a, .welcome-view-content .monaco-button', { hasText: "Lab : lancer l'essai complet" }).first();
+    await lien.waitFor({ state: 'visible', timeout: 30000 });
+    await capture('run-debug');
+    await lien.click();
+    await page.waitForTimeout(12000);
+    res.apresLien = await liste();               // null attendu : la tâche part sans question
+    await page.keyboard.press('Escape');
+  });
+  await etape('run_debug_config', async () => {
+    await commandeExacte('Debug: Select and Start Debugging');
+    await page.waitForTimeout(3000);
+    res.typesLancement = await lignesVisibles();
+    // Clic sur la ligne du type « Lab » (ouvre ses configurations dynamiques), puis attente de la liste.
+    await page.locator('.quick-input-widget .monaco-list-row[aria-label^="Lab contributed"]').first().click();
+    try {
+      await page.waitForFunction(() => [...document.querySelectorAll('.quick-input-widget .monaco-list-row')]
+        .some(e => e.getBoundingClientRect().height > 0 && /Lab : lancer l'essai complet/.test(e.getAttribute('aria-label') || e.textContent || '')),
+        null, { timeout: 20000 });
+    } catch (_e) { /* relevé ci-dessous */ }
+    res.configsLab = await lignesVisibles();
+    await capture('run-debug-configs');
+    if (!(res.configsLab || []).some(t => t.includes("Lab : lancer l'essai complet")))
+      throw new Error('configuration « Lab : lancer l\'essai complet » non proposée — types : ' + JSON.stringify(res.typesLancement) + ' · après « Lab » : ' + JSON.stringify(res.configsLab));
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(12000);
+    res.apresConfig = await liste();             // null attendu
+    res.sessionDebug = await page.evaluate(() => !!document.querySelector('.debug-toolbar') &&
+      document.querySelector('.debug-toolbar').getBoundingClientRect().height > 0);
+    await page.keyboard.press('Escape');
+  });
   if (process.env.CAPTURE) await page.screenshot({ path: process.env.CAPTURE }).catch(() => {});
   res.barreEtat = await page.evaluate(() => [...document.querySelectorAll('.statusbar-item')].map(e => (e.textContent || '').trim()).filter(Boolean));
   res.erreurs = [...new Set(res.erreurs)];

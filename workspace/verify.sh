@@ -523,7 +523,7 @@ if [[ $NAVIGATEUR -eq 1 ]] && docker image inspect "$NAV_IMAGE" >/dev/null 2>&1;
   else
     q() { jq -r "$1" <<<"$RES"; }
     [[ "$(q .urlFinale)" == "$PX:8081/ws/alice/?folder=/work/demo-app" ]] && ok "arrivée par /ws/alice → URL finale $(q .urlFinale)" || ko "URL finale inattendue : $(q .urlFinale)"
-    for e in page fichier_python extension_python terminal taches_proposees tache_build_par_defaut; do
+    for e in page fichier_python extension_python terminal taches_proposees tache_build_par_defaut run_debug_lien run_debug_config; do
       [[ "$(q ".etapes.$e")" == ok ]] && ok "étape « $e »" || ko "étape « $e » : $(q ".etapes.$e")"
     done
     # vsda : module propriétaire de Microsoft absent de toute distribution libre de VS Code — 404 attendu, même en accès direct.
@@ -551,8 +551,12 @@ if [[ $NAVIGATEUR -eq 1 ]] && docker image inspect "$NAV_IMAGE" >/dev/null 2>&1;
     LOGMCP="$(dx "$P-a" cat /tmp/faux-mcp.log 2>/dev/null)"
     [[ "$(grep -c 'auth=OK agent=lab-essai/1 outil=preview_status$' <<<"$LOGMCP")" -eq $(( N_ETAT_AVANT + 1 )) ]] \
       && ok "vu par le serveur : la tâche « état » a appelé preview_status avec le jeton de l'espace (une fois)" || ko "la tâche « état » n'a pas joint le serveur"
-    [[ "$(grep -c 'auth=OK agent=lab-essai/1 outil=preview_deploy$' <<<"$LOGMCP")" -eq 1 ]] && grep -q 'auth=OK agent=lab-essai/1 outil=job_status$' <<<"$LOGMCP" \
-      && ok "vu par le serveur : la tâche de build a appelé preview_deploy (une fois) puis suivi le job" || ko "la tâche de build n'a pas lancé preview_deploy exactement une fois"
+    # Trois voies, une construction chacune : Ctrl+Maj+B, le lien du volet Run and Debug, la configuration dynamique « Lab ».
+    [[ "$(grep -c 'auth=OK agent=lab-essai/1 outil=preview_deploy$' <<<"$LOGMCP")" -eq 3 ]] && grep -q 'auth=OK agent=lab-essai/1 outil=job_status$' <<<"$LOGMCP" \
+      && ok "vu par le serveur : tâche de build, lien Run and Debug et configuration « Lab » ont chacun appelé preview_deploy (3 fois) puis suivi le job" || ko "preview_deploy : $(grep -c 'auth=OK agent=lab-essai/1 outil=preview_deploy$' <<<"$LOGMCP") appel(s), 3 attendus (build, lien, configuration)"
+    [[ "$(q '.apresLien')" == null && "$(q '.apresConfig')" == null ]] && ok "Run and Debug : le lien et la configuration « Lab » lancent la tâche sans aucune question" || ko "Run and Debug : question posée ($(q '.apresLien | tostring') · $(q '.apresConfig | tostring'))"
+    [[ "$(q '.sessionDebug')" == false ]] && ok "Run and Debug : aucune session de débogage ouverte (la configuration ne fait que lancer la tâche)" || ko "Run and Debug : une session de débogage est restée ouverte"
+    [[ ! -e "$W/.vscode/launch.json" && ! -e "$H/.local/share/code-server/User/launch.json" ]] && ok "aucun launch.json écrit (ni dans le projet, ni dans les réglages du dev)" || ko "launch.json écrit"
     grep 'agent=lab-essai/1' <<<"$LOGMCP" | grep -qv 'auth=OK\|outil=preview_status$' && ko "une tâche a joint le serveur sans le bon jeton" || ok "aucun appel des tâches sans le bon jeton"
     [[ "$(cd "$W" && find . | sort)" == "$PROJET_AVANT" ]] && ok "les tâches n'ont rien écrit dans le projet (ni .vscode/tasks.json ni autre fichier)" || ko "le projet a changé : $(cd "$W" && find . | sort | tr '\n' ' ')"
     [[ ! -e "$H/.local/share/code-server/User/tasks.json" ]] && ok "aucune tâche écrite dans les réglages d'éditeur du dev" || ko "tasks.json écrit dans les réglages du dev"

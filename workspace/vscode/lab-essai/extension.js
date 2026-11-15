@@ -7,6 +7,15 @@
 //   « Lab : état de l'essai »      lab-essai status
 //   « Lab : arrêter l'essai »      lab-essai stop
 //
+// Volet Run and Debug : le lancement complet (« Lab : lancer l'essai complet ») y est proposé de
+// deux façons, qui lancent toutes deux la tâche « construire » ci-dessus — rien d'autre :
+//   - un lien dans l'écran d'accueil du volet (projet sans .vscode/launch.json) ;
+//   - une configuration DYNAMIQUE du type « Lab » (menu de lancement, F5), fournie par
+//     l'extension : jamais écrite dans un launch.json du projet.
+// Ce n'est pas une session de débogage : le code de l'essai tourne dans les conteneurs du lab,
+// que l'espace ne joint pas. La configuration lance la tâche et n'ouvre aucune session (pas de
+// points d'arrêt possibles ; la sortie est dans le terminal de la tâche).
+//
 // Chaque tâche lance la commande `lab-essai` de l'image, directement (ProcessExecution :
 // pas de shell, aucun argument tiré du projet), avec l'environnement de l'espace. Aucun
 // jeton n'est lu ici.
@@ -53,6 +62,14 @@ function tache(t, definition) {
   return task;
 }
 
+const LANCEMENT = "Lab : lancer l'essai complet";
+
+// Lance la tâche « construire » (la même que Ctrl+Maj+B). Si elle tourne déjà, l'éditeur
+// propose de la laisser ou de la relancer : jamais deux constructions en parallèle par ce biais.
+function lancerEssai() {
+  return vscode.tasks.executeTask(tache(TACHES[0]));
+}
+
 function activate(context) {
   context.subscriptions.push(vscode.tasks.registerTaskProvider(TYPE, {
     provideTasks: () => TACHES.map(t => tache(t)),
@@ -60,6 +77,19 @@ function activate(context) {
       const t = TACHES.find(x => x.action === (task.definition && task.definition.action));
       return t ? tache(t, task.definition) : undefined;
     },
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand('lab-essai.lancer', lancerEssai));
+  // Configuration dynamique uniquement : un fournisseur « Initial » proposerait de l'écrire dans
+  // le launch.json du projet.
+  context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider(TYPE, {
+    // Une seule entrée : pour le dossier du projet, pas une seconde « user settings » (folder absent).
+    provideDebugConfigurations: folder => (folder ? [{ type: TYPE, request: 'launch', name: LANCEMENT }] : []),
+  }, vscode.DebugConfigurationProviderTriggerKind.Dynamic));
+  // Toute configuration de ce type (dynamique, ou recopiée à la main dans un launch.json) :
+  // lancer la tâche, puis rendre « undefined », qui annule la session sans message ni ouverture
+  // de launch.json (« null » l'ouvrirait). Aucun adaptateur de débogage n'est donc jamais requis.
+  context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider(TYPE, {
+    resolveDebugConfiguration: async () => { await lancerEssai(); return undefined; },
   }));
 }
 
