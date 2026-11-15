@@ -63,7 +63,8 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
   `LAB_ROOT=$PWD bash storage/frontend/e2e/jouer-gestes.sh --deploye` (25 gestes en navigateur
   réel, compte `e2edev`). `?token=` en paramètre d'URL n'est plus accepté nulle part (2026-11-01,
   chantier « failles ») : Bearer seulement, les images passent par `fetch` + `URL.createObjectURL`.
-  **Neuf apps consomment son API** (les six listées plus bas, plus `code-route`, `craft-lab` et
+  Sous-partages des apps rangés sous le partage de chaque app depuis le 2026-11-15 (voir
+  « Sont migrées » plus bas). **Neuf apps consomment son API** (les six listées plus bas, plus `code-route`, `craft-lab` et
   son propre frontend) : aucune route existante ne doit changer.
 - **Sauvegardes : chiffrement à faire.** Elles tournent chaque nuit (voir « Sauvegardes ») mais
   **en clair**, par décision du propriétaire du 2026-10-12 : à brancher dans `seal()` de
@@ -950,6 +951,28 @@ Toute **nouvelle** app qui a besoin de stocker des fichiers utilisateur doit app
 
 **Sont migrées : `conciergerie`, `carto-lab`, `restauration`, `traitement-de-fichiers-compils`,
 `arbre-genealogique` et `atelier-3d`.**
+
+**Sous-partages rangés sous le partage de l'app** (chantier `chantiers/storage-hierarchie/`,
+2026-11-15). Les quatre apps qui créent des partages à la volée (`atelier-3d-project-<id>`,
+`arbre-genealogique-tree-<id>`, `conciergerie-bien-<id>`, `tdfc-…`) les rangent sous leur
+**conteneur** : le partage qui porte le nom de l'app, sans fichier ni membre.
+- **Le conteneur appartient au compte de service `service:<app>-admin`**, plus à `sacha` :
+  `storage` n'accepte un parent que s'il a le même propriétaire que l'enfant (règle à garder).
+  Jusqu'à cette date, aucune app ne passait `parent`, et tout partage créé après le 2026-07-30
+  restait à la racine.
+- Chaque app a `ensure_container()` (le crée s'il manque) et crée l'enfant avec `parent`. Un refus
+  donne un partage à la racine et un avertissement, **jamais** un dépôt en échec : la hiérarchie
+  n'est que de l'organisation et n'accorde aucun droit.
+- `python manage.py rattacher_partages_storage [--check]` dans chacune des quatre apps : range
+  l'existant, idempotente, code 1 s'il reste à faire. Elle lit l'état par `GET /api/shares/` (clé
+  `owned`) : **`GET /api/shares/<nom>/` n'existe pas** (405).
+- **tdfc a des dossiers** (`Dossier`, partage `tdfc-d-<hex>`). Une extraction d'images d'une vidéo
+  va dans un dossier au nom de la vidéo. Le partage du dossier contient directement ses fichiers,
+  sous des noms lisibles. Un fichier isolé, ou un fichier partagé à quelqu'un, garde un partage à
+  lui : partager un fichier d'un dossier l'en sort d'abord, sinon le destinataire lirait tout le
+  dossier.
+- Piège : pour un compte de service à préfixe, un simple `GET /api/files/<ns>/` sur un nom qui
+  n'existe pas **crée** le partage (à la racine). C'est ainsi que conciergerie créait les siens.
 
 - `conciergerie` (`Frais.facture` → `Frais.facture_path`, un partage `storage` par bien nommé
   `conciergerie-bien-<id>`, créé automatiquement au premier upload) est l'exemple de référence pour
