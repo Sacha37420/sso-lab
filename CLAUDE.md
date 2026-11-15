@@ -64,8 +64,10 @@ déjà l'essentiel, il lui manquait la 3ᵉ strate et le mécanisme d'amendement
   réel, compte `e2edev`). `?token=` en paramètre d'URL n'est plus accepté nulle part (2026-11-01,
   chantier « failles ») : Bearer seulement, les images passent par `fetch` + `URL.createObjectURL`.
   Sous-partages des apps rangés sous le partage de chaque app depuis le 2026-11-15 (voir
-  « Sont migrées » plus bas). **Neuf apps consomment son API** (les six listées plus bas, plus `code-route`, `craft-lab` et
-  son propre frontend) : aucune route existante ne doit changer.
+  « Sont migrées » plus bas). **Dix apps consomment son API** (les six listées plus bas, plus `code-route`, `craft-lab`,
+  `bilan-thermique` et son propre frontend) : aucune route existante ne doit changer. `bilan-thermique`
+  (2026-11-15) y garde l'original des documents d'un bâtiment, dans l'espace personnel de qui les dépose
+  (variante `carto-lab` : jeton de l'utilisateur transmis, `STORAGE_DOCUMENTS_ENABLED=True` dans son `.env`).
 - **Sauvegardes : chiffrement à faire.** Elles tournent chaque nuit (voir « Sauvegardes ») mais
   **en clair**, par décision du propriétaire du 2026-10-12 : à brancher dans `seal()` de
   `scripts/backup.sh` (clé publique sur le serveur, clé privée chez lui).
