@@ -421,6 +421,15 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
   l'app (`bilan-thermique-rendu-net`, `internal: true`, joint par le backend et le worker seuls), aucun port, aucun
   label Caddy, clé `RENDU_SERVICE_KEY` dans le `.env` de l'app, exports transitoires 24 h (volume `rendu-exports`,
   non `external`). Chromium jamais dans l'image Django (même règle que `runner/` et l'engine de robot-lab).
+- **bilan-thermique calcule N0, N1, N2 et les potentiels d'elle-même** (chantier `bt-trois-niveaux`, 2026-11-16) :
+  un signal Django (fait, protection, géométrie, enveloppe, météo, bouquet, réglages du parc…) ne fait que planifier,
+  regroupé 30 s ; le N2 passe sous le verrou des calculs lourds de l'app et se replanifie s'il est pris. Trois
+  pièges vus : un `QuerySet.update()` n'émet **aucun** signal (toute écriture d'une entrée de calcul doit passer par
+  `save()`) ; dans un signal de suppression, `origin` est le **QuerySet** quand la suppression vient de
+  `QuerySet.delete()` — ne tester que `isinstance(origin, Building)` planifiait un recalcul pour le bâtiment supprimé
+  et faisait échouer la transaction (vu en service, invisible dans un `TestCase`, qui ne valide jamais) ; une API qui
+  passe d'« une entrée par X » à « une entrée par X et par niveau » casse sans bruit tout consommateur qui prend
+  `next(x for x in … if x['bouquet']['id'] == id)` — filtrer aussi par niveau.
 - **Un test qui simule « pas de LiDAR » doit aussi simuler « pas de MNS »** : le banc `essai.sh` a le réseau fermé,
   mais le conteneur de `app-test.sh` joint l'IGN — le repli testé n'était plus joué et `app-test.sh` était rouge
   (bilan-thermique, 2026-11-16). Un test ne doit jamais dépendre de l'état du réseau, dans un sens ni dans l'autre.
