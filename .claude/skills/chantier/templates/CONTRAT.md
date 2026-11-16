@@ -32,6 +32,9 @@ par une interface ci-dessous ☐ · testable seul ☐.
 ### I1 — <nom de l'interface> · producteur : secteur N · consommateurs : secteurs M, P
 ```
 <schéma de données exact / signature d'endpoint / clé .env / convention de nommage>
+<POUR CHAQUE ROUTE : forme exacte de CHAQUE réponse — succès, liste, erreur (code + message fixe), cas « pas encore
+ calculé / vide », champs de droits que l'écran lit (ex. peut_ecrire). Une route sans ses réponses n'est PAS écrite :
+ deux amendements sur trois du chantier bt-potentiels venaient de là.>
 ```
 Contraintes non négociables : <ce qui ne peut pas changer sans amendement>.
 

@@ -416,6 +416,19 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
   et `bilan-thermique` aurait reçu un commit « wip ». Pour un changement de configuration seule
   (base, variable) : `docker compose -f <dir>/docker-compose.yml up -d --no-build`, et vérifier
   que l'identifiant d'image de chaque conteneur est le même avant et après.
+- **bilan-thermique a un 4ᵉ conteneur, `bilan-thermique-rendu`** (Node + Chromium, chantier `bt-potentiels`,
+  2026-11-16) : il imprime les rendus en PDF et dessine figures et vues 3D pour le Word. Réseau **interne** propre à
+  l'app (`bilan-thermique-rendu-net`, `internal: true`, joint par le backend et le worker seuls), aucun port, aucun
+  label Caddy, clé `RENDU_SERVICE_KEY` dans le `.env` de l'app, exports transitoires 24 h (volume `rendu-exports`,
+  non `external`). Chromium jamais dans l'image Django (même règle que `runner/` et l'engine de robot-lab).
+- **Un test qui simule « pas de LiDAR » doit aussi simuler « pas de MNS »** : le banc `essai.sh` a le réseau fermé,
+  mais le conteneur de `app-test.sh` joint l'IGN — le repli testé n'était plus joué et `app-test.sh` était rouge
+  (bilan-thermique, 2026-11-16). Un test ne doit jamais dépendre de l'état du réseau, dans un sens ni dans l'autre.
+- **`docker exec <c> python - <<EOF` sans `-i` n'exécute rien et ne dit rien** : le heredoc n'arrive pas au
+  conteneur. Toujours `docker exec -i` pour un script passé par l'entrée standard.
+- **Le rendu d'une réponse DRF n'est pas du JSON** : `response.data` d'une vue appelée en interne porte des
+  `datetime` ; `json.dumps` échoue là où le rendu HTTP passait (export bloqué « en file d'attente », bilan-thermique).
+  `DjangoJSONEncoder`, et sérialiser **avant** d'écrire en base.
 - **Un comparateur se teste sur un écart provoqué**, pas seulement sur un cas identique : celui de
   la bascule ne comptait qu'une table par schéma (une boucle `while read` autour de
   `docker exec -i` se fait manger son entrée) et annonçait « identique » à tort.
@@ -425,7 +438,10 @@ Le cadriciel suit la même discipline : toute tâche de plusieurs lots a son `to
 
 - **Deux secteurs lancés en parallèle sur une API dont seules les routes étaient écrites** : le
   consommateur s'est arrêté (à raison), la forme des réponses n'existait pas. Une interface n'est
-  « écrite » que si les réponses le sont ; sinon le producteur publie d'abord sa description.
+  « écrite » que si les réponses le sont ; sinon le producteur publie d'abord sa description. Reproduit au chantier
+  `bt-potentiels` (2026-11-16) **malgré cette ligne** : deux amendements sur trois venaient de réponses non écrites
+  (document de rendu, potentiels, bouquets). Le gabarit de contrat (`.claude/skills/chantier/templates/CONTRAT.md`)
+  exige désormais, pour chaque route, la forme de **chaque** réponse (succès, liste, erreur, « pas encore calculé »).
 - **Une règle pare-feu `--gid-owner <groupe>` ne voit que le groupe primaire**, et les ponts Docker
   ne tiennent pas tous dans `172.16.0.0/12` (`atelier3d-net` est en `192.168.16.0/20`).
 - **code-server n'a pas d'option de préfixe** : c'est le proxy qui retire `/ws/<uid>`, et il doit
