@@ -95,8 +95,9 @@ elle dépend, demande ses réglages, puis la déploie. Règles complètes : `mod
   `tokenBases()` (`core/env.ts`) — une API de plus s'y ajoute ; le retour après connexion passe par
   `core/redirect-uri.ts`, jamais par un paramètre d'URL. Fichiers servis par `storage` : jeton en
   en-tête `Authorization`, jamais `?token=`.
-- **`docker-compose.yml`** : tout port publié est lié à `127.0.0.1` ; un frontend ne reçoit jamais
-  `env_file: .env`.
+- **`docker-compose.yml`** : tout port publié s'écrit `"${LAB_BIND_ADDR:-127.0.0.1}:<hôte>:<conteneur>"`,
+  comme dans le compose généré (lié à `127.0.0.1` sauf réglage du lab, jamais une adresse en dur) ;
+  un frontend ne reçoit jamais `env_file: .env`.
 
 ## En cas de blocage
 

@@ -13,5 +13,4 @@ export class ProfileComponent {
   get username(): string  { return this.kc.username; }
   get email(): string     { return this.kc.email; }
   get groups(): string[]  { return this.kc.groups; }
-  get token(): string     { return this.kc.getToken() ?? ''; }
 }

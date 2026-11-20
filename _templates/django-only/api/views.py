@@ -8,8 +8,8 @@ from .serializers import DepartmentSerializer, UserRecordSerializer
 
 class MeView(APIView):
     """
-    permission_classes = [IsAuthenticated]
-    GET /api/me/
+    GET /api/me/ — permission par défaut (`IsAuthenticated`, config/settings.py) : rien n'est
+    déclaré ici.
     Retourne l'identité de l'utilisateur authentifié (depuis le JWT + DB).
     Crée un UserRecord à la première visite.
     """
