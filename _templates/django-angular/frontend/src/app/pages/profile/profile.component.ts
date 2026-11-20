@@ -34,7 +34,8 @@ export class ProfileComponent implements OnInit {
       },
       error: (err) => {
         this.loading.set(false);
-        this.error.set(`Impossible de charger le profil (${err.status ?? 'réseau'})`);
+        // `status` vaut 0 quand le serveur n'a pas répondu (réseau) : jamais « (0) ».
+        this.error.set(`Impossible de charger le profil (${err.status || 'réseau'})`);
       },
     });
   }
