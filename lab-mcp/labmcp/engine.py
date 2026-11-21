@@ -933,7 +933,7 @@ class Engine:
         token_kc = self._need_token(c)
         if not isinstance(name, str) or not NAME_RE.fullmatch(name) or "--" in name:
             raise LabError("invalid", "Nom invalide : 3 à 40 caractères, minuscules, chiffres et tirets.")
-        if type not in APP_TYPES:
+        if not isinstance(type, str) or type not in APP_TYPES:   # un objet JSON n'est pas hachable : 400, pas 500
             raise LabError("invalid", "type : « django », « django-angular » ou « angular ».")
         if visibility not in ("private", "public"):
             raise LabError("invalid", "visibility : « private » ou « public ».")

@@ -255,7 +255,7 @@ Ni l'un ni l'autre n'est utilisé ou éprouvé ici : le cycle de vie est au mote
 
 ## Le service de conversation (`chat/`, port 8090)
 
-Un petit serveur Node (`chat/server.js`, une seule dépendance : `ws`) qui sert une page statique
+Un petit serveur Node (`chat/server.js`, deux dépendances : `ws` et `@agentclientprotocol/claude-agent-acp`) qui sert une page statique
 (`chat/public/` : HTML, CSS, JavaScript simple, aucune ressource externe) et fait le pont entre
 cette page (WebSocket) et un **agent ACP v1 sur stdio** :
 

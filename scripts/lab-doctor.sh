@@ -23,7 +23,8 @@
 #       et lab-media (8189) ;
 #    7. conteneurs : redémarrages en boucle, santé « unhealthy », conteneurs arrêtés,
 #       conteneurs sans nom de service (lancés à la main par « docker run » ou
-#       « compose run » et jamais retirés) ;
+#       « compose run » et jamais retirés), socket Docker monté seulement par lab-mcp,
+#       caddy, caddy2 et code-server, code-server réservé au groupe `admins` ;
 #    8. cloisonnement : dernier verdict du moteur par app (<LAB_STATE_DIR>/tests/) ;
 #    9. disque (alerte au-delà de 85 %) et cache de construction Docker.
 # Aucun secret n'est affiché : les sorties des scripts appelés sont résumées.
@@ -41,7 +42,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) ;;
     --quick) QUICK=true ;;
-    -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Option inconnue : $1 (voir --help)" >&2; exit 2 ;;
   esac
   shift
@@ -99,6 +100,9 @@ if crontab -l 2>/dev/null | grep -q 'automatisation/bin/auto.sh'; then
     _age_d=$(( ( $(date +%s) - $(stat -c %Y "$_er") ) / 86400 ))
     case "${_st%% *}" in
       fini) (( _age_d <= 2 )) && ok "tâches de nuit : dernier passage fini (${_st#* })" || bad "tâches de nuit : aucun passage depuis ${_age_d} jours" ;;
+      # La tâche « services » lance ce bilan juste avant sa session : son propre passage
+      # est alors « en_cours ». Un passage en cours depuis moins d'un jour n'est pas un défaut.
+      en_cours) (( _age_d < 1 )) && warn "tâches de nuit : passage en cours (${_st#* })" || bad "tâches de nuit : passage « en_cours » depuis ${_age_d} jour(s) (bash automatisation/bin/auto.sh etat)" ;;
       *) bad "tâches de nuit : dernier passage « ${_st:-illisible} » (bash automatisation/bin/auto.sh etat)" ;;
     esac
   fi
@@ -171,6 +175,17 @@ _orph="$(jq -r '.[] | (.Name|ltrimstr("/")) as $n | select($n | test("^[a-z]+_[a
 [[ -z "$_unh" ]]  && ok "aucun conteneur « unhealthy »" || while IFS= read -r l; do bad "unhealthy : $l"; done <<< "$_unh"
 [[ -z "$_stop" ]] && ok "aucun conteneur arrêté" || while IFS= read -r l; do warn "arrêté : $l"; done <<< "$_stop"
 [[ -z "$_orph" ]] && ok "aucun conteneur lancé à la main et oublié" || while IFS= read -r l; do warn "conteneur sans nom de service, probablement un essai oublié : $l"; done <<< "$_orph"
+# Portes de l'hôte (CLAUDE.md, « Règles à ne pas rouvrir ») : le socket Docker n'est monté
+# que par le moteur, les deux Caddy et code-server ; code-server n'est ouvert qu'à `admins`.
+_sock="$(jq -r '.[] | (.Name|ltrimstr("/")) as $n | select(any(.Mounts[]?; .Source == "/var/run/docker.sock" or .Source == "/run/docker.sock"))
+         | select($n | test("^(lab-mcp|caddy|caddy2|code-server)$") | not) | $n' <<< "$_all" | tr '\n' ' ')"
+[[ -z "$_sock" ]] && ok "socket Docker monté par lab-mcp, caddy, caddy2 et code-server seulement" \
+  || bad "socket Docker monté par un conteneur non prévu : $_sock"
+_cgrp="$(jq -r '.[] | select(.Name == "/oauth2-proxy-code") | .Config.Env[]? | select(startswith("OAUTH2_PROXY_ALLOWED_GROUPS=")) | sub("^[^=]*="; "")' <<< "$_all")"
+if [[ "$_cgrp" == "admins" ]]; then ok "code-server : groupe autorisé « admins » seulement"
+elif jq -e 'any(.[]; .Name == "/oauth2-proxy-code")' <<< "$_all" > /dev/null; then
+  bad "code-server : OAUTH2_PROXY_ALLOWED_GROUPS=« ${_cgrp:-vide} », attendu « admins » (accès root à l'hôte)"
+else warn "oauth2-proxy-code absent : porte de code-server non vérifiée"; fi
 
 # ── 8 ────────────────────────────────────────────────────────────────────────
 section "8. Cloisonnement (derniers verdicts du moteur)"
