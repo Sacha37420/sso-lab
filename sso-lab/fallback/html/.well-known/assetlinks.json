@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "io.github.sacha37420.coffre",
+      "sha256_cert_fingerprints": [
+        "D5:CC:81:ED:77:9F:D9:D5:EB:CA:FC:9D:48:49:77:A5:F6:BA:09:1A:02:17:4B:29:C6:6F:32:DC:5D:39:17:36"
+      ]
+    }
+  }
+]
