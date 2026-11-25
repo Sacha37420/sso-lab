@@ -89,6 +89,7 @@ contrôles, même objet rendu, même erreur. Correspondance :
 | `workspace_open` / `workspace_close` | `POST` / `DELETE /projects/<app>/workspace` | — |
 | `job` | `GET /jobs/<id>` | `job_status` |
 | `preview_deploy` / `preview_status` / `preview_stop` | `POST` / `GET` / `DELETE /projects/<app>/preview` | `preview_deploy` / `preview_status` / `preview_stop` |
+| `smtp_status` | — | `smtp_status` |
 
 Conventions de l'entrée web :
 - corps de requête et de réponse en JSON (`Content-Type: application/json`) ; corps de requête ≤ 256 Ko
@@ -96,7 +97,7 @@ Conventions de l'entrée web :
 - **tout succès est un `200`** avec un objet JSON (jamais de tableau nu), sauf `POST /me/smtp` qui
   rend `201` (§3.8) ;
 - `GET /mcp/healthz` → `{"ok": true}`, sans jeton (sonde de vie ; ne dit rien des scripts ni de
-  Docker — `labmcp/web.py:232`) ;
+  Docker — `labmcp/web.py:216`) ;
 - toute erreur a le format du §2 ; un chemin qui n'existe pas rend un `404` sans corps JSON ;
 - dates en ISO 8601 UTC (`2026-10-10T14:37:08Z`), sauf `deployed.at`, rendu tel que le lab
   l'enregistre (ISO 8601 avec décalage local).

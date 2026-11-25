@@ -355,5 +355,5 @@ que le compose ne les transmet pas (relu le 2026-11-08).
 1. Un compte humain : première connexion (`me/init` qui inscrit réellement), parcours complet.
 2. Tout ce qui parle au vrai GitHub par le vrai oauth-hub : création d'un projet jusqu'au bout
    (dépôt, clé de déploiement, webhook), déploiement par SSH avec la clé, commits, ticket.
-4. Claude Code et Vibe appelant le MCP depuis un espace avec le jeton d'espace (éprouvé ici avec le
+3. Claude Code et Vibe appelant le MCP depuis un espace avec le jeton d'espace (éprouvé ici avec le
    client du SDK).

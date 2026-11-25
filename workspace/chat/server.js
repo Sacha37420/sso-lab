@@ -291,7 +291,9 @@ class Conv {
     this.clos();
     if (this.autoAccept) {
       // Réglage « tout accepter » de CETTE conversation : accord pour cette fois seulement.
-      const o = options.find(x => x.kind === 'allow_once') || options.find(x => x.kind === 'allow_always');
+      // Jamais `allow_always` (l'agent garderait une règle permanente) : sans
+      // `allow_once`, la demande attend la personne, comme hors « tout accepter ».
+      const o = options.find(x => x.kind === 'allow_once');
       if (o) {
         item.state = 'selected'; item.chosen = o.optionId; item.auto = true;
         this.ajoute(item);
